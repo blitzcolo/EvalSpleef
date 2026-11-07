@@ -98,12 +98,28 @@ class DockerProvider(SandboxProvider):
         return client
 
     async def close(self) -> None:
-        """Stop the TTL sweepers and release the cached daemon clients."""
-        for task in self._sweepers.values():
-            task.cancel()
+        """Stop the TTL sweepers and release the cached daemon clients.
+
+        Sweepers and clients belong to the loop that created them. A loop that is already
+        closed took its tasks and connections with it; a loop running in another thread is
+        asked to do its own cancelling and closing.
+        """
+        current = asyncio.get_running_loop()
+        for loop, task in list(self._sweepers.items()):
+            if task.done() or loop.is_closed():
+                continue
+            if loop is current:
+                task.cancel()
+            else:
+                loop.call_soon_threadsafe(task.cancel)
         self._sweepers.clear()
-        for client in self._clients.values():
-            await client.close()
+        for loop, client in list(self._clients.items()):
+            if loop.is_closed():
+                continue
+            if loop is current:
+                await client.close()
+            else:
+                await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(client.close(), loop))
         self._clients.clear()
 
     def map_error(self, exc: Exception, sandbox_id: str | None = None) -> SpleefError:

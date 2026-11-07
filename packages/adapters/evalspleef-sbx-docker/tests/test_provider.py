@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 import pytest
@@ -99,6 +100,18 @@ async def test_failed_start_leaves_no_container(provider, spec_factory) -> None:
     with pytest.raises(SandboxCreateError):
         await provider.create(spec)
     assert await provider.list({"trial": "leak-check"}) == []
+
+
+async def test_close_survives_a_loop_that_is_already_closed(provider, spec_factory) -> None:
+    loop = asyncio.new_event_loop()
+
+    async def create_and_destroy() -> None:
+        sandbox = await provider.create(spec_factory("close-check"))
+        await sandbox.destroy()
+
+    await asyncio.to_thread(loop.run_until_complete, create_and_destroy())
+    loop.close()
+    await provider.close()
 
 
 async def test_fail_next_create(provider, spec_factory) -> None:
