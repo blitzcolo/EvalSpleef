@@ -4,8 +4,6 @@ import pytest
 
 import evalspleef.conformance.plugin as plugin
 
-pytest_plugins = ["pytester"]
-
 
 @pytest.fixture(autouse=True)
 def _no_installed_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
