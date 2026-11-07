@@ -1,0 +1,378 @@
+// hostd wire contract (TECH-DESIGN section 7.5).
+//
+// Two directions, both mTLS gRPC:
+//   * HostRegistration / HostGateway are served by the control plane (hostd-gateway).
+//     The daemon dials OUT to them: it registers with a one-time token, then heartbeats.
+//   * Hostd is served by the daemon on the address it advertised at registration. The
+//     control plane's RemoteProvider dials it to forward SPI calls.
+//
+// Regenerate with proto/generate.sh. Never edit the generated *_pb2*.py files.
+syntax = "proto3";
+
+package evalspleef.hostd.v1;
+
+// ---------------------------------------------------------------------------
+// SPI value types
+// ---------------------------------------------------------------------------
+
+message Resources {
+  double cpus = 1;
+  int64 memory_mb = 2;
+  int64 disk_mb = 3;
+  int32 gpus = 4;
+  optional string gpu_type = 5;
+}
+
+message NetworkPolicy {
+  string mode = 1;
+  repeated string allow_hosts = 2;
+  repeated string allow_cidrs = 3;
+  optional string via_proxy = 4;
+}
+
+message TemplateRef {
+  string kind = 1;
+  string ref = 2;
+  string digest = 3;
+}
+
+message SandboxSpec {
+  string trial_id = 1;
+  string lease_id = 2;
+  string role = 3;
+  string os = 4;
+  string arch = 5;
+  TemplateRef template = 6;
+  Resources resources = 7;
+  NetworkPolicy network = 8;
+  string run_as_user = 9;
+  map<string, string> env = 10;
+  map<string, string> labels = 11;
+  int64 max_lifetime_s = 12;
+  bool gui = 13;
+}
+
+message SandboxCapabilities {
+  repeated string os_families = 1;
+  repeated string arches = 2;
+  int32 isolation = 3;
+  repeated string net_modes = 4;
+  repeated string allowlist_kinds = 5;
+  bool dynamic_network_policy = 6;
+  bool streaming = 7;
+  bool stdin = 8;
+  string snapshot = 9;
+  bool snapshot_fanout = 10;
+  bool pause_resume = 11;
+  string gui = 12;
+  bool gpu = 13;
+  bool port_expose = 14;
+  bool host_mounts = 15;
+  repeated string enforces_limits = 16;
+  optional int32 max_concurrency = 17;
+  optional int64 max_lifetime_s = 18;
+  optional Resources max_resources = 19;
+  double typical_start_s = 20;
+  double reset_cost_s = 21;
+}
+
+message InvariantEntry {
+  string how = 1;
+  optional string probe = 2;
+  bool waived = 3;
+  optional string reason = 4;
+  optional string compensating = 5;
+  optional string approved_by = 6;
+  optional string expires = 7;
+}
+
+message IsolationProfile {
+  string provider = 1;
+  int32 declared_isolation = 2;
+  optional int32 verified_isolation = 3;
+  map<string, InvariantEntry> invariants = 4;
+}
+
+// Free-form provider documents (preflight, describe, list entries) travel as JSON text.
+message JsonDocument {
+  string json = 1;
+}
+
+message Empty {}
+
+// ---------------------------------------------------------------------------
+// Hostd: SPI calls served by the daemon
+// ---------------------------------------------------------------------------
+
+// Every call names the hosted provider instance it targets.
+message ProviderRef {
+  string provider = 1;
+}
+
+message SandboxRef {
+  string provider = 1;
+  string sandbox_id = 2;
+}
+
+message CreateRequest {
+  string provider = 1;
+  SandboxSpec spec = 2;
+  // Set when the sandbox is restored from a snapshot instead of a template.
+  optional string snapshot_id = 3;
+}
+
+message CreateResponse {
+  string sandbox_id = 1;
+  SandboxSpec spec = 2;
+}
+
+message ExecRequest {
+  string provider = 1;
+  string sandbox_id = 2;
+  // Exactly one of shell_command / argv is set; argv is never passed through a shell.
+  optional string shell_command = 3;
+  repeated string argv = 4;
+  optional string cwd = 5;
+  map<string, string> env = 6;
+  optional string user = 7;
+  optional double timeout_s = 8;
+  optional bytes stdin = 9;
+  int64 max_output_bytes = 10;
+}
+
+message OutputChunk {
+  string stream = 1;  // "stdout" or "stderr"
+  bytes data = 2;
+}
+
+message ExecSummary {
+  int32 exit_code = 1;
+  bool timed_out = 2;
+  double duration_s = 3;
+  bool truncated = 4;
+}
+
+// Live chunks stream while the command runs; the final stdout/stderr (after truncation) follow
+// as final_chunk events so no single message exceeds the chunk size; summary ends the stream.
+message ExecEvent {
+  oneof event {
+    OutputChunk live = 1;
+    OutputChunk final_chunk = 2;
+    ExecSummary summary = 3;
+  }
+}
+
+// Every transfer is a tar archive holding exactly one top-level member called "payload"
+// (file, directory or symlink), so permission bits and links survive the wire.
+message TransferHeader {
+  string provider = 1;
+  string sandbox_id = 2;
+  string remote = 3;
+}
+
+message TransferChunk {
+  int64 index = 1;
+  bytes data = 2;
+  // Lowercase hex sha256 of data, verified by the receiver when the chunk arrives.
+  string sha256 = 3;
+}
+
+message TransferTrailer {
+  int64 chunk_count = 1;
+  int64 total_bytes = 2;
+  // Lowercase hex sha256 of the concatenated payload.
+  string sha256 = 3;
+}
+
+message UploadMessage {
+  oneof part {
+    TransferHeader header = 1;
+    TransferChunk chunk = 2;
+    TransferTrailer trailer = 3;
+  }
+}
+
+message UploadAck {
+  int64 total_bytes = 1;
+}
+
+message DownloadRequest {
+  string provider = 1;
+  string sandbox_id = 2;
+  string remote = 3;
+  optional int64 max_bytes = 4;
+}
+
+message DownloadMessage {
+  oneof part {
+    TransferChunk chunk = 2;
+    TransferTrailer trailer = 3;
+  }
+}
+
+message LabelQuery {
+  string provider = 1;
+  map<string, string> labels = 2;
+}
+
+message ListResponse {
+  repeated JsonDocument entries = 1;
+}
+
+message ReapRequest {
+  string provider = 1;
+  map<string, string> labels = 2;
+  int64 older_than_s = 3;
+}
+
+message ReapResponse {
+  int64 destroyed = 1;
+}
+
+message SnapshotRequest {
+  string provider = 1;
+  string sandbox_id = 2;
+  string name = 3;
+}
+
+message SnapshotResponse {
+  string snapshot_id = 1;
+}
+
+message SetNetworkRequest {
+  string provider = 1;
+  string sandbox_id = 2;
+  NetworkPolicy policy = 3;
+}
+
+message ExposePortRequest {
+  string provider = 1;
+  string sandbox_id = 2;
+  int32 port = 3;
+}
+
+message EndpointResponse {
+  string endpoint = 1;
+}
+
+message ProviderSlots {
+  string provider = 1;
+  optional int32 total = 2;  // absent: the daemon enforces no local cap
+  int32 used = 3;
+  int32 reserved = 4;
+}
+
+// "active", "draining" or "maintenance".
+message HostInventory {
+  string host_id = 1;
+  string mode = 2;
+  repeated ProviderSlots slots = 3;
+  repeated string sandbox_ids = 4;
+  string hostd_version = 5;
+}
+
+message ModeRequest {
+  bool enabled = 1;
+}
+
+message HostMode {
+  string mode = 1;
+}
+
+service Hostd {
+  rpc Capabilities(ProviderRef) returns (SandboxCapabilities);
+  rpc GetIsolationProfile(ProviderRef) returns (IsolationProfile);
+  rpc Preflight(ProviderRef) returns (JsonDocument);
+  rpc Create(CreateRequest) returns (CreateResponse);
+  rpc Exec(ExecRequest) returns (stream ExecEvent);
+  rpc Upload(stream UploadMessage) returns (UploadAck);
+  rpc Download(DownloadRequest) returns (stream DownloadMessage);
+  rpc Destroy(SandboxRef) returns (Empty);
+  rpc List(LabelQuery) returns (ListResponse);
+  rpc Reap(ReapRequest) returns (ReapResponse);
+  rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
+  rpc SetNetwork(SetNetworkRequest) returns (Empty);
+  rpc GuiEndpoint(SandboxRef) returns (EndpointResponse);
+  rpc ExposePort(ExposePortRequest) returns (EndpointResponse);
+  rpc Describe(SandboxRef) returns (JsonDocument);
+  rpc Inventory(Empty) returns (HostInventory);
+  rpc Drain(ModeRequest) returns (HostMode);
+  rpc SetMaintenance(ModeRequest) returns (HostMode);
+}
+
+// ---------------------------------------------------------------------------
+// Control-plane side: registration and heartbeat (the daemon dials out)
+// ---------------------------------------------------------------------------
+
+message ProviderInfo {
+  string name = 1;     // hosted instance name
+  string adapter = 2;  // entry-point name of the adapter
+  SandboxCapabilities capabilities = 3;
+}
+
+message HostInfo {
+  string machine = 1;
+  string os = 2;
+  string arch = 3;
+  int32 cpu_count = 4;
+  int64 memory_mb = 5;
+  int64 disk_free_mb = 6;
+  string hostd_version = 7;
+  repeated ProviderInfo providers = 8;
+}
+
+message RegisterRequest {
+  string host_id = 1;
+  string token = 2;
+  // PEM PKCS#10 request; the private key never leaves the host.
+  bytes csr_pem = 3;
+  // Where the control plane reaches the daemon's Hostd service, and the names its
+  // certificate must carry.
+  string service_address = 4;
+  repeated string service_names = 5;
+  HostInfo info = 6;
+}
+
+message RegisterResponse {
+  bytes cert_pem = 1;
+  bytes ca_pem = 2;
+  double not_after = 3;  // unix seconds
+}
+
+message HeartbeatRequest {
+  string host_id = 1;
+  HostInventory inventory = 2;
+  int64 disk_free_mb = 3;
+  double load_1m = 4;
+}
+
+message HeartbeatResponse {
+  bool accepted = 1;
+}
+
+message RenewRequest {
+  string host_id = 1;
+  bytes csr_pem = 2;
+}
+
+message ReclaimedSandbox {
+  string provider = 1;
+  string sandbox_id = 2;
+  string trial_id = 3;
+  string reason = 4;
+}
+
+message ReclaimedReport {
+  string host_id = 1;
+  repeated ReclaimedSandbox reclaimed = 2;
+}
+
+service HostRegistration {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+}
+
+service HostGateway {
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc Renew(RenewRequest) returns (RegisterResponse);
+  rpc ReportReclaimed(ReclaimedReport) returns (Empty);
+}
