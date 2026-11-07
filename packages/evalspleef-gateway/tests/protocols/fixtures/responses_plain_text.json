@@ -1,0 +1,65 @@
+{
+  "request": {
+    "model": "gpt-5",
+    "instructions": "Be terse.",
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Hello"}]
+      }
+    ],
+    "max_output_tokens": 64,
+    "temperature": 0.1,
+    "stream": false
+  },
+  "expected_chat": {
+    "model": "gpt-5",
+    "messages": [
+      {"role": "system", "content": "Be terse."},
+      {"role": "user", "content": "Hello"}
+    ],
+    "max_tokens": 64,
+    "temperature": 0.1,
+    "stream": false
+  },
+  "response": {
+    "id": "chatcmpl-plain",
+    "object": "chat.completion",
+    "created": 1730000000,
+    "model": "upstream-model",
+    "choices": [
+      {
+        "index": 0,
+        "message": {"role": "assistant", "content": "Hello"},
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 1, "total_tokens": 13}
+  },
+  "expected_responses": {
+    "id": "chatcmpl-plain",
+    "object": "response",
+    "created_at": 1730000000,
+    "status": "completed",
+    "model": "ep_test",
+    "output": [
+      {
+        "type": "message",
+        "id": "msg_chatcmpl-plain",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Hello", "annotations": []}]
+      }
+    ],
+    "usage": {
+      "input_tokens": 12,
+      "input_tokens_details": {"cached_tokens": 0},
+      "output_tokens": 1,
+      "output_tokens_details": {"reasoning_tokens": 0},
+      "total_tokens": 13
+    },
+    "error": null,
+    "incomplete_details": null
+  }
+}

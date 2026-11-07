@@ -1,0 +1,118 @@
+{
+  "cases": [
+    {
+      "status": 400,
+      "code": "invalid_request",
+      "message": "bad request",
+      "anthropic": {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": "bad request"}
+      },
+      "openai": {
+        "error": {
+          "message": "bad request",
+          "type": "invalid_request_error",
+          "param": null,
+          "code": "invalid_request"
+        }
+      }
+    },
+    {
+      "status": 401,
+      "code": "invalid_api_key",
+      "message": "no authentication",
+      "anthropic": {
+        "type": "error",
+        "error": {"type": "authentication_error", "message": "no authentication"}
+      },
+      "openai": {
+        "error": {
+          "message": "no authentication",
+          "type": "authentication_error",
+          "param": null,
+          "code": "invalid_api_key"
+        }
+      }
+    },
+    {
+      "status": 429,
+      "code": "rate_limit_exceeded",
+      "message": "slow down",
+      "anthropic": {
+        "type": "error",
+        "error": {"type": "rate_limit_error", "message": "slow down"}
+      },
+      "openai": {
+        "error": {
+          "message": "slow down",
+          "type": "rate_limit_error",
+          "param": null,
+          "code": "rate_limit_exceeded"
+        }
+      }
+    },
+    {
+      "status": 529,
+      "code": "overloaded",
+      "message": "busy",
+      "anthropic": {
+        "type": "error",
+        "error": {"type": "overloaded_error", "message": "busy"}
+      },
+      "openai": {
+        "error": {
+          "message": "busy",
+          "type": "server_error",
+          "param": null,
+          "code": "overloaded"
+        }
+      }
+    },
+    {
+      "status": 500,
+      "code": null,
+      "message": "boom",
+      "anthropic": {
+        "type": "error",
+        "error": {"type": "api_error", "message": "boom"}
+      },
+      "openai": {
+        "error": {"message": "boom", "type": "server_error", "param": null, "code": null}
+      }
+    },
+    {
+      "status": 429,
+      "code": "cost_cap",
+      "message": "cost budget exhausted",
+      "anthropic": {
+        "type": "error",
+        "error": {"type": "rate_limit_error", "message": "cost_cap: cost budget exhausted"}
+      },
+      "openai": {
+        "error": {
+          "message": "cost budget exhausted",
+          "type": "rate_limit_error",
+          "param": null,
+          "code": "cost_cap"
+        }
+      }
+    },
+    {
+      "status": 429,
+      "code": "token_cap",
+      "message": "token budget exhausted",
+      "anthropic": {
+        "type": "error",
+        "error": {"type": "rate_limit_error", "message": "token_cap: token budget exhausted"}
+      },
+      "openai": {
+        "error": {
+          "message": "token budget exhausted",
+          "type": "rate_limit_error",
+          "param": null,
+          "code": "token_cap"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,133 @@
+{
+  "request": {
+    "model": "gpt-5",
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Weather in Paris?"}]
+      },
+      {
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "get_weather",
+        "arguments": "{\"city\": \"Paris\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "18C"
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Thanks"}]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {"city": {"type": "string"}},
+          "required": ["city"]
+        },
+        "strict": true
+      }
+    ],
+    "tool_choice": {"type": "function", "name": "get_weather"},
+    "max_output_tokens": 256,
+    "temperature": 0.0,
+    "stream": false
+  },
+  "expected_chat": {
+    "model": "gpt-5",
+    "messages": [
+      {"role": "user", "content": "Weather in Paris?"},
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}
+          }
+        ]
+      },
+      {"role": "tool", "tool_call_id": "call_1", "content": "18C"},
+      {"role": "user", "content": "Thanks"}
+    ],
+    "max_tokens": 256,
+    "temperature": 0.0,
+    "stream": false,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather for a city.",
+          "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"]
+          },
+          "strict": true
+        }
+      }
+    ],
+    "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
+  },
+  "response": {
+    "id": "chatcmpl-responses-tool",
+    "object": "chat.completion",
+    "created": 1730000005,
+    "model": "upstream-model",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_2",
+              "type": "function",
+              "function": {"name": "get_weather", "arguments": "{\"city\": \"Berlin\"}"}
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {"prompt_tokens": 50, "completion_tokens": 15, "total_tokens": 65}
+  },
+  "expected_responses": {
+    "id": "chatcmpl-responses-tool",
+    "object": "response",
+    "created_at": 1730000005,
+    "status": "completed",
+    "model": "ep_test",
+    "output": [
+      {
+        "type": "function_call",
+        "id": "fc_call_2",
+        "call_id": "call_2",
+        "name": "get_weather",
+        "arguments": "{\"city\": \"Berlin\"}",
+        "status": "completed"
+      }
+    ],
+    "usage": {
+      "input_tokens": 50,
+      "input_tokens_details": {"cached_tokens": 0},
+      "output_tokens": 15,
+      "output_tokens_details": {"reasoning_tokens": 0},
+      "total_tokens": 65
+    },
+    "error": null,
+    "incomplete_details": null
+  }
+}

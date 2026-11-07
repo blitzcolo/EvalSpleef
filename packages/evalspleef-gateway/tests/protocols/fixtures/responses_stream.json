@@ -1,0 +1,98 @@
+{
+  "model": "ep_test",
+  "chunks": [
+    {
+      "id": "chatcmpl-responses-stream",
+      "created": 1730000006,
+      "choices": [
+        {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}
+      ]
+    },
+    {
+      "id": "chatcmpl-responses-stream",
+      "choices": [{"index": 0, "delta": {"content": "Hi"}, "finish_reason": null}]
+    },
+    {
+      "id": "chatcmpl-responses-stream",
+      "choices": [{"index": 0, "delta": {"content": " there"}, "finish_reason": null}]
+    },
+    {
+      "id": "chatcmpl-responses-stream",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": ""}
+              }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-responses-stream",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"q\":"}}]},
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-responses-stream",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {"tool_calls": [{"index": 0, "function": {"arguments": " \"x\"}"}}]},
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-responses-stream",
+      "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+      "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28}
+    }
+  ],
+  "expected_events": [
+    "response.created",
+    "response.output_text.delta",
+    "response.output_text.delta",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.delta",
+    "response.completed"
+  ],
+  "expected_text": "Hi there",
+  "expected_arguments": "{\"q\": \"x\"}",
+  "expected_status": "completed",
+  "non_stream_response": {
+    "id": "chatcmpl-responses-stream",
+    "created": 1730000006,
+    "model": "upstream-model",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Hi there",
+          "tool_calls": [
+            {
+              "id": "call_1",
+              "type": "function",
+              "function": {"name": "lookup", "arguments": "{\"q\": \"x\"}"}
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28}
+  }
+}

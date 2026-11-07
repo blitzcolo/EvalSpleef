@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {"finish_reason": "stop", "stop_reason": "end_turn"},
+    {"finish_reason": "length", "stop_reason": "max_tokens"},
+    {"finish_reason": "tool_calls", "stop_reason": "tool_use"},
+    {"finish_reason": "function_call", "stop_reason": "tool_use"},
+    {"finish_reason": "content_filter", "stop_reason": "refusal"},
+    {"finish_reason": null, "stop_reason": "end_turn"}
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "request": {
+    "model": "claude-3-5-sonnet",
+    "max_tokens": 256,
+    "temperature": 0.2,
+    "stop_sequences": ["STOP"],
+    "stream": false,
+    "messages": [
+      {"role": "user", "content": "Say hello in one word."}
+    ]
+  },
+  "expected_chat": {
+    "model": "claude-3-5-sonnet",
+    "messages": [
+      {"role": "user", "content": "Say hello in one word."}
+    ],
+    "max_tokens": 256,
+    "temperature": 0.2,
+    "stop": ["STOP"],
+    "stream": false
+  },
+  "response": {
+    "id": "chatcmpl-plain",
+    "object": "chat.completion",
+    "created": 1730000000,
+    "model": "upstream-model",
+    "choices": [
+      {
+        "index": 0,
+        "message": {"role": "assistant", "content": "Hello"},
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 1, "total_tokens": 13}
+  },
+  "expected_anthropic": {
+    "id": "chatcmpl-plain",
+    "type": "message",
+    "role": "assistant",
+    "model": "ep_test",
+    "content": [{"type": "text", "text": "Hello"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 12,
+      "output_tokens": 1,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+    }
+  }
+}

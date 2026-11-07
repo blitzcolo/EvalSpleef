@@ -1,0 +1,105 @@
+{
+  "request": {
+    "model": "claude-3-5-sonnet",
+    "max_tokens": 1024,
+    "tools": [
+      {
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}
+      },
+      {
+        "name": "get_time",
+        "description": "Get the current time for a zone.",
+        "input_schema": {"type": "object", "properties": {"zone": {"type": "string"}}}
+      }
+    ],
+    "tool_choice": {"type": "any"},
+    "messages": [
+      {"role": "user", "content": "Weather in Paris and time in UTC."}
+    ]
+  },
+  "expected_chat": {
+    "model": "claude-3-5-sonnet",
+    "messages": [
+      {"role": "user", "content": "Weather in Paris and time in UTC."}
+    ],
+    "max_tokens": 1024,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather for a city.",
+          "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "get_time",
+          "description": "Get the current time for a zone.",
+          "parameters": {"type": "object", "properties": {"zone": {"type": "string"}}}
+        }
+      }
+    ],
+    "tool_choice": "required"
+  },
+  "response": {
+    "id": "chatcmpl-parallel",
+    "object": "chat.completion",
+    "created": 1730000002,
+    "model": "upstream-model",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_a",
+              "type": "function",
+              "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}
+            },
+            {
+              "id": "call_b",
+              "type": "function",
+              "function": {"name": "get_time", "arguments": "{\"zone\": \"UTC\"}"}
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {"prompt_tokens": 60, "completion_tokens": 20, "total_tokens": 80}
+  },
+  "expected_anthropic": {
+    "id": "chatcmpl-parallel",
+    "type": "message",
+    "role": "assistant",
+    "model": "ep_test",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "call_a",
+        "name": "get_weather",
+        "input": {"city": "Paris"}
+      },
+      {
+        "type": "tool_use",
+        "id": "call_b",
+        "name": "get_time",
+        "input": {"zone": "UTC"}
+      }
+    ],
+    "stop_reason": "tool_use",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 60,
+      "output_tokens": 20,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+    }
+  }
+}

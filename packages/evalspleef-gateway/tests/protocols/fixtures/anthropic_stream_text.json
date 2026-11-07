@@ -1,0 +1,47 @@
+{
+  "model": "ep_test",
+  "chunks": [
+    {
+      "id": "chatcmpl-stream",
+      "object": "chat.completion.chunk",
+      "created": 1730000003,
+      "model": "upstream-model",
+      "choices": [
+        {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}
+      ]
+    },
+    {
+      "id": "chatcmpl-stream",
+      "choices": [{"index": 0, "delta": {"content": "Hel"}, "finish_reason": null}]
+    },
+    {
+      "id": "chatcmpl-stream",
+      "choices": [{"index": 0, "delta": {"content": "lo"}, "finish_reason": null}]
+    },
+    {
+      "id": "chatcmpl-stream",
+      "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+    }
+  ],
+  "expected_events": [
+    "message_start",
+    "content_block_start",
+    "content_block_delta",
+    "content_block_delta",
+    "content_block_stop",
+    "message_delta",
+    "message_stop"
+  ],
+  "expected_text": "Hello",
+  "expected_stop_reason": "end_turn",
+  "non_stream_response": {
+    "id": "chatcmpl-stream",
+    "created": 1730000003,
+    "model": "upstream-model",
+    "choices": [
+      {"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}
+    ],
+    "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+  }
+}
