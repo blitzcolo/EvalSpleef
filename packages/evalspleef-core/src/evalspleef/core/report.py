@@ -15,6 +15,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from .cost import CostBasis
 from .models import (
     CELL_FORMAT,
     CellStatus,
@@ -76,6 +77,8 @@ class TrialResult:
     cheat: bool = False
     format_violation: bool = False
     grade: dict[str, Any] | None = None
+    cost_basis: CostBasis | None = None
+    provenance: Mapping[str, Any] | None = None
 
     @property
     def cell_id(self) -> str:
@@ -98,6 +101,7 @@ class TrialResult:
         counted = False
         cheat = False
         format_violation = False
+        cost_basis: CostBasis | None = None
         if grade is not None:
             tier = Tier(str(grade["tier"]))
             penalty = int(grade.get("penalty", 0))
@@ -109,6 +113,13 @@ class TrialResult:
             flags = {str(flag) for flag in grade.get("flags", ())}
             cheat = "cheat" in flags
             format_violation = "format_violation" in flags
+            raw_cost = grade.get("cost")
+            raw_basis = record.get("cost_basis")
+            if raw_basis is None and isinstance(raw_cost, Mapping):
+                raw_basis = raw_cost.get("basis")
+            cost_basis = None if raw_basis is None else CostBasis(str(raw_basis))
+        raw_provenance = record.get("provenance")
+        provenance = dict(raw_provenance) if isinstance(raw_provenance, Mapping) else None
         return cls(
             trial_id=trial_id,
             task_id=parts.task_id,
@@ -126,11 +137,13 @@ class TrialResult:
             cheat=cheat,
             format_violation=format_violation,
             grade=dict(grade) if grade is not None else None,
+            cost_basis=cost_basis,
+            provenance=provenance,
         )
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为可 JSON 的 dict。"""
-        return {
+        payload: dict[str, Any] = {
             "trial_id": self.trial_id,
             "task_id": self.task_id,
             "model": self.model,
@@ -147,6 +160,11 @@ class TrialResult:
             "cheat": self.cheat,
             "format_violation": self.format_violation,
         }
+        if self.cost_basis is not None:
+            payload["cost_basis"] = str(self.cost_basis)
+        if self.provenance:
+            payload["provenance"] = dict(self.provenance)
+        return payload
 
 
 @dataclass
@@ -169,6 +187,8 @@ class Cell:
     cheat: bool = False
     format_violation: bool = False
     extensions: dict[str, Any] = field(default_factory=dict)
+    cost_basis: CostBasis | None = None
+    provenance: Mapping[str, Any] | None = None
 
     @property
     def cell_id(self) -> str:
@@ -242,6 +262,10 @@ class Cell:
         }
         if self.extensions:
             payload["extensions"] = dict(self.extensions)
+        if self.cost_basis is not None:
+            payload["cost_basis"] = str(self.cost_basis)
+        if self.provenance:
+            payload["provenance"] = dict(self.provenance)
         return payload
 
 
@@ -380,6 +404,13 @@ def aggregate_cell(
     for trial in counted:
         if trial.validity == Validity.MANUAL:
             manual_reasons.append(f"{trial.trial_id} 进入人工复核")
+    bases = {trial.cost_basis for trial in counted if trial.cost_basis is not None}
+    provenances = [trial.provenance for trial in counted if trial.provenance]
+    provenance = (
+        dict(provenances[0])
+        if provenances and all(item == provenances[0] for item in provenances)
+        else None
+    )
     return Cell(
         task_id=task_id,
         model=model,
@@ -394,6 +425,8 @@ def aggregate_cell(
         manual_reasons=tuple(manual_reasons),
         cheat=any(trial.cheat for trial in counted),
         format_violation=any(trial.format_violation for trial in counted),
+        cost_basis=next(iter(bases)) if len(bases) == 1 else None,
+        provenance=provenance,
         extensions={
             "epoch_tiers": [str(trial.tier) for trial in counted],
             "epoch_penalties": penalties,
