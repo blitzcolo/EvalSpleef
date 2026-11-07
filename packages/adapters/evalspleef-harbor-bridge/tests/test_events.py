@@ -9,6 +9,7 @@ from evalspleef_harbor_bridge.events import (
     event_to_machine_event,
 )
 
+from evalspleef.core.error_taxonomy import ERROR_TAXONOMY
 from evalspleef.core.models import ErrorClass, TrialState
 
 TRIAL_A = "web-001.claude-sonnet-5.claude-code.e1.t01"
@@ -24,6 +25,10 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(
             event_to_machine_event("observe.completed", {"needs_feedback": True}), "needs_feedback"
         )
+        self.assertEqual(
+            event_to_machine_event("observe.completed", {"needs_feedback": False}), "finish"
+        )
+        self.assertEqual(event_to_machine_event("failed_infra"), "fail_infra")
 
     def test_harbor_error_mapping(self):
         self.assertIn("model_provider_failed", HARBOR_CAUSE_TO_ERROR_CLASS)
@@ -35,6 +40,22 @@ class AdapterTest(unittest.TestCase):
         adapter.machine_for(TRIAL_A)
         adapter.record_error(TRIAL_A, cause="sandbox_failed")
         self.assertEqual(len(adapter.errors), 1)
+
+    def test_error_taxonomy_alignment(self):
+        """Test that Harbor cause error classes match evalspleef.core.error_taxonomy where they overlap."""
+        self.assertEqual(HARBOR_CAUSE_TO_ERROR_CLASS["sandbox_failed"], ErrorClass.ENVIRONMENT)
+        self.assertEqual(HARBOR_CAUSE_TO_ERROR_CLASS["model_provider_failed"], ErrorClass.PROVIDER)
+
+        self.assertEqual(HARBOR_CAUSE_TO_ERROR_CLASS["sandbox_failed"].value, "environment")
+        self.assertEqual(HARBOR_CAUSE_TO_ERROR_CLASS["model_provider_failed"].value, "provider")
+        self.assertEqual(
+            HARBOR_CAUSE_TO_ERROR_CLASS["sandbox_failed"].value,
+            ERROR_TAXONOMY["SandboxCreateError"][0],
+        )
+        self.assertEqual(
+            HARBOR_CAUSE_TO_ERROR_CLASS["model_provider_failed"].value,
+            ERROR_TAXONOMY["EndpointUnavailable"][0],
+        )
 
 
 if __name__ == "__main__":
