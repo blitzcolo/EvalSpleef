@@ -4,18 +4,21 @@
 real (TLS handshakes, registration, chunked transfers, error mapping), so the target is marked
 ``fake`` only because the sandbox behind the daemon is a double.
 
-``remote-docker``: a daemon in front of the docker adapter, discovered through its entry point.
-It is built only when that entry point loads and a Docker daemon answers; otherwise the reason
-is recorded in ``UNAVAILABLE`` and raised as a warning, never silently dropped.
+``remote-docker``: a daemon in front of the docker adapter's own ``local-docker`` conformance
+target, discovered through its entry point, so both targets run the same image, injectors and
+cleanup and differ only by the transport. It is built only when that target loads and a Docker
+daemon answers; otherwise the reason is recorded in ``UNAVAILABLE`` and raised as a warning,
+never silently dropped.
 """
 
 from __future__ import annotations
 
+import asyncio
 import http.client
 import os
-import platform
 import socket
 import warnings
+from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
 
@@ -34,14 +37,11 @@ from evalspleef.testing.clock import FakeClock
 from evalspleef.testing.mock_sandbox import MockSandboxProvider
 from evalspleef.testing.secrets import DictSecretResolver
 
-from .daemon import NoSecrets
 from .loopback import ThreadedLoopbackHostd
 
 UNAVAILABLE: dict[str, str] = {}
 """Targets this installation could not build, with the reason; refreshed by ``build_targets``."""
 
-DOCKER_IMAGE_ENV = "SPLEEF_HOSTD_DOCKER_IMAGE"
-DEFAULT_DOCKER_IMAGE = "python:3.12-slim"
 _DIGEST = "sha256:" + "0" * 64
 
 
@@ -149,42 +149,67 @@ def _docker_answers() -> str | None:
     return "no Docker daemon answered (" + "; ".join(reasons) + ")"
 
 
+@dataclass(frozen=True)
+class RemoteDockerTarget(ConformanceTarget):
+    """The network observer address the sandbox cases read from the docker target."""
+
+    reachable_from_sandbox: str | None = None
+
+
+def _local_docker_target() -> ConformanceTarget | None:
+    for entry in entry_points(group="evalspleef.conformance_targets", name="docker"):
+        built: list[ConformanceTarget] = entry.load()()
+        for target in built:
+            if target.name == "local-docker":
+                return target
+    return None
+
+
 def _remote_docker_target() -> ConformanceTarget | None:
-    matches = list(entry_points(group="evalspleef.sandbox_providers", name="docker"))
-    if not matches:
-        UNAVAILABLE["remote-docker"] = "the docker adapter entry point is not installed"
-        return None
-    try:
-        provider_class = matches[0].load()
-    except ImportError as exc:
-        UNAVAILABLE["remote-docker"] = f"the docker adapter entry point does not load: {exc}"
-        return None
     reason = _docker_answers()
     if reason is not None:
         UNAVAILABLE["remote-docker"] = reason
         return None
-    provider: SandboxProvider = provider_class("hostd-docker", {}, NoSecrets())
+    try:
+        inner = _local_docker_target()
+    except ImportError as exc:
+        UNAVAILABLE["remote-docker"] = (
+            f"the docker adapter's conformance target does not load: {exc}"
+        )
+        return None
+    if inner is None or not isinstance(inner.provider, SandboxProvider):
+        UNAVAILABLE["remote-docker"] = (
+            "the docker adapter publishes no 'local-docker' sandbox target"
+        )
+        return None
     harness = ThreadedLoopbackHostd()
     try:
-        stack = harness.start({"docker": provider}, adapter="docker")
+        stack = harness.start({"docker": inner.provider}, adapter="docker")
     except BaseException:
         harness.stop()
         raise
     remote = stack.remote("docker")
-    arch = Arch.ARM64 if platform.machine().lower() in ("arm64", "aarch64") else Arch.X86_64
 
     async def cleanup() -> None:
         await remote.aclose()
-        harness.stop()
+        # The provider's tasks and clients live on the daemon's event loop, so it is cleaned
+        # up there, before that loop is stopped.
+        try:
+            if inner.cleanup is not None:
+                await asyncio.to_thread(harness.run, inner.cleanup())
+        finally:
+            harness.stop()
 
-    return ConformanceTarget(
+    return RemoteDockerTarget(
         name="remote-docker",
         kind="sandbox",
         provider=remote,
         fake=False,
-        spec_factory=_spec_factory(os.environ.get(DOCKER_IMAGE_ENV, DEFAULT_DOCKER_IMAGE), arch),
+        spec_factory=inner.spec_factory,
+        injectors=inner.injectors,
         notes="hostd daemon on loopback in front of the docker adapter and a local Docker daemon",
         cleanup=cleanup,
+        reachable_from_sandbox=getattr(inner, "reachable_from_sandbox", None),
     )
 
 
