@@ -1,0 +1,75 @@
+# Isolation profile for the tart sandbox provider (FR-SBX-11).
+# I1-I16 per PRD appendix D.2; generated from evalspleef_sbx_tart.isolation
+# (the runtime source of truth) - keep both in sync, the tests enforce it.
+provider: tart
+declared_isolation: L3
+verified_isolation: null
+invariants:
+  I1:
+    how: 'every trial clones the golden image by digest into its own VM and the VM is stopped and deleted after the trial; the lease id is recorded in the provider registry'
+    probe: 'list(labels) returns exactly one instance per lease while live'
+    waived: false
+  I2:
+    how: 'waived: the guest root disk is writable by design (a VM is not a container rootfs); every trial still starts from a fresh clone of the immutable image'
+    probe: 'the disk is destroyed with the VM at trial end'
+    waived: true
+    reason: 'macOS and Linux guests need a writable root filesystem; a read-only root disk is not available through Virtualization.framework'
+    compensating: 'fresh APFS clone per trial, image digest recorded, cross-trial canary scan, and the VM is deleted (not reused) after the trial'
+    approved_by: 'platform-evaluation-lead'
+    expires: '2027-03-01'
+  I3:
+    how: 'each VM is a copy-on-write clone of the golden image; /workspace, /tmp and the agent home start empty in every clone and no host directory is shared into the guest'
+    probe: "a marker written in one trial is absent in the next trial's VM"
+    waived: false
+  I4:
+    how: 'network mode off runs the VM with --net-softnet-block 0.0.0.0/0, so no packet leaves the guest'
+    probe: 'curl --max-time 3 https://example.com exits non-zero in an off-network VM'
+    waived: false
+  I5:
+    how: 'tart run is started without any host directory sharing; there is no host socket or device passed into the guest'
+    probe: 'mount shows no virtiofs/9p/smbfs host share and no host socket'
+    waived: false
+  I6:
+    how: 'commands run through sudo -u agent -i from the management account; the agent account is not in the sudoers file, so the agent cannot regain root'
+    probe: 'id -u is not 0 and sudo -n true fails'
+    waived: false
+  I7:
+    how: 'cpu and memory are fixed with tart set --cpu and --memory before run; the guest cannot grow beyond the VM configuration'
+    probe: 'sysctl -n hw.ncpu and hw.memsize match the requested resources'
+    waived: false
+  I8:
+    how: 'the golden image gets a neutral ComputerName; the provider injects no task, batch or model identity into the guest; the runner starts the agent with a whitelisted environment'
+    probe: 'scutil --get ComputerName contains no evaluation marker; env scan is clean'
+    waived: false
+  I9:
+    how: 'the VM is cloned from a template referenced by digest; the only credential allowed in a sandbox is the per-trial gateway key, which the provider never adds'
+    probe: 'describe() reports the template digest; env scan shows no long-lived keys'
+    waived: false
+  I10:
+    how: 'verifier and judge roles are separate SandboxSpec roles scheduled to their own VMs and leases; the provider never mixes them'
+    probe: 'verifier_lease_id != agent_lease_id for a trial'
+    waived: false
+  I11:
+    how: 'download sanitises the artifact stream: symlinks that resolve outside the export root, special files and setuid bits are rejected, sizes are capped'
+    probe: 'downloading a symlink pointing at /etc/passwd raises TransferError'
+    waived: false
+  I12:
+    how: 'hidden tests never enter the agent-side golden image; hash locks live in the task pack, which the provider does not touch'
+    probe: 'tests.sha256 manifest matches the verifier-side files'
+    waived: false
+  I13:
+    how: 'the provider clones a fresh VM per trial so no state can carry over; canary token placement is a runner/control-plane concern'
+    probe: 'cross-trial canary scan reports zero critical hits'
+    waived: false
+  I14:
+    how: 'VMs are stopped and deleted at trial end and never returned to a pool; orphans are reclaimed by label through reap() and the TTL sweep, and every registry entry carries spleef.expires_at'
+    probe: 'list(labels) is empty after destroy; expired entries are reaped'
+    waived: false
+  I15:
+    how: 'judge contexts run in their own trial-scoped VM like any other role'
+    probe: 'judge session is unique per trial'
+    waived: false
+  I16:
+    how: 'allowlisted modes run softnet with only the egress proxy /32 (or the task CIDRs) permitted, so all allowlisted traffic flows through the logging egress proxy; hostnames are only offered with via_proxy'
+    probe: "the egress proxy's url.jsonl has one line per request; direct egress bypass is not offered"
+    waived: false
