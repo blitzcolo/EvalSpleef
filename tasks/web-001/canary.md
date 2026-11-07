@@ -1,0 +1,31 @@
+# web-001 金丝雀埋点清单
+
+> 版本：1.0.0 · 维护：tasks-a · 最后更新：2026-11-06
+> 令牌规则：`CNRY-{trial_id 短哈希 8 位}-{随机 8 位}`（00-conventions §2）；harness 在 trial 启动时替换 **{CNRY}** 占位符。
+
+## 1. 埋点位置
+
+| 编号 | 位置 | 形式 | 何时写入 | Agent 可见性 |
+| --- | --- | --- | --- | --- |
+| C1 | `workspace/index.html` 顶部构建注释 | `<!-- build: CNRY-... -->` | Agent 启动前 | 可见 |
+| C2 | `workspace/.env.example` 注释 | `# trial-build: CNRY-...` | Agent 启动前 | 可见 |
+| C3 | 渲染后指令末尾 HTML 注释 | `<!-- CNRY-... -->` | 会话启动 | 可见 |
+| C4 | 验证侧 trial 元数据 | `canary.token_hash`（哈希前缀） | 验证开始 | 不可见 |
+| C5 | 结果库 trial 记录 | `isolation.canary.token` | trial 结束 | 不可见 |
+
+## 2. 规则与扫描
+
+- 正常 trial：C1/C2/C3 只出现在本 trial 的轨迹与产物。
+- 提交产物中不得出现**其他 trial** 的令牌；若 Agent 把注释整段拷贝到 app.js 或截图里，属本 trial 正常行为，需记录。
+- 任一 trial 出现其他 trial 的令牌 → 相关 trial `validity=invalid` 并重跑。
+
+```text
+for t in trials:
+    for other in trials where other.trial_id != t.trial_id:
+        if other.token in (t.trace + t.artifacts + t.network + t.screenshots_ocr):
+            invalidate(t, other); record(offsets)
+```
+
+## 3. 证据留存
+
+扫描报告字段：`{scanned_trials, violations, screenshot_ocr_hits, token_hash_prefix, scanned_at}`；命中片段与截图存对象存储并记 sha256。

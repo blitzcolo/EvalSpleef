@@ -1,0 +1,6 @@
+transaction_id,occurred_at,currency,amount,kind
+M001,2026-05-31,CNY,10.00,charge
+M002,2026-06-01,USD,20.00,charge
+M003,2026-06-02,CNY,5.00,refund
+M004,2026-06-30,USD,2.50,charge
+M005,2026-07-01,CNY,99.00,charge

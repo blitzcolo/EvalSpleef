@@ -1,0 +1,103 @@
+diff -ruN a/intro.py b/intro.py
+--- a/intro.py	2026-11-06 07:30:47
++++ b/intro.py	2026-11-06 07:30:47
+@@ -9,14 +9,17 @@
+ import sys
+ import time
+ 
+-# ---- 画面参数（半成品：与契约不符，需按 README 修正）----
+-WIDTH = 1280
+-HEIGHT = 720
+-FPS = 25
+-SECONDS = 24
++# ---- 画面参数（参考解 A：符合 README 契约）----
++WIDTH = 1920
++HEIGHT = 1080
++FPS = 30
++SECONDS = 30
+ ENCODE = [
+-    "-c:v", "mpeg4",
++    "-c:v", "libx264",
++    "-preset", "medium",
++    "-crf", "18",
+     "-pix_fmt", "yuv420p",
++    "-r", "30",
+     "-movflags", "+faststart",
+ ]
+ 
+@@ -113,18 +116,71 @@
+     return 1.0 - (1.0 - t) ** 3
+ 
+ 
++SCENES = [
++    ("logo", 0.0, 3.0),
++    ("title", 3.0, 12.0),
++    ("cards", 12.0, 21.0),
++    ("wave", 21.0, 27.0),
++    ("end", 27.0, 30.0),
++]
++
++
++def _lerp(a, b, k):
++    return tuple(int(a[i] + (b[i] - a[i]) * k) for i in range(3))
++
++
++def _clamp01(value):
++    return max(0.0, min(1.0, value))
++
++
++def _progress_bar(canvas, t):
++    width = int(canvas.width * _clamp01(t / 30.0))
++    canvas.rect(0, canvas.height - 12, width, 12, ACCENT)
++
++
+ def render_frame(t, canvas):
+-    """渲染 t 秒处的画面（半成品：只有一段静态标题）。"""
+     canvas.fill(BG)
+     width, height = canvas.width, canvas.height
+-    canvas.text(width // 2 - 5 * 26, height // 2 - 50, 8, "INTRO", FG)
+-    canvas.rect(0, height - 8, width, 8, ACCENT)
++    if t < 3.0:
++        # logo 揭示：主色方块放大 + 字标淡入
++        k = _clamp01(t / 2.2)
++        size = int(120 + 160 * ease_out(k))
++        canvas.rect(width // 2 - size // 2, height // 2 - size // 2 - 80, size, size, ACCENT)
++        color = _lerp(BG, FG, k)
++        canvas.text(width // 2 - 5 * 16 * 9 // 2, height // 2 + 60, 16, "NOVA", color)
++    elif t < 12.0:
++        slide = int(220 * (1.0 - ease_out(_clamp01((t - 3.0) / 2.0))))
++        canvas.text(180 - slide, 380, 12, "NOVA STUDIO", FG)
++        canvas.rect(180 - slide, 560, 520, 6, ACCENT)
++        canvas.text(180 - slide, 620, 5, "ANNUAL LAUNCH 2027", MUTED)
++    elif t < 21.0:
++        titles = ("FAST", "CLEAN", "OPEN")
++        for index, label in enumerate(titles):
++            local = _clamp01((t - 12.0 - index * 1.2) / 1.6)
++            offset = int(420 * (1.0 - ease_out(local)))
++            x = 160 + index * 520
++            canvas.rect(x + offset, 360, 440, 240, (22, 26, 40))
++            canvas.rect(x + offset, 360, 440, 6, ACCENT)
++            canvas.text(x + 30 + offset, 430, 7, label, FG)
++            canvas.text(x + 30 + offset, 520, 3, "BUILT IN", MUTED)
++    elif t < 27.0:
++        shift = int((t - 21.0) * 240)
++        for index in range(10):
++            x = (shift + index * 240) % (width + 240) - 240
++            canvas.rect(x, 0, 120, height, _lerp(BG, ACCENT, 0.60 + 0.10 * (index % 3)))
++        canvas.text(180, height // 2 - 80, 11, "BUILT FOR BUILDERS", FG)
++    else:
++        canvas.text(width // 2 - 5 * 20 * 8 // 2, 380, 20, "NOVA", FG)
++        canvas.rect(width // 2 - 260, 560, 520, 6, ACCENT)
++        canvas.text(width // 2 - 5 * 12 * 5 // 2, 640, 5, "THANK YOU", MUTED)
++    _progress_bar(canvas, t)
+     return canvas
+ 
+ 
+ def plan():
+     print("scene\tstart\tend\tname")
+-    print("1\t0.0\t24.0\ttitle-placeholder")
++    for index, (name, start, end) in enumerate(SCENES, start=1):
++        print(f"{index}\t{start}\t{end}\t{name}")
+ 
+ 
+ def render_video(path):

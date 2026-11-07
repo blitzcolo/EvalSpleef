@@ -1,0 +1,13 @@
+{
+  "algorithm": "sha256",
+  "locked_files": {
+    "gen_data.py": "04811854a4d999e484924109c487639daa0bf1656d0fb5c704f6a35e3364ca76",
+    "oracle.py": "2fedec69a28b95e403ee085bf6810b6aea82f4f517719fd5878df4c468386b75",
+    "checker.py": "1828dc5fdb4f0077eb3d4bffa3e9ecd2e236cf9fb54a2b9b253732fed8756f5b",
+    "verify_submission.py": "c3ec3e5c50a4801b5dadc9c4ab7486e16711adf5108756c213c899c24e6a3bb7",
+    "test_hidden.py": "c50bfc1f17e29592cd8a9861d5c505b0bdaaed8578f03f632298977a8f996f43",
+    "run.sh": "fddb080f684cee080b462f5633b155aa6d256185f006ffe5a5b2555cf754d3ea",
+    "../workspace/access.log": "69d2ab29a4b71bf374f00ebdbe17fcdc338b8bd6a64cf9f76f6419161f2cfcdc",
+    "../workspace/expected_sample.json": "09cb9bce01dd2e6af06411aace00d506512b2cafa254b9c1982d3e4fcaf2a1fc"
+  }
+}

@@ -1,0 +1,147 @@
+# macos-001 题目元数据（对齐 schemas/task.schema.json v1.0）
+id: macos-001
+version: 1.0.0
+track: macos
+layer: platform
+title: Metal 粒子渲染 20fps→60fps 优化
+platform: bare-metal-macos
+difficulty: 4
+difficulty_calibration:
+  status: pending
+  target_tier_range: [A, B]
+  models_tried: []
+  notes: 本机（Apple M6 / macOS 27.2）实测：starter 24000 粒子 1080p 平均 57.0ms/帧（17.5fps）；参考解 A 0.167ms、B 0.105ms。门槛 16.7ms 对参考解余量约 100 倍；待 2-3 个前代模型实测后回填。
+status: active
+author: tasks-b
+created: "2026-11-06"
+updated: "2026-11-06"
+language: [swift, metal]
+tags: [macos, metal, performance, particles, gpu]
+
+instruction: instruction.md
+persona: persona.md
+rubric_ref: rubric.yaml
+defects_ref: defects.yaml
+
+workspace:
+  mount: /workspace
+  starter: starter/
+  entry_files: [README.md, Makefile, Sources/, tests/]
+  protected_paths: [tests/]
+
+resources:
+  image: macos-27-xcode-27.2-metal
+  image_digest: TODO(pin-on-host)
+  cpu: 8
+  memory_mb: 16384
+  disk_mb: 40960
+  os: macOS 27.2 (arm64, Apple Silicon)
+  gpu: true
+  network: false
+  docs_whitelist: []
+  tools: [bash, read, write, edit]
+  services: []
+  notes: 功能构建在 macOS 验证机/VM（Tart）内完成；性能指标必须在裸机性能机独占运行，VM 半虚拟化 GPU 数字不作数。
+
+budget:
+  max_rounds: 6
+  max_feedback_rounds: 3
+  max_nudges: 2
+  max_total_tokens: 2000000
+  max_wall_clock_s: 5400
+  max_cost_usd: 22
+  max_observe_s: 900
+  escalation:
+    f1_no_progress_rounds: 2
+    f2_no_progress_rounds: 2
+
+hard_gates:
+  - id: HG1
+    title: 性能门槛（5 次中位帧时间 <= 16.7ms）
+    kind: script
+    script: command:bash hidden-tests/run.sh
+    required: true
+    pass_condition: exit_code == 0
+    description: 24000 粒子 / 1920x1080 / 120 帧，5 次独立运行 avg_frame_ms 中位数 <= 16.7ms（>=60fps）。
+    timeout_s: 900
+  - id: HG2
+    title: 测试文件哈希未变
+    kind: script
+    script: hidden-tests/check_locks.py
+    required: true
+    pass_condition: exit_code == 0
+    description: tests/ 下文件 sha256 与 locks.sha256 一致。
+    timeout_s: 60
+  - id: HG3
+    title: 功能与输出契约
+    kind: script
+    script: hidden-tests/run.sh
+    required: true
+    pass_condition: exit_code == 0
+    description: 构建成功、JSON 字段完整、非背景像素 >=1%、两次渲染 frame_hash 相同。
+    timeout_s: 300
+
+stop_conditions:
+  success: 所有 hard_gates 通过，且无未修复的 functional/fatal 缺陷。
+  failed: 预算耗尽或任一 hard_gate 失败（预算耗尽标注 budget_exhausted）。
+  failure_budget: 轮数/token/墙钟/费用任一触顶即停止并判 Failed(budget_exhausted)。
+  minor_affects: minor 缺陷（R7/R9）只影响 P/A 区分。
+
+reference_solutions:
+  - id: a
+    path: answers/reference-a.patch
+    approach: 合批 + 降同步（instanced 单次 draw、三缓冲常驻 instance buffer、DispatchSemaphore 不在 CPU 等 GPU）
+    runnable: true
+    notes: 本机实测 0.167ms/帧（5987fps），编译需 macOS + Xcode CLT。
+  - id: b
+    path: answers/reference-b.patch
+    approach: 降低 CPU/片元开销（顶点着色器内动画、MTLHeap private 常驻缓冲、discard 提前剔除）
+    runnable: true
+    notes: 本机实测 0.105ms/帧（9540fps）；画面与基线同量级（非背景像素 434508 对 400727）。
+
+references:
+  a: answers/reference-a.patch
+  b: answers/reference-b.patch
+  empty_agent: answers/empty-agent.md
+  patch_apply: patch -p1
+
+artifacts:
+  - path: Sources/ParticleBench/
+    kind: source
+    required: true
+    description: 优化后的渲染实现源码。
+  - path: build/ParticleBench
+    kind: build_output
+    required: false
+    max_bytes: 10485760
+    description: 本地构建产物（验证侧重新构建，不依赖它）。
+
+isolation:
+  agent_user: agent
+  environment_mode: separate
+  network_mode: no-network
+  notes: Agent 以非 root 用户 agent 运行；Agent 环境与验证环境分离；默认完全断网。
+
+canary:
+  manifest: canary.md
+  locations:
+    - starter/README.md 末尾 HTML 注释行
+    - starter/Sources/ParticleBench/Shaders.swift 注释行
+    - starter/NOTICE.txt 构建标记行
+  expected_trace:
+    - agent.step 读取 README.md 与 Shaders.swift 的工具输出
+    - 产物快照中 starter/README.md 的内容
+    - agent 修改 Sources/ 时的 diff 上下文
+  exclude_from_hash_lock: true
+
+verification:
+  entry: hidden-tests/run.sh
+  selftest: bash hidden-tests/run.sh --selftest
+  expected_runtime_s: 120
+  timeouts_s:
+    suite: 900
+    single_case: 300
+
+extensions:
+  schema_note: 隔离声明按 task.schema v1.0 写在顶层 isolation；本包不依赖评测框架默认值。
+  perf_host_requirement: 裸机性能机独占；测前 load1 < 2、LowPowerMode=0、温度正常；5 次取中位；VM 内数字不计分。

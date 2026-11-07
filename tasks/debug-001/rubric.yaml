@@ -1,0 +1,164 @@
+# debug-001 rubric（字段严格对齐 schemas/rubric.schema.json v1.0）
+schema_version: "1.0"
+task_id: debug-001
+rubric_version: 1.0.0
+title: 台账汇总工具无提示修复
+items:
+  - id: R1
+    kind: script
+    severity: functional
+    description: 金额按 HALF_UP 保留两位小数，不经 float 截断。
+    pass_criteria: hidden-tests/tests/test_regression.py 的 TestMoney 全过：format_money(2.675)=2.68、format_money(-1.005)=-1.01、half_up.csv 月度合计 2.68。
+    applies_to: [source, log, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 财务对账时发现退款加进月度合计后金额差几分钱，像是舍入方式不对。
+    f2_evidence: 'format_money(2.675) 实际输出 2.67，期望 2.68；format_money(-1.005) 实际输出 -1.00，期望 -1.01。'
+    f3_visual: 打开 summary JSON 的 totals，与 Excel ROUND(x,2) 结果并排比较，能看到 0.01 的差异。
+    f3_assist: 用户可代为把同一笔金额贴进表格软件做四舍五入对照，命令行由 Agent 自己跑。
+    hidden: true
+    tags: [money, rounding]
+    author: tasks-b
+    notes: 对应缺陷 D1；starter 中 money.round_money 使用 float 截断。
+
+  - id: R2
+    kind: script
+    severity: functional
+    description: 日期区间按左闭右开 [start, end) 过滤。
+    pass_criteria: hidden-tests/tests/test_regression.py 的 TestDateRange 全过：--start 2026-06-01 --end 2026-07-01 时结果只含 2026-06。
+    applies_to: [source, stdout, log]
+    evidence_required: [command_output]
+    f1_symptom: 按 6 月区间拉报表，7 月 1 日当天的交易也被算进 6 月了。
+    f2_evidence: '命令 --start 2026-06-01 --end 2026-07-01 的 summary 中出现 occurred_at=2026-07-01 的记录。'
+    f3_visual: 在导出的 CSV 里按日期排序，看区间末尾那一天是否出现在结果里。
+    hidden: true
+    tags: [date, boundary]
+    author: tasks-b
+    notes: 对应缺陷 D2；starter 中 dates.in_range 的 end 判断用了 <=。
+
+  - id: R3
+    kind: script
+    severity: functional
+    description: 非法输入抛 LedgerError 且异常信息含正确物理行号。
+    pass_criteria: hidden-tests/tests/test_regression.py 的 TestValidation 前五条全过：invalid_date 行号 4、invalid_amount 行号 3、bad_kind 行号 3、duplicate 行号 3、bad_header 报错。
+    applies_to: [source, log, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 输入文件里有一行日期写错，工具什么都没说就出了报表。
+    f2_evidence: '期望 ERROR: line 4: occurred_at 非法，实际退出码 0 且生成了 summary。'
+    f3_visual: 在输入 CSV 里写一行 2026-13-01，观察是报错还是静默继续。
+    hidden: true
+    tags: [validation, error_state]
+    author: tasks-b
+    notes: 对应缺陷 D3；starter 中 load_rows 的 except 分支是 continue。
+
+  - id: R4
+    kind: script
+    severity: functional
+    description: CLI 遇非法输入时退出码为 2 且 stderr 含 ERROR 与行号。
+    pass_criteria: "hidden-tests/tests/test_regression.py::TestValidation::test_cli_invalid_exit_code 通过：returncode==2、stderr 含 ERROR: 与 line 4、输出文件不存在。"
+    applies_to: [source, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 输入坏掉的时候工具照样成功退出，自动化脚本因此没拦住脏数据。
+    f2_evidence: 'python3 -m ledgerq summary --input invalid_date.csv 期望退出码 2；实际 0 且 stderr 为空。'
+    hidden: true
+    tags: [cli, error_state]
+    author: tasks-b
+    notes: 与 R3 同源缺陷 D3，但判定的是 CLI 层可观察行为（退出码/输出文件）。
+
+  - id: R5
+    kind: script
+    severity: functional
+    description: 同一进程内多次 summarize 互不影响且结果确定。
+    pass_criteria: TestAggregation 的 test_summary_is_deterministic 与 test_no_state_leak_between_datasets 通过：连续两次结果相等；mixed 之后 june_only 只含 2026-06。
+    applies_to: [source, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 先出 6 月报表再出 7 月报表，第二份里混进了第一份的数据。
+    f2_evidence: 同一进程连续两次 summarize 的 counts 翻倍，或输出里出现本次数据没有的月份。
+    f3_visual: 连续生成两份不同月份报表，把第二份与单独生成的结果并排看。
+    hidden: true
+    tags: [state, determinism]
+    author: tasks-b
+    notes: 对应缺陷 D4；group_by_month 的 acc={} 默认参数跨调用复用。
+
+  - id: R6
+    kind: script
+    severity: functional
+    description: 不同币种分开汇总，totals 以币种为键。
+    pass_criteria: TestAggregation::test_currency_totals_are_separate 通过：mixed.csv 的 2026-06 为 {"CNY":"-5.00","USD":"22.50"}。
+    applies_to: [source, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 台账里同时有人民币和美元时，月度总金额是一个数，两个币种被加在一起了。
+    f2_evidence: 2026-06 的 totals 只有一个币种键，数值等于 CNY 与 USD 金额直接相加。
+    f3_visual: 打开 summary JSON 的 totals，看币种键的个数。
+    hidden: true
+    tags: [currency, aggregation]
+    author: tasks-b
+    notes: 对应缺陷 D5；summarize 取首行币种作键。
+
+  - id: R7
+    kind: script
+    severity: minor
+    description: 导出 CSV 的列、排序、编码与行尾保持契约。
+    pass_criteria: hidden-tests/tests/test_regression.py 的 TestExport 全过：unsorted.csv 顺序 U001/U002/U003、退款 signed_amount=-3.00、无 CRLF。
+    applies_to: [source, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 导出的 CSV 行序和财务系统模板对不上，逐行核对要多花时间。
+    f2_evidence: 导出文件首列顺序与按日期排序的期望不一致，或出现 CRLF。
+    hidden: true
+    tags: [export, format]
+    author: tasks-b
+    notes: 回归保护项，starter 本来正确；修复不得破坏。
+
+  - id: R8
+    kind: agent_judge
+    severity: minor
+    description: 修改保留 README 第 8 条声明的库 API 与 CLI 子命令。
+    judge_question: 提交产物中 ledgerq.load_rows / summarize / export_csv / LedgerError 与 summary/export 子命令是否仍可用？
+    pass_criteria: 裁判按 README 第 8 条逐个 import/调用 API 并执行两个子命令，全部成功即 pass。
+    applies_to: [source, diff, stdout]
+    evidence_required: [file_path, command_output]
+    f1_symptom: 改完以后原来的调用方式不能用了。
+    hidden: false
+    tags: [api, compatibility]
+    author: tasks-b
+    notes: 参考解 A/B 均保持 API；若 Agent 重构需保持兼容。
+
+  - id: R9
+    kind: script
+    severity: fatal
+    description: tests/ 下测试文件哈希未变。
+    pass_criteria: python3 hidden-tests/check_locks.py 退出码 0；任一 tests/ 文件被修改即 fail 且按作弊处理。
+    applies_to: [source, diff]
+    evidence_required: [command_output]
+    f1_symptom: 无（验证侧发现，永不进入反馈）。
+    hidden: true
+    tags: [anti_cheat, hash_lock]
+    author: tasks-b
+    notes: 硬门槛 HG2 的 rubric 映射。
+
+  - id: R10
+    kind: agent_judge
+    severity: fatal
+    description: 实现中是否硬编码隐藏样例的特征值。
+    judge_question: 提交的代码中是否存在针对特定交易 ID、日期或金额的硬编码分支？
+    pass_criteria: 裁判读 diff；出现与隐藏 fixtures 中 ID/日期/金额完全相同的特判分支即 fail；纯通用逻辑 pass。
+    applies_to: [source, diff]
+    evidence_required: [diff_hunk]
+    f1_symptom: 无（验证侧发现，永不进入反馈）。
+    hidden: true
+    tags: [anti_cheat]
+    author: tasks-b
+    notes: 配合隐藏数据集与变异测试使用；低置信度转人工。
+
+  - id: R11
+    kind: agent_judge
+    severity: minor
+    description: 修复后仍只依赖 Python 标准库。
+    judge_question: 提交产物是否没有新增任何第三方依赖？
+    pass_criteria: 裁判检查 import 与依赖文件；出现非标准库 import 或新增 requirements 即 fail。
+    applies_to: [source, diff]
+    evidence_required: [diff_hunk]
+    f1_symptom: 换到别的机器上跑不起来了。
+    hidden: false
+    tags: [dependencies]
+    author: tasks-b
+    notes: 沙箱无网络，引入依赖通常也装不上。

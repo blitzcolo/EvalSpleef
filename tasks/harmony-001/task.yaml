@@ -1,0 +1,138 @@
+# harmony-001 题目元数据（对齐 schemas/task.schema.json v1.0）
+id: harmony-001
+version: 1.0.0
+track: harmony
+layer: platform
+title: 鸿蒙图片滤镜：ArkTS 界面 + C++ NAPI 插件
+platform: harmony-device-pool
+difficulty: 4
+difficulty_calibration:
+  status: pending
+  target_tier_range: [B+, A]
+status: draft
+author: research
+created: "2026-11-06"
+updated: "2026-11-06"
+language: [arkts, cpp]
+tags: [harmony, napi, image-processing, plugin, device-pool]
+
+instruction: instruction.md
+persona: persona.md
+rubric_ref: rubric.yaml
+defects_ref: defects.yaml
+
+workspace:
+  mount: /workspace
+  starter: starter/
+  entry_files: [README.md, entry/src/main/ets/pages/Index.ets, entry/src/main/cpp/, build-profile.json5]
+  protected_paths:
+    - entry/src/main/cpp/image_ops.h
+    - entry/src/main/cpp/types/libimageops/index.d.ts
+
+resources:
+  image: "registry.local/llm-eval/harmony-build:6.0.2-api22"
+  image_digest: "TODO(run-on-host): 上线前固定构建镜像 digest"
+  cpu: 4
+  memory_mb: 8192
+  disk_mb: 20480
+  os: linux
+  network: false
+  docs_whitelist:
+    - developer.huawei.com
+    - developer.openharmony.cn
+    - docs.openharmony.cn
+  tools: [bash, read, write, edit, hdc]
+  services: []
+  notes: |
+    构建在 Linux 容器（commandline-tools 含 hvigorw/ohpm/hdc），运行在鸿蒙真机设备池。
+    签名材料（证书/Profile/p12）由平台预置在 /opt/harmony-signing，Agent 不得自行申请账号。
+    设备由控制器独占租用，Agent 不直接持有设备 shell。
+
+isolation:
+  agent_user: agent
+  environment_mode: separate
+  network_mode: allowlist
+  lint_extend_select: [unpinned-image, root-agent]
+  notes: 设备池独占租用（真机），归还按 appendix/checklists/device-pool-handover.md；构建容器断网。
+
+budget:
+  max_rounds: 8
+  max_feedback_rounds: 4
+  max_nudges: 2
+  max_total_tokens: 3000000
+  max_wall_clock_s: 7200
+  max_cost_usd: 40
+  max_observe_s: 900
+  escalation:
+    f1_no_progress_rounds: 2
+    f2_no_progress_rounds: 2
+
+hard_gates:
+  - id: HG1
+    title: HAP 构建、签名、安装、启动成功
+    kind: script
+    script: hidden-tests/run.sh --device
+    required: true
+    pass_condition: exit_code == 0
+    description: hvigorw assembleHap 成功，hdc install 成功，aa start 后 10 秒内无崩溃日志。
+    timeout_s: 1800
+  - id: HG2
+    title: 隐藏验收（静态 + C++ 数值）
+    kind: script
+    script: hidden-tests/run.sh
+    required: true
+    pass_condition: exit_code == 0
+    description: 工程结构/NAPI 接线/UI 调用静态检查通过，且 image_ops 数值测试 25 项全过。
+    timeout_s: 300
+  - id: HG3
+    title: 契约文件未被修改
+    kind: script
+    script: hidden-tests/static_checks.py --locks-only
+    required: true
+    pass_condition: exit_code == 0
+    description: image_ops.h 与 index.d.ts 的 sha256 与 locks.json 一致；改动即判作弊并判 0。
+    timeout_s: 60
+
+stop_conditions:
+  success: 所有 hard_gates 通过，且无未修复的 functional/fatal 缺陷。
+  failed: 预算耗尽或任一 hard_gate 失败。
+  failure_budget: 轮数/token/墙钟/费用任一触顶即停止并判 Failed。
+  minor_affects: minor 缺陷（R7/R9/R10/R11）只影响 P/A 与半档。
+
+reference_solutions:
+  - id: a
+    path: answers/reference-a.patch
+    approach: 逐像素整数定点实现 + 宏式 NAPI 绑定 + 单入口 applyOp 分发
+    runnable: true
+    notes: 应用方式 cd starter && patch -p1 < answers/reference-a.patch；C++ 内核可 host 编译自测。
+  - id: b
+    path: answers/reference-b.patch
+    approach: 256 项 LUT + 可分离模糊 + 目标序旋转 + 函数指针表绑定
+    runnable: true
+    notes: 与 A 算法不同但像素语义一致（数值测试同一套）。
+
+references:
+  a: answers/reference-a.patch
+  b: answers/reference-b.patch
+  empty_agent: answers/empty-agent.md
+  patch_apply: patch -p1
+
+canary:
+  manifest: canary.md
+  locations:
+    - starter/README.md 末尾 HTML 注释行
+    - starter/entry/src/main/ets/pages/Index.ets 顶部注释行
+    - starter/entry/build-profile.json5 注释行（不得写进 image_ops.h / index.d.ts：两者受哈希锁保护）
+  expected_trace:
+    - agent 读取 starter/README.md 的工具输出
+    - 产物中 Index.ets 的 diff 上下文
+    - 构建日志中的文件路径回显
+  exclude_from_hash_lock: true
+
+verification:
+  entry: hidden-tests/run.sh
+  selftest: bash hidden-tests/run.sh --selftest
+  expected_runtime_s: 240
+  timeouts_s:
+    suite: 900
+    single_case: 120

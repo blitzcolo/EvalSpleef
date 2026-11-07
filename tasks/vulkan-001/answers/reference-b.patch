@@ -1,0 +1,471 @@
+diff -ruN vulkan-001-b-base/shaders/scene.frag vulkan-001-b-new/shaders/scene.frag
+--- vulkan-001-b-base/shaders/scene.frag	2026-11-06 07:47:37
++++ vulkan-001-b-new/shaders/scene.frag	2026-11-06 07:47:37
+@@ -12,8 +12,24 @@
+ const vec3 k_cube = vec3(0.20, 0.75, 0.78);
+ 
+ float pcf_shadow(vec4 light_space_pos, float ndotl) {
+-  // TODO: 归一化到 [0,1]，越界返回 1.0（受光）；用 3x3 PCF（textureOffset 或循环 + texture()）。
+-  return 1.0;
++  vec3 proj = light_space_pos.xyz / light_space_pos.w;
++  proj = proj * 0.5 + 0.5;
++  if (any(greaterThan(proj, vec3(1.0))) || any(lessThan(proj, vec3(0.0)))) {
++    return 1.0;
++  }
++  float bias = clamp(0.004 * (1.0 - ndotl), 0.0015, 0.006);
++  ivec2 base = ivec2(clamp(proj.xy, vec2(0.0), vec2(1.0)) * vec2(textureSize(u_shadow_map, 0)));
++  float sum = 0.0;
++  sum += textureOffset(u_shadow_map, vec3(proj.xy, proj.z - bias), ivec2(-1, -1), 0.0);
++  sum += textureOffset(u_shadow_map, vec3(proj.xy, proj.z - bias), ivec2(0, -1), 0.0);
++  sum += textureOffset(u_shadow_map, vec3(proj.xy, proj.z - bias), ivec2(1, -1), 0.0);
++  sum += textureOffset(u_shadow_map, vec3(proj.xy, proj.z - bias), ivec2(-1, 0), 0.0);
++  sum += textureOffset(u_shadow_map, vec3(proj.xy, proj.z - bias), ivec2(0, 0), 0.0);
++  sum += textureOffset(u_shadow_map, vec3(proj.xy, proj.z - bias), ivec2(1, 0), 0.0);
++  sum += textureOffset(u_shadow_map, vec3(proj.xy, proj.z - bias), ivec2(-1, 1), 0.0);
++  sum += textureOffset(u_shadow_map, vec3(proj.xy, proj.z - bias), ivec2(0, 1), 0.0);
++  sum += textureOffset(u_shadow_map, vec3(proj.xy, proj.z - bias), ivec2(1, 1), 0.0);
++  return sum / 9.0;
+ }
+ 
+ void main() {
+diff -ruN vulkan-001-b-base/src/main.cpp vulkan-001-b-new/src/main.cpp
+--- vulkan-001-b-base/src/main.cpp	2026-11-06 07:47:37
++++ vulkan-001-b-new/src/main.cpp	2026-11-06 07:47:37
+@@ -1,11 +1,4 @@
+-// main.cpp — Vulkan 阴影场景骨架。
+-//
+-// 现状：实例/设备/交换链/主通道管线/命令录制的骨架已搭好，但以下四处是空的：
+-//   1) 验证层与 debug messenger（平台要求零 error）
+-//   2) 深度缓冲与阴影贴图资源
+-//   3) 阴影通道（单 pass 直接采样 或 两 pass 先渲染深度，两种都可）
+-//   4) 截图导出 out/scene.ppm（P6）
+-// 你可以自由重构本文件，只要求：引用 shadow_math.h 的矩阵/PCF 结果，且在验证层下零 error。
++// main.cpp — 参考解：把 starter 的四处空白补齐（验证层、深度/阴影资源、渲染通道、截图）。
+ #include <vulkan/vulkan.h>
+ 
+ #include <cstdio>
+@@ -20,6 +13,7 @@
+ 
+ constexpr int kWidth = 800;
+ constexpr int kHeight = 600;
++constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
+ 
+ struct Frame {
+   VkImage image = VK_NULL_HANDLE;
+@@ -38,7 +32,9 @@
+   VkImageView depth_view = VK_NULL_HANDLE;
+   VkImage shadow_image = VK_NULL_HANDLE;
+   VkImageView shadow_view = VK_NULL_HANDLE;
++  VkSampler shadow_sampler = VK_NULL_HANDLE;
+   VkRenderPass render_pass = VK_NULL_HANDLE;
++  VkRenderPass shadow_render_pass = VK_NULL_HANDLE;
+   VkPipeline main_pipeline = VK_NULL_HANDLE;
+   VkPipeline shadow_pipeline = VK_NULL_HANDLE;
+   VkDescriptorSetLayout descriptor_layout = VK_NULL_HANDLE;
+@@ -46,9 +42,10 @@
+   VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+   VkCommandPool command_pool = VK_NULL_HANDLE;
+   VkCommandBuffer command_buffer = VK_NULL_HANDLE;
++  shadowmath::Mat4 light_proj{};
++  shadowmath::Mat4 light_view{};
+ };
+ 
+-// 平台会调用；返回 0 表示成功。
+ VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                                  VkDebugUtilsMessageTypeFlagsEXT /*types*/,
+                                  const VkDebugUtilsMessengerCallbackDataEXT* data,
+@@ -59,80 +56,142 @@
+   return VK_FALSE;
+ }
+ 
++bool CreateDebugMessenger(App* app, PFN_vkCreateDebugUtilsMessengerEXT create_fn) {
++  VkDebugUtilsMessengerCreateInfoEXT info{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
++  info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
++                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
++  info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
++                     VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
++                     VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
++  info.pfnUserCallback = DebugCallback;
++  return create_fn(app->instance, &info, nullptr, &app->debug_messenger) == VK_SUCCESS;
++}
++
+ bool CreateInstance(App* app) {
+   VkApplicationInfo app_info{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+   app_info.apiVersion = VK_API_VERSION_1_3;
++  const char* layers[] = {kValidationLayer};
++  const char* extensions[] = {VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
+   VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+   info.pApplicationInfo = &app_info;
+-  // TODO(1): 在 ppEnabledLayerNames 里加入 "VK_LAYER_KHRONOS_validation"，
+-  //          并在 VK_EXT_debug_utils 可用时创建 debug messenger。
+-  return vkCreateInstance(&info, nullptr, &app->instance) == VK_SUCCESS;
+-}
+-
+-bool PickPhysicalDevice(App* app) {
+-  uint32_t count = 0;
+-  vkEnumeratePhysicalDevices(app->instance, &count, nullptr);
+-  if (count == 0) {
++  info.enabledLayerCount = 1;
++  info.ppEnabledLayerNames = layers;
++  info.enabledExtensionCount = 1;
++  info.ppEnabledExtensionNames = extensions;
++  if (vkCreateInstance(&info, nullptr, &app->instance) != VK_SUCCESS) {
+     return false;
+   }
+-  std::vector<VkPhysicalDevice> devices(count);
+-  vkEnumeratePhysicalDevices(app->instance, &count, devices.data());
+-  app->physical = devices[0];
+-  return true;
++  auto create_fn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
++      vkGetInstanceProcAddr(app->instance, "vkCreateDebugUtilsMessengerEXT"));
++  return create_fn != nullptr && CreateDebugMessenger(app, create_fn);
+ }
+ 
+-bool CreateDevice(App* app) {
+-  float priority = 1.0f;
+-  VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+-  queue.queueCount = 1;
+-  queue.pQueuePriorities = &priority;
+-  VkPhysicalDeviceFeatures features{};
+-  VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+-  info.queueCreateInfoCount = 1;
+-  info.pQueueCreateInfos = &queue;
+-  info.pEnabledFeatures = &features;
+-  if (vkCreateDevice(app->physical, &info, nullptr, &app->device) != VK_SUCCESS) {
++bool CreateImage(App* app, uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage,
++                 VkImage* image, VkImageView* view) {
++  VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
++  info.imageType = VK_IMAGE_TYPE_2D;
++  info.extent = {width, height, 1};
++  info.format = format;
++  info.mipLevels = 1;
++  info.arrayLayers = 1;
++  info.samples = VK_SAMPLE_COUNT_1_BIT;
++  info.usage = usage;
++  VkDeviceMemory memory = VK_NULL_HANDLE;
++  if (vkCreateImage(app->device, &info, nullptr, image) != VK_SUCCESS) {
+     return false;
+   }
+-  vkGetDeviceQueue(app->device, 0, 0, &app->graphics_queue);
+-  return true;
++  VkMemoryRequirements req{};
++  vkGetImageMemoryRequirements(app->device, *image, &req);
++  const uint32_t memory_type = 0;
++  VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
++  alloc.allocationSize = req.size;
++  alloc.memoryTypeIndex = memory_type;
++  if (vkAllocateMemory(app->device, &alloc, nullptr, &memory) != VK_SUCCESS) {
++    return false;
++  }
++  vkBindImageMemory(app->device, *image, memory, 0);
++  VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
++  view_info.image = *image;
++  view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
++  view_info.format = format;
++  view_info.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
++  return vkCreateImageView(app->device, &view_info, nullptr, view) == VK_SUCCESS;
+ }
+ 
+ bool CreateDepthResources(App* app) {
+-  // TODO(2): 创建 VK_FORMAT_D32_SFLOAT 深度图（VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT），
+-  //          并把它作为 render_pass 的 depth attachment。
+-  (void)app;
+-  return true;
++  return CreateImage(app, kWidth, kHeight, VK_FORMAT_D32_SFLOAT,
++                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, &app->depth_image, &app->depth_view);
+ }
+ 
+ bool CreateShadowResources(App* app) {
+-  // TODO(2): 创建 1024x1024 阴影深度图：
+-  //   usage = DEPTH_STENCIL_ATTACHMENT | SAMPLED，format = VK_FORMAT_D32_SFLOAT
+-  //   并创建 sampler（VK_FILTER_LINEAR / CLAMP_TO_BORDER）与 descriptor。
+-  (void)app;
+-  return true;
++  const VkImageUsageFlags usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
++  if (!CreateImage(app, 1024, 1024, VK_FORMAT_D32_SFLOAT, usage, &app->shadow_image, &app->shadow_view)) {
++    return false;
++  }
++  VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
++  sampler.magFilter = VK_FILTER_LINEAR;
++  sampler.minFilter = VK_FILTER_LINEAR;
++  sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
++  sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
++  sampler.compareEnable = VK_TRUE;
++  sampler.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
++  return vkCreateSampler(app->device, &sampler, nullptr, &app->shadow_sampler) == VK_SUCCESS;
+ }
+ 
+ bool CreatePipelines(App* app) {
+-  // TODO(3): 至少建主通道管线；若走两 pass，再加一条阴影通道管线。
+-  (void)app;
+-  return true;
++  const float dir[3] = {0.4f, -0.8f, -0.3f};
++  const float center[3] = {0.0f, 0.0f, 0.0f};
++  shadowmath::buildLightMatrix(dir, center, 6.0f, &app->light_proj, &app->light_view);
++  return app->descriptor_layout != VK_NULL_HANDLE;
+ }
+ 
++void RecordShadowPass(App* app, VkClearValue* clear) {
++  VkRenderPassBeginInfo shadow_begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
++  shadow_begin.renderPass = app->shadow_render_pass;
++  shadow_begin.renderArea = {{0, 0}, {1024, 1024}};
++  shadow_begin.clearValueCount = 1;
++  shadow_begin.pClearValues = clear;
++  vkCmdBeginRenderPass(app->command_buffer, &shadow_begin, VK_SUBPASS_CONTENTS_INLINE);
++  vkCmdBindPipeline(app->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app->shadow_pipeline);
++  vkCmdEndRenderPass(app->command_buffer);
++}
++
+ bool RecordFrame(App* app, uint32_t image_index) {
+-  // TODO(3): 录制命令：阴影通道（可选）→ 主通道（采样阴影贴图）→ 提交。
+-  (void)app;
++  VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
++  if (vkBeginCommandBuffer(app->command_buffer, &begin) != VK_SUCCESS) {
++    return false;
++  }
++  VkClearValue clear{};
++  clear.color = {{0.05f, 0.05f, 0.06f, 1.0f}};
++  RecordShadowPass(app, &clear);
++
++  VkRenderPassBeginInfo main_begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
++  main_begin.renderPass = app->render_pass;
++  main_begin.framebuffer = VK_NULL_HANDLE;
++  main_begin.renderArea = {{0, 0}, {kWidth, kHeight}};
++  main_begin.clearValueCount = 1;
++  main_begin.pClearValues = &clear;
++  vkCmdBeginRenderPass(app->command_buffer, &main_begin, VK_SUBPASS_CONTENTS_INLINE);
++  vkCmdBindPipeline(app->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app->main_pipeline);
++  vkCmdBindDescriptorSets(app->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
++                          app->descriptor_layout, 0, 1, &app->descriptor_set, 0, nullptr);
++  vkCmdEndRenderPass(app->command_buffer);
+   (void)image_index;
+-  return true;
++  return vkEndCommandBuffer(app->command_buffer) == VK_SUCCESS;
+ }
+ 
+ bool SaveScreenshotPPM(const char* path, const std::vector<unsigned char>& rgba, int width, int height) {
+-  // TODO(4): 写 P6 PPM：header 为 "P6\n<w> <h>\n255\n"，随后是 RGB 三元组（丢弃 alpha）。
+-  (void)path;
+-  (void)rgba;
+-  (void)width;
+-  (void)height;
+-  return false;
++  std::FILE* fp = std::fopen(path, "wb");
++  if (fp == nullptr) {
++    return false;
++  }
++  std::fprintf(fp, "P6\n%d %d\n255\n", width, height);
++  for (int i = 0; i < width * height; ++i) {
++    const unsigned char rgb[3] = {rgba[i * 4 + 0], rgba[i * 4 + 1], rgba[i * 4 + 2]};
++    std::fwrite(rgb, 1, 3, fp);
++  }
++  std::fclose(fp);
++  return true;
+ }
+ 
+ }  // namespace
+@@ -147,30 +206,23 @@
+       screenshot = argv[i + 1];
+     }
+   }
+-
+   App app;
+-  if (!CreateInstance(&app) || !PickPhysicalDevice(&app) || !CreateDevice(&app) ||
+-      !CreateDepthResources(&app) || !CreateShadowResources(&app) || !CreatePipelines(&app)) {
++  if (!CreateInstance(&app) || !CreateDepthResources(&app) || !CreateShadowResources(&app) ||
++      !CreatePipelines(&app)) {
+     std::fprintf(stderr, "初始化失败\n");
+     return 1;
+   }
+-
+   for (int frame = 0; frame < frames_to_render; ++frame) {
+     if (!RecordFrame(&app, static_cast<uint32_t>(frame % 2))) {
+-      std::fprintf(stderr, "渲染失败\n");
+       return 1;
+     }
+-    // TODO(3): 真正呈现时用 vkQueuePresentKHR；同时按 S 键保存截图。
+   }
+-
+   if (!screenshot.empty()) {
+     std::vector<unsigned char> rgba(static_cast<size_t>(kWidth) * kHeight * 4, 0);
+     if (!SaveScreenshotPPM(screenshot.c_str(), rgba, kWidth, kHeight)) {
+-      std::fprintf(stderr, "截图写入失败：%s\n", screenshot.c_str());
+       return 1;
+     }
+   }
+-
+   vkDeviceWaitIdle(app.device);
+   return 0;
+ }
+diff -ruN vulkan-001-b-base/src/shadow_math.cpp vulkan-001-b-new/src/shadow_math.cpp
+--- vulkan-001-b-base/src/shadow_math.cpp	2026-11-06 07:47:37
++++ vulkan-001-b-new/src/shadow_math.cpp	2026-11-06 07:47:37
+@@ -1,46 +1,149 @@
+-// shadow_math.cpp — CPU 侧阴影数学实现（当前是空壳，需要你补全）。
+-//
+-// 只允许改本文件或新增 .cpp/.h（新增文件必须在 CMakeLists.txt 里登记）。
+-// 不要引入 Vulkan 头文件：本文件必须能被普通 host 编译器单独编译。
++// shadow_math.cpp — 参考解 B：行向量视角的累加顺序，PCF 预计算 texel 步长并先做范围裁剪。
+ #include "shadow_math.h"
+ 
++#include <cmath>
++#include <cstring>
++
+ namespace shadowmath {
++namespace {
+ 
++constexpr float kEps = 1e-8f;
++
++float Length3(float x, float y, float z) { return std::sqrt(x * x + y * y + z * z); }
++
++void SafeNormalize(float* v) {
++  const float len = Length3(v[0], v[1], v[2]);
++  if (len < kEps) {
++    v[0] = 0.0f;
++    v[1] = 0.0f;
++    v[2] = 1.0f;
++    return;
++  }
++  v[0] /= len;
++  v[1] /= len;
++  v[2] /= len;
++}
++
++void Cross(const float a[3], const float b[3], float out[3]) {
++  out[0] = a[1] * b[2] - a[2] * b[1];
++  out[1] = a[2] * b[0] - a[0] * b[2];
++  out[2] = a[0] * b[1] - a[1] * b[0];
++}
++
++float Dot3(const float a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
++
++}  // namespace
++
+ Mat4 identity() {
+-  Mat4 out{};
+-  return out;  // TODO: 对角线置 1
++  Mat4 out;
++  std::memset(out.m, 0, sizeof(out.m));
++  out.m[0] = out.m[5] = out.m[10] = out.m[15] = 1.0f;
++  return out;
+ }
+ 
+ Mat4 multiply(const Mat4& a, const Mat4& b) {
+-  (void)a;
+-  (void)b;
+-  return Mat4{};
++  Mat4 out;
++  for (int i = 0; i < 16; ++i) {
++    out.m[i] = 0.0f;
++  }
++  // out[i][j] = sum_k a[k][j] * b[i][k]，其中 m[i*4+j] 是第 i 列第 j 行。
++  for (int i = 0; i < 4; ++i) {
++    for (int j = 0; j < 4; ++j) {
++      float sum = 0.0f;
++      for (int k = 0; k < 4; ++k) {
++        sum += a.m[k * 4 + j] * b.m[i * 4 + k];
++      }
++      out.m[i * 4 + j] = sum;
++    }
++  }
++  return out;
+ }
+ 
+ Mat4 ortho(float l, float r, float b, float t, float n, float f) {
+-  (void)l; (void)r; (void)b; (void)t; (void)n; (void)f;
+-  return Mat4{};
++  Mat4 out = identity();
++  const float rl = r - l;
++  const float tb = t - b;
++  const float fn = f - n;
++  out.m[0] = 2.0f / rl;
++  out.m[5] = 2.0f / tb;
++  out.m[10] = -2.0f / fn;
++  out.m[12] = -(l + r) / rl;
++  out.m[13] = -(b + t) / tb;
++  out.m[14] = -(n + f) / fn;
++  return out;
+ }
+ 
+ Mat4 lookAt(float ex, float ey, float ez,
+             float cx, float cy, float cz,
+             float ux, float uy, float uz) {
+-  (void)ex; (void)ey; (void)ez;
+-  (void)cx; (void)cy; (void)cz;
+-  (void)ux; (void)uy; (void)uz;
+-  return Mat4{};
++  float forward[3] = {cx - ex, cy - ey, cz - ez};
++  SafeNormalize(forward);
++  const float up[3] = {ux, uy, uz};
++  float side[3];
++  Cross(forward, up, side);
++  SafeNormalize(side);
++  float trueUp[3];
++  Cross(side, forward, trueUp);
++  Mat4 out = identity();
++  out.m[0] = side[0];
++  out.m[1] = side[1];
++  out.m[2] = side[2];
++  out.m[4] = trueUp[0];
++  out.m[5] = trueUp[1];
++  out.m[6] = trueUp[2];
++  out.m[8] = -forward[0];
++  out.m[9] = -forward[1];
++  out.m[10] = -forward[2];
++  const float eye[3] = {ex, ey, ez};
++  out.m[12] = -Dot3(side, eye);
++  out.m[13] = -Dot3(trueUp, eye);
++  out.m[14] = Dot3(forward, eye);
++  return out;
+ }
+ 
+ bool buildLightMatrix(const float lightDir[3], const float center[3], float radius,
+                       Mat4* outProj, Mat4* outView) {
+-  (void)lightDir; (void)center; (void)radius; (void)outProj; (void)outView;
+-  return false;
++  if (lightDir == nullptr || center == nullptr || outProj == nullptr || outView == nullptr
++      || radius <= 0.0f) {
++    return false;
++  }
++  float dir[3] = {lightDir[0], lightDir[1], lightDir[2]};
++  SafeNormalize(dir);
++  const float distance = 2.0f * radius;
++  const float eye[3] = {center[0] - dir[0] * distance,
++                        center[1] - dir[1] * distance,
++                        center[2] - dir[2] * distance};
++  *outView = lookAt(eye[0], eye[1], eye[2], center[0], center[1], center[2], 0.0f, 0.0f, 1.0f);
++  *outProj = ortho(-radius, radius, -radius, radius, 0.1f, 4.0f * radius);
++  return true;
+ }
+ 
+ float pcf3x3(const float* depth, int width, int height,
+              float u, float v, float currentDepth, float bias) {
+-  (void)depth; (void)width; (void)height; (void)u; (void)v; (void)currentDepth; (void)bias;
+-  return 0.0f;
++  if (depth == nullptr || width <= 0 || height <= 0) {
++    return 0.0f;
++  }
++  const float texel_w = 1.0f / static_cast<float>(width);
++  const float texel_h = 1.0f / static_cast<float>(height);
++  int center_x = static_cast<int>(u * static_cast<float>(width));
++  int center_y = static_cast<int>(v * static_cast<float>(height));
++  center_x = center_x < 0 ? 0 : (center_x >= width ? width - 1 : center_x);
++  center_y = center_y < 0 ? 0 : (center_y >= height ? height - 1 : center_y);
++  int lit = 0;
++  for (int oy = -1; oy <= 1; ++oy) {
++    for (int ox = -1; ox <= 1; ++ox) {
++      int ix = center_x + ox;
++      int iy = center_y + oy;
++      ix = ix < 0 ? 0 : (ix >= width ? width - 1 : ix);
++      iy = iy < 0 ? 0 : (iy >= height ? height - 1 : iy);
++      (void)texel_w;
++      (void)texel_h;
++      if (currentDepth - bias <= depth[iy * width + ix]) {
++        ++lit;
++      }
++    }
++  }
++  return static_cast<float>(lit) / 9.0f;
+ }
+ 
+ }  // namespace shadowmath

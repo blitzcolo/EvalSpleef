@@ -1,0 +1,156 @@
+# logic-001 题目元数据
+# 字段对齐 schemas/task.schema.json（tasks-a 维护）
+id: logic-001
+version: 1.0.0
+track: logic
+layer: logic
+title: 无解说对局记录：归纳隐藏变换规则并预测下一步
+subtitle: 只给棋盘序列、不给规则说明，要求归纳规则、说明唯一性并预测下一回合
+platform: linux-container
+difficulty: 3
+difficulty_calibration:
+  status: pending
+  target_tier_range: [A, B]
+  models_tried: []
+status: active
+author: tasks-a
+created: "2026-11-06"
+updated: "2026-11-06"
+language: [python, json]
+tags: [rule-induction, unique-solution, parameterized, no-network]
+
+instruction: instruction.md
+persona: persona.md
+rubric_ref: rubric.yaml
+defects_ref: defects.yaml
+
+# Agent 可见工作区：workspace/ 原样拷入沙箱；instances.json 是受保护输入
+workspace:
+  mount: /workspace
+  starter: workspace/
+  entry_files: [instances.json]
+  protected_paths: [instances.json]
+  writable_paths: [answer.json]
+
+resources:
+  image: llm-eval/logic-001
+  image_digest: TODO(pin-on-host)
+  cpu: 2
+  memory_mb: 2048
+  disk_mb: 1024
+  network: false
+  docs_whitelist: []
+  tools: [bash, read, write, edit]
+
+isolation:
+  agent_user: agent
+  environment_mode: separate
+  network_mode: no-network
+  lint_extend_select: [unpinned-image, root-agent]
+  notes: 纯 CPU 题；Agent 与验证环境独立，无网络。
+
+network:
+  mode: "off"
+  allowlist: []
+  search_proxy: false
+
+tools: [bash, read, write, edit]
+
+# 预算按 00-conventions §4.8；逻辑题 token/墙钟比工程题低一档（P1 标定后回填）
+budget:
+  max_rounds: 6
+  max_feedback_rounds: 3
+  max_nudges: 2
+  max_total_tokens: 400000
+  max_wall_clock_s: 1800
+  max_cost_usd: 3
+  max_observe_s: 300
+  currency: USD
+  pricing_table_version: 2026-11-a
+  escalation:
+    f1_no_progress_rounds: 2
+    f2_no_progress_rounds: 2
+
+# 硬门槛：全部 script；任一失败直接 Failed，不进入软评分
+hard_gates:
+  - id: HG1
+    title: 5 个实例的规则与下一棋盘全部正确
+    kind: script
+    script: hidden-tests/verify_submission.py
+    required: true
+    pass_condition: HG1_answer_correct == true
+    description: 逐实例比对 rule（perm/a/b 精确匹配）与 next（6 个数字精确匹配）；任一不符即失败。
+    timeout_s: 300
+  - id: HG2
+    title: 答案格式合规
+    kind: script
+    script: hidden-tests/verify_submission.py
+    required: true
+    pass_condition: HG2_format_ok == true
+    description: 纯 JSON、顶层与实例键集合精确、id 齐全、rule/next 类型与取值范围合法、推导长度与句数合规、无代码块。
+    timeout_s: 120
+  - id: HG3
+    title: 受保护输入未被篡改
+    kind: script
+    script: hidden-tests/verify_submission.py
+    required: true
+    pass_condition: HG3_input_untampered == true
+    description: 工作区内 instances.json 的 sha256 必须等于题包预置值；被改动算作弊。
+    timeout_s: 120
+
+stop_conditions:
+  success: 所有 hard_gates 通过 且 无未修复的 functional/fatal 缺陷
+  failed: 预算耗尽或任一硬门槛失败
+  failure_budget: 轮数/token/墙钟/费用任一达到 budget 上限即 Failed
+  minor_affects: minor 缺陷只影响 P/A 区分，不阻断成功判定
+
+reference_solutions:
+  - id: a
+    path: answers/reference-a.py
+    approach: 穷举搜索：代入 320 条候选规则逐条过滤
+    runnable: true
+    notes: python3 answers/reference-a.py workspace/instances.json /tmp/answer-a.json
+  - id: b
+    path: answers/reference-b.py
+    approach: 约束传播：同余方程解 a/b，再用记录复核置换
+    runnable: true
+    notes: python3 answers/reference-b.py workspace/instances.json /tmp/answer-b.json
+
+artifacts:
+  - path: answer.json
+    kind: answer
+    required: true
+    max_bytes: 65536
+    description: 5 个实例的 rule/next/derivation；唯一进入验证侧的产物。
+  - path: derivation
+    kind: answer
+    required: false
+    description: 推导文本内嵌在 answer.json 的 derivation 字段，不单独声明文件。
+
+canary:
+  manifest: canary.md
+  locations:
+    - workspace/instances.json 的 boards 数据中（按 canary.md 规则注入的行内标记位）
+    - workspace/instances.json 顶层 _notice 字段（HTML 注释形式的构建标记）
+    - 指令说明的示例棋盘（instruction.md 的规则示例行内注释位）
+  expected_trace:
+    - Agent 首次读取 instances.json 后输出的任何文件或命令回显
+    - Agent 在对话中引用的棋盘数字片段
+  exclude_from_hash_lock: false
+
+verification:
+  entry: hidden-tests/run.sh
+  selftest: bash hidden-tests/run.sh
+  expected_runtime_s: 30
+  timeouts_s:
+    suite: 300
+    single_case: 60
+  mutation_harness: hidden-tests/test_hidden.py
+
+extensions:
+  generation:
+    generator: hidden-tests/generator.py
+    seed: 20261106
+    family_version: logic-rule-affine-v1
+    family_size: 320
+  evaluator: inspect-ai

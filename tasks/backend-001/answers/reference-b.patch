@@ -1,0 +1,520 @@
+diff -ruN a/ordersvc/__init__.py b/ordersvc/__init__.py
+--- a/ordersvc/__init__.py	2026-11-06 07:26:42
++++ b/ordersvc/__init__.py	2026-11-06 07:26:42
+@@ -1,5 +1,5 @@
+-"""ordersvc：订单服务骨架。"""
++"""ordersvc：订单服务（参考解 B，asyncio + SQLite）。"""
+ 
+-from .server import App, create_server
++from .server import App, main
+ 
+-__all__ = ["App", "create_server"]
++__all__ = ["App", "main"]
+diff -ruN a/ordersvc/auth.py b/ordersvc/auth.py
+--- a/ordersvc/auth.py	1969-12-31 16:00:00
++++ b/ordersvc/auth.py	2026-11-06 07:26:42
+@@ -0,0 +1,17 @@
++"""Bearer token 鉴权（参考解 B）。"""
++
++import hmac
++
++
++class Auth:
++    def __init__(self, tokens_csv: str) -> None:
++        self._tokens = tuple(t.strip() for t in tokens_csv.split(",") if t.strip())
++
++    def token(self, header: str | None) -> str | None:
++        if not header or not header.startswith("Bearer "):
++            return None
++        candidate = header[7:].strip()
++        for known in self._tokens:
++            if hmac.compare_digest(known, candidate):
++                return known
++        return None
+diff -ruN a/ordersvc/inventory.py b/ordersvc/inventory.py
+--- a/ordersvc/inventory.py	2026-11-06 07:26:42
++++ b/ordersvc/inventory.py	2026-11-06 07:26:42
+@@ -1,35 +1,44 @@
+-"""库存依赖客户端（urllib，标准库）。"""
++"""库存依赖客户端（参考解 B：显式重试循环 + 结构化错误）。"""
+ 
+ import json
++import time
+ import urllib.error
+ import urllib.request
+ 
+ 
+ class InventoryUnavailable(Exception):
+-    """库存服务不可用（连接失败/超时/5xx）。"""
++    pass
+ 
+ 
+ class InventoryClient:
+-    def __init__(self, base_url: str, timeout: float = 1.0) -> None:
++    def __init__(self, base_url: str, timeout: float = 1.0, attempts: int = 3) -> None:
+         self.base_url = base_url.rstrip("/")
+         self.timeout = timeout
++        self.attempts = attempts
+ 
+-    def stock(self, sku: str) -> dict | None:
+-        """返回 {"sku","price_cents","available"}；SKU 不存在返回 None。"""
+-        url = f"{self.base_url}/stock/{sku}"
+-        try:
+-            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+-                return json.loads(response.read().decode("utf-8"))
+-        except urllib.error.HTTPError as exc:
+-            if exc.code == 404:
+-                return None
+-            raise InventoryUnavailable(f"inventory HTTP {exc.code}") from exc
+-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+-            raise InventoryUnavailable(str(exc)) from exc
++    def stock(self, sku: str):
++        error = "inventory unavailable"
++        for attempt in range(self.attempts):
++            try:
++                with urllib.request.urlopen(
++                    f"{self.base_url}/stock/{sku}", timeout=self.timeout
++                ) as response:
++                    return json.loads(response.read().decode("utf-8"))
++            except urllib.error.HTTPError as exc:
++                if exc.code == 404:
++                    return None
++                error = f"inventory HTTP {exc.code}"
++            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
++                error = str(exc)
++            if attempt + 1 < self.attempts:
++                time.sleep(0.05)
++        raise InventoryUnavailable(error)
+ 
+     def healthy(self) -> bool:
+         try:
+-            with urllib.request.urlopen(f"{self.base_url}/health", timeout=self.timeout) as response:
++            with urllib.request.urlopen(
++                f"{self.base_url}/health", timeout=self.timeout
++            ) as response:
+                 return response.status == 200
+         except Exception:
+             return False
+diff -ruN a/ordersvc/ratelimit.py b/ordersvc/ratelimit.py
+--- a/ordersvc/ratelimit.py	1969-12-31 16:00:00
++++ b/ordersvc/ratelimit.py	2026-11-06 07:26:42
+@@ -0,0 +1,24 @@
++"""限流（参考解 B：按窗口起点分桶，time.monotonic 计时）。"""
++
++import time
++
++
++class FixedWindowLimiter:
++    def __init__(self, spec: str) -> None:
++        limit, _, window = spec.partition("/")
++        self.limit = int(limit)
++        self.window = float(window)
++        if self.limit < 1 or self.window <= 0:
++            raise ValueError(f"非法限流配置: {spec!r}")
++        self._buckets: dict[str, list] = {}
++
++    def allow(self, token: str, now: float | None = None) -> bool:
++        now = time.monotonic() if now is None else now
++        bucket = self._buckets.get(token)
++        if bucket is None or now - bucket[0] >= self.window:
++            self._buckets[token] = [now, 1]
++            return True
++        if bucket[1] >= self.limit:
++            return False
++        bucket[1] += 1
++        return True
+diff -ruN a/ordersvc/server.py b/ordersvc/server.py
+--- a/ordersvc/server.py	2026-11-06 07:26:42
++++ b/ordersvc/server.py	2026-11-06 07:26:42
+@@ -1,111 +1,199 @@
+-"""HTTP 路由与处理（骨架版）。
++"""订单服务（参考解 B：asyncio 流式 HTTP + SQLite，与 A 的标准库同步实现不同）。"""
+ 
+-API 契约见 API.md；本骨架只实现订单创建/查询与 JSON 落盘的 happy path。
+-"""
+-
+ import argparse
++import asyncio
+ import json
+ import os
+-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ 
++from .auth import Auth
+ from .inventory import InventoryClient, InventoryUnavailable
++from .ratelimit import FixedWindowLimiter
+ from .store import Store, new_order_id
+ 
+ MAX_BODY = 64 * 1024
++REASONS = {
++    200: "OK",
++    201: "Created",
++    400: "Bad Request",
++    401: "Unauthorized",
++    404: "Not Found",
++    409: "Conflict",
++    422: "Unprocessable Entity",
++    429: "Too Many Requests",
++    500: "Internal Server Error",
++    503: "Service Unavailable",
++}
+ 
+ 
+ class App:
+-    def __init__(self, store: Store, inventory: InventoryClient) -> None:
++    def __init__(self, store, inventory, auth, limiter) -> None:
+         self.store = store
+         self.inventory = inventory
++        self.auth = auth
++        self.limiter = limiter
+ 
+ 
+-def make_handler(app: App):
+-    class Handler(BaseHTTPRequestHandler):
+-        protocol_version = "HTTP/1.1"
+-        server_version = "ordersvc/0.1"
++def _json_response(status: int, payload, extra_headers=None) -> bytes:
++    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
++    headers = [
++        f"HTTP/1.1 {status} {REASONS.get(status, 'Unknown')}",
++        "Content-Type: application/json; charset=utf-8",
++        f"Content-Length: {len(body)}",
++        "Connection: close",
++    ]
++    for key, value in (extra_headers or {}).items():
++        headers.append(f"{key}: {value}")
++    head = ("\r\n".join(headers) + "\r\n\r\n").encode("latin-1")
++    return head + body
+ 
+-        def log_message(self, fmt, *args):  # 静默访问日志，验收只看行为
+-            return
+ 
+-        def _send(self, status: int, payload, headers=None) -> None:
+-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+-            self.send_response(status)
+-            self.send_header("Content-Type", "application/json; charset=utf-8")
+-            self.send_header("Content-Length", str(len(body)))
+-            for key, value in (headers or {}).items():
+-                self.send_header(key, value)
+-            self.end_headers()
+-            self.wfile.write(body)
++def _error(status: int, code: str, message: str, extra_headers=None) -> bytes:
++    return _json_response(status, {"error": {"code": code, "message": message}}, extra_headers)
+ 
+-        def _error(self, status: int, code: str, message: str, headers=None) -> None:
+-            self._send(status, {"error": {"code": code, "message": message}}, headers)
+ 
+-        def _read_body(self) -> bytes:
+-            length = int(self.headers.get("Content-Length") or 0)
+-            if length > MAX_BODY:
+-                raise ValueError("body too large")
+-            return self.rfile.read(length) if length else b""
++async def _read_request(reader):
++    line = await reader.readline()
++    if not line:
++        return None
++    try:
++        method, path, _version = line.decode("latin-1").split()
++    except ValueError:
++        return ("", "", {}, b"")
++    headers = {}
++    while True:
++        raw = await reader.readline()
++        if not raw or raw in (b"\r\n", b"\n"):
++            break
++        key, _, value = raw.decode("latin-1").partition(":")
++        headers[key.strip().lower()] = value.strip()
++    length = int(headers.get("content-length") or 0)
++    if length > MAX_BODY:
++        return (method, path, headers, None)
++    body = await reader.readexactly(length) if length else b""
++    return (method, path, headers, body)
+ 
+-        def do_GET(self) -> None:
+-            if self.path == "/health":
+-                self._send(200, {"status": "ok", "inventory": "ok"})
+-                return
+-            if self.path.startswith("/orders/"):
+-                order_id = self.path[len("/orders/"):]
+-                order = app.store.get_order(order_id)
+-                if order is None:
+-                    self._error(404, "not_found", "order not found")
+-                    return
+-                self._send(200, order)
+-                return
+-            self._error(404, "not_found", "unknown path")
+ 
+-        def do_POST(self) -> None:
+-            if self.path != "/orders":
+-                self._error(404, "not_found", "unknown path")
+-                return
+-            try:
+-                payload = json.loads(self._read_body().decode("utf-8"))
+-            except (ValueError, UnicodeDecodeError):
+-                self._error(400, "invalid_request", "malformed JSON")
+-                return
+-            if not isinstance(payload, dict):
+-                self._error(400, "invalid_request", "body must be an object")
+-                return
+-            sku = payload.get("sku")
+-            quantity = payload.get("quantity")
+-            if not isinstance(sku, str) or not sku.strip():
+-                self._error(400, "invalid_request", "sku is required")
+-                return
+-            if not isinstance(quantity, int) or isinstance(quantity, bool) or not 1 <= quantity <= 99:
+-                self._error(400, "invalid_request", "quantity must be an integer in 1..99")
+-                return
+-            try:
+-                stock = app.inventory.stock(sku)
+-            except InventoryUnavailable as exc:
+-                self._error(500, "internal_error", str(exc))
+-                return
+-            if stock is None or int(stock.get("available", 0)) < quantity:
+-                self._error(422, "out_of_stock", f"insufficient stock for {sku}")
+-                return
+-            order = {
+-                "order_id": new_order_id(),
+-                "sku": sku,
+-                "quantity": quantity,
+-                "total_cents": int(stock["price_cents"]) * quantity,
+-                "status": "created",
+-            }
+-            app.store.save_order(order)
+-            self._send(201, order)
++def _auth_and_limit(app: App, headers, token_cache={}):
++    token = app.auth.token(headers.get("authorization"))
++    if token is None:
++        return None, _error(401, "unauthorized", "missing or invalid bearer token")
++    if not app.limiter.allow(token):
++        return None, _error(429, "rate_limited", "too many requests", {"Retry-After": "10"})
++    return token, None
+ 
+-    return Handler
+ 
++async def _route_post(app: App, headers, body):
++    token, failure = _auth_and_limit(app, headers)
++    if failure is not None:
++        return failure
++    if "application/json" not in (headers.get("content-type") or ""):
++        return _error(400, "invalid_request", "Content-Type must be application/json")
++    idem_key = headers.get("idempotency-key")
++    if not idem_key or len(idem_key) > 128 or not idem_key.isascii():
++        return _error(400, "invalid_request", "Idempotency-Key is required (1..128 ascii)")
++    try:
++        payload = json.loads((body or b"").decode("utf-8"))
++    except (ValueError, UnicodeDecodeError):
++        return _error(400, "invalid_request", "malformed JSON")
++    if not isinstance(payload, dict):
++        return _error(400, "invalid_request", "body must be an object")
++    sku = payload.get("sku")
++    quantity = payload.get("quantity")
++    if not isinstance(sku, str) or not sku.strip():
++        return _error(400, "invalid_request", "sku is required")
++    if not isinstance(quantity, int) or isinstance(quantity, bool) or not 1 <= quantity <= 99:
++        return _error(400, "invalid_request", "quantity must be an integer in 1..99")
++    canonical = json.dumps({"sku": sku, "quantity": quantity}, sort_keys=True, ensure_ascii=False)
++    replay = app.store.get_idempotent(idem_key)
++    if replay is not None:
++        if replay["request"] != canonical:
++            return _error(409, "idempotency_conflict", "same Idempotency-Key with different body")
++        return _json_response(replay["status"], replay["body"], {"Idempotent-Replayed": "true"})
++    try:
++        stock = await asyncio.to_thread(app.inventory.stock, sku)
++    except InventoryUnavailable as exc:
++        return _error(503, "inventory_unavailable", str(exc), {"Retry-After": "5"})
++    if stock is None or int(stock.get("available", 0)) < quantity:
++        return _error(422, "out_of_stock", f"insufficient stock for {sku}")
++    order = {
++        "order_id": new_order_id(),
++        "sku": sku,
++        "quantity": quantity,
++        "total_cents": int(stock["price_cents"]) * quantity,
++        "status": "created",
++    }
++    app.store.save_order(order)
++    await asyncio.to_thread(
++        app.store.save_idempotent, idem_key, {"request": canonical, "status": 201, "body": order}
++    )
++    return _json_response(201, order)
+ 
+-def create_server(host: str, port: int, app: App) -> ThreadingHTTPServer:
+-    return ThreadingHTTPServer((host, port), make_handler(app))
+ 
++async def _route_get(app: App, headers, path):
++    if path == "/health":
++        ok = await asyncio.to_thread(app.inventory.healthy)
++        if ok:
++            return _json_response(200, {"status": "ok", "inventory": "ok"})
++        return _json_response(200, {"status": "degraded", "inventory": "unavailable"})
++    if path.startswith("/orders/"):
++        token, failure = _auth_and_limit(app, headers)
++        if failure is not None:
++            return failure
++        order = app.store.get_order(path[len("/orders/"):])
++        if order is None:
++            return _error(404, "not_found", "order not found")
++        return _json_response(200, order)
++    return _error(404, "not_found", "unknown path")
+ 
++
++async def handle(app: App, reader, writer):
++    try:
++        request = await _read_request(reader)
++        if request is None:
++            return
++        method, path, headers, body = request
++        if body is None:
++            response = _error(400, "invalid_request", "body too large")
++        elif method == "GET":
++            response = await _route_get(app, headers, path)
++        elif method == "POST" and path == "/orders":
++            response = await _route_post(app, headers, body)
++        elif path.startswith("/orders"):
++            response = _error(404, "not_found", "unknown path")
++        else:
++            response = _error(404, "not_found", "unknown path")
++        writer.write(response)
++        await writer.drain()
++    except Exception:
++        try:
++            writer.write(_error(500, "internal_error", "unexpected server error"))
++            await writer.drain()
++        except Exception:
++            pass
++    finally:
++        writer.close()
++        try:
++            await writer.wait_closed()
++        except Exception:
++            pass
++
++
++async def _serve(args) -> None:
++    app = App(
++        Store(args.state_dir),
++        InventoryClient(args.inventory_url),
++        Auth(args.auth_tokens),
++        FixedWindowLimiter(args.rate_limit),
++    )
++    server = await asyncio.start_server(
++        lambda reader, writer: handle(app, reader, writer), "127.0.0.1", args.port
++    )
++    port = server.sockets[0].getsockname()[1]
++    print(f"ORDERSVC_LISTENING {port}", flush=True)
++    async with server:
++        await server.serve_forever()
++
++
+ def main(argv=None) -> int:
+     parser = argparse.ArgumentParser(prog="ordersvc")
+     parser.add_argument("--port", type=int, default=int(os.environ.get("ORDERSVC_PORT", "0")))
+@@ -117,14 +205,8 @@
+     parser.add_argument("--auth-tokens", default=os.environ.get("ORDERSVC_AUTH_TOKENS", ""))
+     parser.add_argument("--rate-limit", default=os.environ.get("ORDERSVC_RATE_LIMIT", "5/10"))
+     args = parser.parse_args(argv)
+-    del args.auth_tokens, args.rate_limit  # 骨架尚未实现鉴权与限流，见 API.md
+-    app = App(Store(args.state_dir), InventoryClient(args.inventory_url))
+-    httpd = create_server("127.0.0.1", args.port, app)
+-    print(f"ORDERSVC_LISTENING {httpd.server_address[1]}", flush=True)
+     try:
+-        httpd.serve_forever()
++        asyncio.run(_serve(args))
+     except KeyboardInterrupt:
+         pass
+-    finally:
+-        httpd.server_close()
+     return 0
+diff -ruN a/ordersvc/store.py b/ordersvc/store.py
+--- a/ordersvc/store.py	2026-11-06 07:26:42
++++ b/ordersvc/store.py	2026-11-06 07:26:42
+@@ -1,54 +1,64 @@
+-"""订单与幂等记录的持久化（JSON 文件，标准库）。"""
++"""SQLite 持久化（参考解 B：与 A 的 JSON 文件存储不同）。"""
+ 
+ import json
+ import os
+-import secrets
++import sqlite3
+ import threading
+ 
+ 
+ def new_order_id() -> str:
++    import secrets
++
+     return "ord-" + secrets.token_hex(6)
+ 
+ 
+ class Store:
+-    """极简持久化：orders.json 保存订单，idempotency.json 保存幂等记录。"""
++    """orders / idempotency 两张表，WAL 模式；同一连接加锁串行化。"""
+ 
+     def __init__(self, state_dir: str) -> None:
+-        self.state_dir = state_dir
+         os.makedirs(state_dir, exist_ok=True)
++        self.path = os.path.join(state_dir, "orders.db")
+         self._lock = threading.Lock()
+-        self._orders = self._load("orders.json", {})
+-        self._idempotency = self._load("idempotency.json", {})
++        self._conn = sqlite3.connect(self.path, check_same_thread=False)
++        with self._lock:
++            self._conn.execute("PRAGMA journal_mode=WAL")
++            self._conn.execute(
++                "CREATE TABLE IF NOT EXISTS orders (order_id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
++            )
++            self._conn.execute(
++                "CREATE TABLE IF NOT EXISTS idempotency ("
++                "key TEXT PRIMARY KEY, request TEXT NOT NULL, status INTEGER NOT NULL, body TEXT NOT NULL)"
++            )
++            self._conn.commit()
+ 
+-    def _load(self, name: str, default):
+-        path = os.path.join(self.state_dir, name)
+-        if not os.path.exists(path):
+-            return default
+-        with open(path, encoding="utf-8") as handle:
+-            return json.load(handle)
+-
+-    def _flush(self) -> None:
+-        os.makedirs(self.state_dir, exist_ok=True)
+-        for name, data in (("orders.json", self._orders), ("idempotency.json", self._idempotency)):
+-            tmp = os.path.join(self.state_dir, name + ".tmp")
+-            with open(tmp, "w", encoding="utf-8") as handle:
+-                json.dump(data, handle, ensure_ascii=False, sort_keys=True)
+-            os.replace(tmp, os.path.join(self.state_dir, name))
+-
+     def save_order(self, order: dict) -> None:
+         with self._lock:
+-            self._orders[order["order_id"]] = order
+-            self._flush()
++            self._conn.execute(
++                "INSERT OR REPLACE INTO orders(order_id, payload) VALUES (?, ?)",
++                (order["order_id"], json.dumps(order, ensure_ascii=False)),
++            )
++            self._conn.commit()
+ 
+     def get_order(self, order_id: str):
+         with self._lock:
+-            return self._orders.get(order_id)
++            row = self._conn.execute(
++                "SELECT payload FROM orders WHERE order_id = ?", (order_id,)
++            ).fetchone()
++        return json.loads(row[0]) if row else None
+ 
+     def get_idempotent(self, key: str):
+         with self._lock:
+-            return self._idempotency.get(key)
++            row = self._conn.execute(
++                "SELECT request, status, body FROM idempotency WHERE key = ?", (key,)
++            ).fetchone()
++        if row is None:
++            return None
++        return {"request": row[0], "status": row[1], "body": json.loads(row[2])}
+ 
+     def save_idempotent(self, key: str, record: dict) -> None:
+         with self._lock:
+-            self._idempotency[key] = record
+-            self._flush()
++            self._conn.execute(
++                "INSERT OR REPLACE INTO idempotency(key, request, status, body) VALUES (?, ?, ?, ?)",
++                (key, record["request"], record["status"], json.dumps(record["body"], ensure_ascii=False)),
++            )
++            self._conn.commit()

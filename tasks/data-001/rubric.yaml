@@ -1,0 +1,168 @@
+# data-001 原子化二元 rubric（字段对齐 schemas/rubric.schema.json 1.0）
+schema_version: "1.0"
+task_id: data-001
+rubric_version: 1.0.0
+title: data-001 脏日志清洗：报告正确性、抗硬编码与可维护性
+
+items:
+  - id: R1
+    kind: script
+    severity: fatal
+    description: 样例日志上的报告与期望完全一致（计数精确、误差在容差内）
+    pass_criteria: 脚本在样例上运行成功；计数类字段相等；error_rate 差 ≤0.0001；p95 差 ≤1.0ms
+    applies_to: [api_response, answer_text]
+    evidence_required: [command_output, file_path]
+    f1_symptom: 你脚本跑出来的样例报告跟我给的正确报告对不上。
+    f2_evidence: "比对输出：total_valid 期望 39、实际 30；malformed_by_reason.bad_format 期望 1、实际 12。"
+    notes: "检测来源：script；check_ids：verify_submission.HG1"
+    tags: [correctness, sample]
+
+  - id: R2
+    kind: script
+    severity: fatal
+    description: 隐藏日志上的报告与 oracle 一致（证明按规则清洗而非硬编码）
+    pass_criteria: 脚本在验证侧隐藏日志上运行成功；报告与 oracle 的差异全部在容差内
+    applies_to: [api_response, answer_text]
+    evidence_required: [command_output, file_path]
+    f1_symptom: 换一批同样口径的日志，报告就跑不对了。
+    f2_evidence: "隐藏日志运行输出：total_valid 期望 366、实际 366；top_paths 第 2 名路径次数不一致。"
+    notes: "检测来源：script；check_ids：verify_submission.HG2"
+    tags: [correctness, anti_hardcode]
+
+  - id: R3
+    kind: script
+    severity: functional
+    description: 报告结构与键集合符合题面
+    pass_criteria: 纯 JSON；顶层键集合等于题面 7 个键；malformed_by_reason 恰好 5 个键
+    applies_to: [answer_text]
+    evidence_required: [file_path]
+    f1_symptom: 报告读出来结构就不对，少键或多键。
+    f2_evidence: "结构校验输出：顶层出现未允许键 notes；malformed_by_reason 只有 4 个键。"
+    notes: "检测来源：script；check_ids：checker.TOP_LEVEL_KEYS, checker.MALFORMED_REASONS_KEYS"
+    tags: [format, schema]
+
+  - id: R4
+    kind: script
+    severity: functional
+    description: 字段类型正确（计数为整数、比率为数值）
+    pass_criteria: total_valid/malformed/unique_clients 为非负整数；error_rate/p95_duration_ms 为数值；top_paths 元素恰好 path/count 两键
+    applies_to: [answer_text]
+    evidence_required: [file_path]
+    f1_symptom: 报告里有的数字是带引号的，看着像文本。
+    f2_evidence: "类型校验输出：total_valid 为字符串类型。"
+    notes: "检测来源：script；check_ids：checker.COUNT_TYPE, checker.NUMBER_TYPE, checker.TOP_PATHS_SHAPE"
+    tags: [format]
+
+  - id: R5
+    kind: script
+    severity: functional
+    description: top_paths 按次数降序、同次数路径升序
+    pass_criteria: top_paths 恰好 5 条（路径数不足时全列）；排序键为 (-count, path)
+    applies_to: [answer_text]
+    evidence_required: [file_path]
+    f1_symptom: 路径排行榜顺序不对，次数一样的排得乱。
+    f2_evidence: "排序校验输出：top_paths 未按 (-count, path) 排序。"
+    notes: "检测来源：script；check_ids：checker.TOP_PATHS_NOT_SORTED"
+    tags: [format, aggregation]
+
+  - id: R6
+    kind: llm_judge
+    severity: functional
+    description: p95 使用题面规定的 nearest-rank 法
+    judge_question: 脚本源码是否按 nearest-rank 计算 p95（升序第 ceil(0.95×N) 个）？
+    pass_criteria: 代码中出现升序排序与基于 ceil(0.95*n) 的下标取值，未使用插值或统计库的其他分位定义
+    fail_examples:
+      - 使用 numpy 默认 linear 插值分位
+      - 取 floor 或直接取 0.95*n 位置
+    applies_to: [source]
+    evidence_required: [file_path, diff_hunk]
+    f1_symptom: 你算的 p95 跟我按题面口径算的差得有点多。
+    tags: [statistics, p95]
+
+  - id: R7
+    kind: llm_judge
+    severity: functional
+    description: 代码按规则分类脏行且判定顺序与题面一致
+    judge_question: 脚本是否按题面顺序判定五类脏行（格式、时间、状态码、耗时、重复请求号）？
+    pass_criteria: 分类逻辑存在明确优先级；重复 rid 只在其余检查通过后判定
+    fail_examples:
+      - 把所有解析失败行都记成 bad_format
+      - 先判重复 rid 再判时间
+    applies_to: [source]
+    evidence_required: [file_path, diff_hunk]
+    f1_symptom: 脏行的分类结果跟题面列的规则不一致。
+    tags: [parsing, classification]
+
+  - id: R8
+    kind: llm_judge
+    severity: minor
+    description: 代码可维护（函数拆分、错误处理、无死代码）
+    judge_question: 脚本是否把解析与聚合拆成可读的函数并处理了坏行？
+    pass_criteria: 至少拆分解析与聚合两层；坏行不会导致脚本崩溃；无注释掉的死代码
+    fail_examples:
+      - 所有逻辑堆在一个 main 里且用裸 except 吞异常
+    applies_to: [source]
+    evidence_required: [diff_hunk]
+    f1_symptom: 脚本读起来费劲，坏行还可能把整个跑崩。
+    tags: [maintainability]
+
+  - id: R9
+    kind: script
+    severity: fatal
+    description: 受保护输入文件未被修改
+    pass_criteria: 样例日志与样例报告的 sha256 等于题包预置值
+    applies_to: [answer_text, doc]
+    evidence_required: [file_path]
+    f1_symptom: 你动过样例日志吗？我这边对不上原始文件了。
+    f2_evidence: "哈希输出：样例日志哈希与预置不一致。"
+    notes: "检测来源：script；check_ids：verify_submission.HG3"
+    tags: [anti_cheat, integrity]
+
+  - id: R10
+    kind: script
+    severity: functional
+    description: 脚本按固定 CLI 契约运行
+    pass_criteria: python3 clean_logs.py <input.log> <output.json> 退出码 0；不做交互式输入；不依赖网络
+    applies_to: [source, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 我按约定方式跑你的脚本跑不起来。
+    f2_evidence: "运行输出：脚本要求额外参数 / 报错退出码 1。"
+    notes: "检测来源：script；check_ids：verify_submission.HG1"
+    tags: [cli, contract]
+
+  - id: R11
+    kind: llm_judge
+    severity: minor
+    description: 未把样例统计值硬编码进脚本
+    judge_question: 脚本是否没有把样例日志的统计数字直接写死在代码里？
+    pass_criteria: 源码中不存在与 expected_sample.json 数字一一对应的常量或分支
+    fail_examples:
+      - 直接 return 样例报告常量
+      - 按输入行数分支返回样例数字
+    applies_to: [source]
+    evidence_required: [diff_hunk, file_path]
+    f1_symptom: 脚本换了日志还是输出样例那份结果。
+    tags: [anti_hardcode]
+
+  - id: R12
+    kind: script
+    severity: minor
+    description: error_rate 与 p95 的数值精度符合题面
+    pass_criteria: error_rate 保留 4 位小数；p95_duration_ms 保留 1 位小数（容差内）
+    applies_to: [answer_text]
+    evidence_required: [file_path]
+    f1_symptom: 比例和 p95 的小数位跟样例格式不一样。
+    f2_evidence: "比对输出：error_rate=0.4615384615，与期望 0.4615 在容差内但格式不统一。"
+    notes: "检测来源：script；check_ids：checker.score"
+    tags: [format]
+
+extensions:
+  stopping_rule:
+    success: 所有 hard_gates 通过 且 无未修复的 functional/fatal 缺陷
+    blocking_severities: [functional, fatal]
+    minor_affects: P/A
+    max_open_blocking: 0
+  feedback_capacity:
+    max_feedback_rounds: 3
+    note: blocking 条目 10 条；预算不足时先报 R1/R2 硬门槛类。
+  author: tasks-a

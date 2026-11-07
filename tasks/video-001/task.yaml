@@ -1,0 +1,141 @@
+# video-001 题目元数据（对齐 schemas/task.schema.json v1.0）
+id: video-001
+version: 1.0.0
+track: video
+layer: platform
+title: 30 秒片头动画导出 MP4
+platform: linux-container
+difficulty: 3
+difficulty_calibration:
+  status: pending
+  target_tier_range: [A, B]
+  models_tried: []
+  notes: 新题未用前代模型标定；可运行验证与参考解实测已记录在 notes.md。
+status: active
+author: tasks-b
+created: "2026-11-06"
+updated: "2026-11-06"
+language: [python]
+tags: [video, ffmpeg, animation, code-generation]
+
+instruction: instruction.md
+persona: persona.md
+rubric_ref: rubric.yaml
+defects_ref: defects.yaml
+
+workspace:
+  mount: /workspace
+  starter: starter/
+  entry_files: [README.md, intro.py, tests/]
+  protected_paths: [tests/]
+
+resources:
+  image: python:3.12-slim
+  image_digest: TODO(pin-on-host)
+  cpu: 4
+  memory_mb: 4096
+  disk_mb: 4096
+  os: linux
+  network: false
+  docs_whitelist: []
+  tools: [bash, read, write, edit]
+  services: []
+  notes: 镜像需预装 ffmpeg/ffprobe（版本固定并记录）；渲染 900 帧 1080p 约 1-2 分钟。
+
+budget:
+  max_rounds: 6
+  max_feedback_rounds: 3
+  max_nudges: 2
+  max_total_tokens: 2000000
+  max_wall_clock_s: 5400
+  max_cost_usd: 15
+  max_observe_s: 900
+  escalation:
+    f1_no_progress_rounds: 2
+    f2_no_progress_rounds: 2
+
+hard_gates:
+  - id: HG1
+    title: 导出文件通过 ffprobe 全部硬指标
+    kind: script
+    script: hidden-tests/run.sh
+    required: true
+    pass_condition: exit_code == 0
+    description: mp4 容器、h264、yuv420p、1920x1080、30/1 fps、30.0±0.1s、900 帧、无音频流。
+    timeout_s: 600
+  - id: HG2
+    title: 测试文件哈希未变
+    kind: script
+    script: hidden-tests/check_locks.py
+    required: true
+    pass_condition: exit_code == 0
+    description: tests/ 下文件 sha256 与 locks.sha256 一致。
+    timeout_s: 60
+  - id: HG3
+    title: 抽帧结构检查通过
+    kind: script
+    script: command:bash hidden-tests/run.sh --frames-only
+    required: true
+    pass_condition: exit_code == 0
+    description: 6 个时间点抽帧满足深色背景、主色贯穿、节拍推进与结束卡要求；渲染确定性。
+    timeout_s: 300
+
+stop_conditions:
+  success: 所有 hard_gates 通过，且无未修复的 functional/fatal 缺陷。
+  failed: 预算耗尽或任一 hard_gate 失败（预算耗尽标注 budget_exhausted）。
+  failure_budget: 轮数/token/墙钟/费用任一触顶即停止并判 Failed(budget_exhausted)。
+  minor_affects: minor 缺陷（R8/R9）只影响 P/A 区分。
+
+reference_solutions:
+  - id: a
+    path: answers/reference-a.patch
+    approach: 修正导出参数 + 左对齐五段式时间轴（logo/标题/特性卡/色带/结束卡）
+    runnable: true
+    notes: 应用后单帧渲染与 --frames-only 检查均通过。
+  - id: b
+    path: answers/reference-b.patch
+    approach: 居中构图 + 六段节奏（mark/title/grid/wave/quote/end），不同排版与配色
+    runnable: true
+    notes: 同上；两份参考解画面布局与节奏不同但硬门槛一致。
+
+references:
+  a: answers/reference-a.patch
+  b: answers/reference-b.patch
+  empty_agent: answers/empty-agent.md
+  patch_apply: patch -p1
+
+artifacts:
+  - path: intro.mp4
+    kind: video
+    required: true
+    max_bytes: 209715200
+    description: 30 秒 1080p H.264 片头 MP4。
+
+isolation:
+  agent_user: agent
+  environment_mode: separate
+  network_mode: no-network
+  notes: Agent 以非 root 用户 agent 运行；Agent 环境与验证环境分离；默认完全断网。
+
+canary:
+  manifest: canary.md
+  locations:
+    - starter/README.md 末尾 HTML 注释行
+    - starter/intro.py 模块 docstring 第 2 行
+    - starter/NOTICE.txt 构建标记行
+  expected_trace:
+    - agent.step 读取 README.md 的工具输出
+    - 产物快照中 starter/README.md 的内容
+    - agent 修改 intro.py 时的 diff 上下文
+  exclude_from_hash_lock: true
+
+verification:
+  entry: hidden-tests/run.sh
+  selftest: bash hidden-tests/run.sh --selftest
+  expected_runtime_s: 240
+  timeouts_s:
+    suite: 600
+    single_case: 120
+
+extensions:
+  schema_note: 隔离声明按 task.schema v1.0 写在顶层 isolation；本包不依赖评测框架默认值。

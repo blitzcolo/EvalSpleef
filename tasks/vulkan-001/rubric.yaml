@@ -1,0 +1,144 @@
+# vulkan-001 rubric（对齐 schemas/rubric.schema.json v1.0）
+# 硬门槛（HG1-HG4）由脚本给出；以下条目覆盖硬门槛之外的软性验收。
+schema_version: "1.0"
+task_id: vulkan-001
+rubric_version: 1.0.0
+title: Vulkan 从零管线绘制带阴影场景
+items:
+  - id: R1
+    kind: script
+    severity: fatal
+    description: 工程能在 GPU 节点上完成构建。
+    pass_criteria: cmake -S . -B build 配置成功，cmake --build build -j 退出码 0，产出可执行文件。
+    applies_to: [stdout, log]
+    evidence_required: [command_output]
+    f1_symptom: 我这边根本编译不出来，一个能跑的程序都没有。
+    f2_evidence: 构建输出最后几行是编译器错误，随后构建中断。
+    hidden: true
+    tags: [build]
+    author: research
+
+  - id: R2
+    kind: script
+    severity: fatal
+    description: 开启验证层运行 120 帧，验证层零 error。
+    pass_criteria: ./build/vulkan_shadow --frames 120 退出码 0，且 stderr 中无 VUID 错误（[vk] 前缀仅允许 warning）。
+    applies_to: [log, stdout]
+    evidence_required: [log_excerpt]
+    f1_symptom: 程序跑起来窗口闪一下就没了。
+    f2_evidence: 运行日志里出现验证层 error，随后进程退出。
+    hidden: true
+    tags: [validation, runtime]
+    author: research
+
+  - id: R3
+    kind: script
+    severity: fatal
+    description: 运行结束产出合规截图文件。
+    pass_criteria: out/scene.ppm 存在，P6 格式，宽 800 高 600，maxval 255。
+    applies_to: [stdout]
+    evidence_required: [command_output]
+    f1_symptom: 跑完了但没给我图，我没法判断效果。
+    hidden: true
+    tags: [screenshot]
+    author: research
+
+  - id: R4
+    kind: script
+    severity: functional
+    description: 阴影贴图被真实创建并采样。
+    pass_criteria: 静态检查通过：main.cpp 创建带 DEPTH_STENCIL_ATTACHMENT|SAMPLED 的深度图、创建比较采样器，scene.frag 用阴影采样器做 PCF。
+    applies_to: [source]
+    evidence_required: [file_path]
+    f1_symptom: 地上没有影子，方块像飘在空中。
+    hidden: true
+    tags: [shadow_map, wiring]
+    author: research
+
+  - id: R5
+    kind: script
+    severity: functional
+    description: CPU 侧阴影数学实现正确。
+    pass_criteria: bash hidden-tests/run.sh 的 CPU 数值段 22 项断言全部通过。
+    applies_to: [source, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 影子位置和光的方向对不上，光从上面照影子却在左边。
+    hidden: true
+    tags: [shadow_math, correctness]
+    author: research
+
+  - id: R6
+    kind: script
+    severity: fatal
+    description: 阴影数学契约文件未被修改。
+    pass_criteria: python3 hidden-tests/static_checks.py --locks-only 退出码 0。
+    applies_to: [source]
+    evidence_required: [command_output]
+    f1_symptom: 我要求别动的那份接口说明好像被改了。
+    hidden: true
+    tags: [integrity, cheat_guard]
+    author: research
+
+  - id: R7
+    kind: script
+    severity: functional
+    description: 截图与参考图相似度达标。
+    pass_criteria: image_metrics.py 判定通过：mean_abs_diff ≤ 12 且 match_ratio ≥ 0.92。
+    applies_to: [screenshot]
+    evidence_required: [screenshot, command_output]
+    f1_symptom: 出来的画面跟样子差挺多，颜色和构图都不太对。
+    hidden: true
+    tags: [visual_similarity]
+    author: research
+
+  - id: R8
+    kind: llm_judge
+    severity: minor
+    description: 阴影方向与光源方向一致。
+    judge_question: 截图里的阴影是否落在方块背光方向的地面上？
+    pass_criteria: 参考图中光来自左上，阴影应位于方块右下方；若阴影在左上方或缺失则 fail。
+    applies_to: [screenshot]
+    evidence_required: [screenshot]
+    f1_symptom: 影子位置不对，光从左上打过来，影子却跑到左边去了。
+    f3_visual: 方块右下方地面没有暗区，左上侧地面反而有一块深色，位置在屏幕左侧中部。
+    tags: [shadow_direction]
+    author: research
+
+  - id: R9
+    kind: llm_judge
+    severity: minor
+    description: 阴影边缘有软化，不是锯齿硬边。
+    judge_question: 阴影边缘是否呈现为连续的明暗过渡？
+    pass_criteria: 阴影边界可见 1-3 级灰度过渡，无整像素锯齿；完全硬边或过度模糊（超过 10% 画面）均 fail。
+    applies_to: [screenshot]
+    evidence_required: [screenshot]
+    f1_symptom: 影子边缘像刀切的一样，一格一格的。
+    f3_visual: 阴影边界处出现明显的方块状锯齿，缺少过渡灰阶。
+    tags: [pcf, softness]
+    author: research
+
+  - id: R10
+    kind: llm_judge
+    severity: minor
+    description: 场景基本构图符合题面。
+    judge_question: 画面中是否有一块地面和一个青色调的方块？
+    pass_criteria: 画面下半部为深灰地面，中部有一个青/蓝绿色调的立方体，背景为深色。
+    applies_to: [screenshot]
+    evidence_required: [screenshot]
+    f1_symptom: 画面里看不出有地面和方块，跟我要的场景不一样。
+    f3_visual: 画面大部分为单色，没有可辨识的地面边界与方块轮廓。
+    tags: [scene]
+    author: research
+
+  - id: R11
+    kind: llm_judge
+    severity: minor
+    description: 画面无明显渲染伪影。
+    judge_question: 画面中是否没有大面积条纹状伪影？
+    pass_criteria: 地面与方块表面无交替明暗条纹、无大面积三角形撕裂、无闪烁噪点（截图单帧）。
+    applies_to: [screenshot]
+    evidence_required: [screenshot]
+    f1_symptom: 地面上一道道的，像条纹一样。
+    f3_visual: 地面出现等高线状明暗条纹，覆盖超过 20% 地面区域。
+    tags: [artifacts]
+    author: research

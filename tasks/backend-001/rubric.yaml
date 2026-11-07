@@ -1,0 +1,186 @@
+# backend-001 rubric（对齐 schemas/rubric.schema.json v1.0）
+schema_version: "1.0"
+task_id: backend-001
+rubric_version: 1.0.0
+title: 带鉴权/限流/幂等的订单服务
+items:
+  - id: R1
+    kind: script
+    severity: functional
+    description: 缺少或非法 Bearer token 时返回 401 unauthorized。
+    pass_criteria: hidden-tests/tests/test_api.py 的 TestAuth 三条全过（POST/GET 缺 token、未知 token 均为 401，error.code=unauthorized）。
+    applies_to: [api_response, log]
+    evidence_required: [command_output]
+    f1_symptom: 客户端不带 token 也能下单成功，这不对吧？
+    f2_evidence: '响应原文：HTTP/1.1 201 Created（请求未带 Authorization）；期望 401 {"error":{"code":"unauthorized"}}。'
+    hidden: true
+    tags: [auth, security]
+    author: tasks-b
+    notes: starter 完全没有鉴权分支。
+
+  - id: R2
+    kind: script
+    severity: functional
+    description: 合法请求创建订单并返回契约字段与金额。
+    pass_criteria: TestCreateOrder::test_create_order_success 通过：201、order_id 匹配 ^ord-[0-9a-f]{12}$、total_cents = price_cents×quantity。
+    applies_to: [api_response]
+    evidence_required: [command_output]
+    f1_symptom: 下单接口返回的金额和库存价对不上。
+    f2_evidence: '请求 {"sku":"A-1","quantity":2}，响应 total_cents 不是 1000。'
+    hidden: true
+    tags: [order]
+    author: tasks-b
+    notes: 回归保护项，starter 本已正确。
+
+  - id: R3
+    kind: script
+    severity: functional
+    description: 请求体/幂等键不合法时返回 400 invalid_request。
+    pass_criteria: TestCreateOrder 的 invalid_body / malformed_json / missing_idempotency_key 三条通过，均 HTTP 400 且 error.code=invalid_request。
+    applies_to: [api_response]
+    evidence_required: [command_output]
+    f1_symptom: 参数写错时服务不报错，行为很奇怪。
+    f2_evidence: '空 sku、quantity=0、缺 Idempotency-Key 均返回非 400。'
+    hidden: true
+    tags: [validation, error_state]
+    author: tasks-b
+    notes: starter 缺 Idempotency-Key 校验。
+
+  - id: R4
+    kind: script
+    severity: functional
+    description: 同一 Idempotency-Key 相同请求体返回首次结果并带重放头。
+    pass_criteria: TestIdempotency 的 replay_same_body / replay_does_not_create_second_order 通过：两次响应体相同、第二次带 Idempotent-Replayed true、只生成一个订单。
+    applies_to: [api_response, log]
+    evidence_required: [command_output]
+    f1_symptom: 重试机制下同一个 Idempotency-Key 发两次，生成了两个订单。
+    f2_evidence: '两笔响应 order_id 不同；期望第二次重放首次响应并带 Idempotent-Replayed: true。'
+    hidden: true
+    tags: [idempotency]
+    author: tasks-b
+    notes: 对应缺陷 D3。
+
+  - id: R5
+    kind: script
+    severity: functional
+    description: 同 key 不同请求体返回 409 idempotency_conflict。
+    pass_criteria: TestIdempotency::test_same_key_different_body_conflicts 通过：HTTP 409，error.code=idempotency_conflict。
+    applies_to: [api_response]
+    evidence_required: [command_output]
+    f1_symptom: 同一个 key 换了 body 重发，服务没报冲突，直接又下了一单。
+    f2_evidence: '同 key 先用 quantity=1 再用 quantity=2，第二次返回 201 而非 409。'
+    hidden: true
+    tags: [idempotency, error_state]
+    author: tasks-b
+    notes: 对应缺陷 D4。
+
+  - id: R6
+    kind: script
+    severity: functional
+    description: 库存不足或 SKU 不存在时返回 422 out_of_stock。
+    pass_criteria: TestCreateOrder 的 out_of_stock / unknown_sku 两条通过：HTTP 422，error.code=out_of_stock。
+    applies_to: [api_response]
+    evidence_required: [command_output]
+    f1_symptom: 库存是 0 的 SKU 也能下单成功。
+    f2_evidence: 'B-1 库存 0，下单 quantity=1 返回 201；期望 422 out_of_stock。'
+    hidden: true
+    tags: [stock, error_state]
+    author: tasks-b
+    notes: 回归保护项。
+
+  - id: R7
+    kind: script
+    severity: functional
+    description: 每 token 固定窗口限流，超限 429 并带 Retry-After 10。
+    pass_criteria: TestRateLimit 两条通过：同一 token 第 6 个请求 429 且 Retry-After=10；其他 token 不受影响。
+    applies_to: [api_response, log]
+    evidence_required: [command_output]
+    f1_symptom: 压测时同一个 token 一直打，服务完全没限流。
+    f2_evidence: 'limit=5/10 配置下连续 6 个请求全部 201，无 429。'
+    hidden: true
+    tags: [rate_limit]
+    author: tasks-b
+    notes: 对应缺陷 D2。
+
+  - id: R8
+    kind: script
+    severity: functional
+    description: 订单与幂等记录重启后仍可读、仍幂等。
+    pass_criteria: TestPersistence 通过：重启后 GET 原订单 200 且内容一致；同 key 重放返回原 order_id 与重放头。
+    applies_to: [api_response, log]
+    evidence_required: [command_output]
+    f1_symptom: 服务重启后，之前下的单查不到了。
+    f2_evidence: '重启前创建的 order_id 在重启后 GET 返回 404。'
+    hidden: true
+    tags: [persistence]
+    author: tasks-b
+    notes: 幂等记录 starter 未落盘。
+
+  - id: R9
+    kind: script
+    severity: functional
+    description: 库存依赖不可用时降级：health 标记 degraded、下单 503 并带 Retry-After；恢复后自动恢复。
+    pass_criteria: TestFaultInjection 通过：停依赖后 POST 503 inventory_unavailable + Retry-After=5、health degraded；依赖恢复重启服务后 health ok 且可正常下单。
+    applies_to: [api_response, log]
+    evidence_required: [command_output]
+    f1_symptom: 库存服务挂掉之后，health 还显示 ok，下单接口直接 500。
+    f2_evidence: '依赖停掉后下单返回 500 {"error":{"code":"internal_error"}}；期望 503 inventory_unavailable + Retry-After: 5。'
+    f3_assist: 我可以帮你停掉/重新启动库存桩（原因：故障注入需要外部进程控制），你告诉我什么时候执行。
+    hidden: true
+    tags: [resilience, degradation]
+    author: tasks-b
+    notes: 对应缺陷 D5/D6；health 必须真实探测依赖。
+
+  - id: R10
+    kind: script
+    severity: minor
+    description: 查询不存在订单返回 404 not_found，查询已有订单返回创建时对象。
+    pass_criteria: TestReadOrder 两条通过：GET 已存在订单 200 且与创建响应一致；未知 ID 404 且 error.code=not_found。
+    applies_to: [api_response]
+    evidence_required: [command_output]
+    f1_symptom: 查一个不存在的订单号，服务返回的东西不像正常错误。
+    hidden: true
+    tags: [order, error_state]
+    author: tasks-b
+    notes: 回归保护项。
+
+  - id: R11
+    kind: agent_judge
+    severity: minor
+    description: 错误响应结构稳定且可观测。
+    judge_question: 所有错误响应是否都采用 {"error":{"code","message"}} 结构？
+    pass_criteria: 裁判用 3 个不同错误场景取证；每个响应都是统一 error 结构且 code 与 API.md 一致即 pass。
+    applies_to: [api_response, log]
+    evidence_required: [command_output]
+    f1_symptom: 客户端没法按错误码统一处理，每次都要写特判。
+    hidden: false
+    tags: [observability, error_state]
+    author: tasks-b
+    notes: 软条目，用于区分 P/A。
+
+  - id: R12
+    kind: script
+    severity: fatal
+    description: tests/ 下测试文件哈希未变。
+    pass_criteria: python3 hidden-tests/check_locks.py 退出码 0。
+    applies_to: [source, diff]
+    evidence_required: [command_output]
+    f1_symptom: 无（验证侧发现，永不进入反馈）。
+    hidden: true
+    tags: [anti_cheat]
+    author: tasks-b
+    notes: 硬门槛 HG2 的 rubric 映射。
+
+  - id: R13
+    kind: agent_judge
+    severity: minor
+    description: 实现只依赖 Python 标准库。
+    judge_question: 提交产物是否没有新增任何第三方依赖？
+    pass_criteria: 检查 import 与依赖文件；出现非标准库 import 或新增 requirements 即 fail。
+    applies_to: [source, diff]
+    evidence_required: [diff_hunk]
+    f1_symptom: 换到隔离环境服务起不来。
+    hidden: false
+    tags: [dependencies]
+    author: tasks-b
+    notes: 沙箱无网络。

@@ -1,0 +1,116 @@
+# video-001 缺陷现象目录（document_type=catalog）
+document_type: catalog
+schema_version: "1.0"
+task_id: video-001
+catalog_version: 1.0.0
+items:
+  - rubric_item_id: R1
+    title: 导出参数用 mpeg4 与错误像素格式
+    severity: functional
+    f1_symptom: 导出的片子有些播放器打不开，颜色看着也不对。
+    f2_evidence:
+      kind: stderr
+      text: 'ffprobe: format_name=mpeg4, codec_name=mpeg4；期望 mp4/h264/yuv420p。'
+      source_command: ffprobe -v error -show_format -show_streams intro.mp4
+      redactions: [intro.mp4]
+    detect:
+      source: script
+      check_ids: [probe.py, HG1]
+    evidence_required: [command_output]
+    tags: [encoding]
+
+  - rubric_item_id: R2
+    title: 分辨率与帧率不达标
+    severity: functional
+    f1_symptom: 片子在电视上看着糊，动作有点卡。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 分辨率 1280x720，期望 1920x1080；avg_frame_rate=25/1，期望 30/1。'
+      source_command: python3 hidden-tests/probe.py --input intro.mp4
+      redactions: [intro.mp4]
+    detect:
+      source: script
+      check_ids: [probe.py, HG1]
+    evidence_required: [command_output]
+    tags: [resolution, frame_rate]
+
+  - rubric_item_id: R3
+    title: 时长不足 30 秒
+    severity: functional
+    f1_symptom: 导出来的片子只有 24 秒，发布会槽位是 30 秒。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: duration=24.000000，期望 30.0±0.1；nb_frames=600，期望 900。'
+      source_command: python3 hidden-tests/probe.py --input intro.mp4
+      redactions: [intro.mp4]
+    detect:
+      source: script
+      check_ids: [probe.py, HG1]
+    evidence_required: [command_output]
+    tags: [duration]
+
+  - rubric_item_id: R5
+    title: 场景结构只有一段静态画面
+    severity: functional
+    f1_symptom: 整支片子几乎是一个静态画面，中间没有节奏变化。
+    f2_evidence:
+      kind: stderr
+      text: '--plan 输出：1 段 0-24s title-placeholder；期望 >=5 段覆盖 0-30s。'
+      source_command: python3 intro.py --plan
+      redactions: []
+    detect:
+      source: script
+      check_ids: [plan_check.py, HG3]
+    evidence_required: [command_output]
+    tags: [storyboard]
+
+  - rubric_item_id: R7
+    title: 结尾缺少落版
+    severity: functional
+    f1_symptom: 结尾没有落版，片子像是没做完就断了。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: t=29.0 ink_ratio 过低（期望 >=0.005，结束卡内容过少）。'
+      source_command: python3 hidden-tests/frames.py --dir /tmp/frames
+      redactions: [/tmp/frames]
+    f3_visual:
+      description: 29 秒那一帧几乎全黑，看不到 NOVA 字标与结束信息。
+      regions: [画面中央 60% 区域]
+    detect:
+      source: script
+      check_ids: [frames.py, HG3]
+    evidence_required: [video_frame]
+    tags: [end_card]
+
+  - rubric_item_id: R6
+    title: 背景与主色不成体系
+    severity: functional
+    f1_symptom: 画面一会儿全黑一会儿很亮，不像同一套视觉。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 主色只出现在 2/6 个采样帧；背景平均亮度波动超出契约。'
+      source_command: python3 hidden-tests/frames.py --dir /tmp/frames
+      redactions: [/tmp/frames]
+    f3_visual:
+      description: 抽帧对比背景颜色：正常应为统一的深蓝灰，问题帧有纯黑与浅灰两种。
+      regions: [整帧背景]
+    detect:
+      source: script
+      check_ids: [frames.py, HG3]
+    evidence_required: [video_frame]
+    tags: [visual, palette]
+
+  - rubric_item_id: R10
+    title: 测试文件被修改（作弊）
+    severity: fatal
+    f1_symptom: 无（验证侧发现，永不进入反馈）。
+    f2_evidence:
+      kind: test_failure
+      text: 'LOCK VIOLATION: tests/test_intro.py 的 sha256 与 locks.sha256 不一致。'
+      source_command: python3 hidden-tests/check_locks.py
+      redactions: [locks.sha256]
+    detect:
+      source: script
+      check_ids: [check_locks.py, HG2]
+    evidence_required: [command_output]
+    tags: [anti-cheat]

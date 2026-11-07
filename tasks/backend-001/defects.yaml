@@ -1,0 +1,155 @@
+# backend-001 缺陷现象目录（document_type=catalog）
+document_type: catalog
+schema_version: "1.0"
+task_id: backend-001
+catalog_version: 1.0.0
+items:
+  - rubric_item_id: R1
+    title: 缺少 Bearer 鉴权
+    severity: functional
+    f1_symptom: 客户端不带 token 也能下单成功，这不对吧？
+    f2_evidence:
+      kind: console_log
+      text: 'HTTP/1.1 201 Created；请求头无 Authorization；期望 401 {"error":{"code":"unauthorized"}}。'
+      source_command: curl -s -o /dev/null -w "%{http_code}" -X POST -d '{"sku":"A-1","quantity":1}' http://127.0.0.1:<port>/orders
+      redactions: [<port>]
+    detect:
+      source: script
+      check_ids: [TestAuth, HG1]
+    evidence_required: [command_output]
+    tags: [auth]
+
+  - rubric_item_id: R7
+    title: 未实现按 token 限流
+    severity: functional
+    f1_symptom: 压测时同一个 token 一直打，服务完全没限流，打多少收多少。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 6 次连发期望第 6 次 429 且 Retry-After: 10，实际 6 次全 201。'
+      source_command: python3 -m unittest discover -s hidden-tests/tests -k TestRateLimit
+      redactions: [hidden-tests]
+    detect:
+      source: script
+      check_ids: [TestRateLimit, HG1]
+    evidence_required: [command_output]
+    tags: [rate_limit]
+
+  - rubric_item_id: R4
+    title: 幂等键未生效（重复下单）
+    severity: functional
+    f1_symptom: 重试机制下同一个 Idempotency-Key 发两次，生成了两个订单，对账炸了。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 两次同 key 请求返回不同 order_id；期望重放首次响应并带 Idempotent-Replayed: true。'
+      source_command: python3 -m unittest discover -s hidden-tests/tests -k TestIdempotency
+      redactions: [hidden-tests]
+    detect:
+      source: script
+      check_ids: [TestIdempotency, HG1]
+    evidence_required: [command_output]
+    tags: [idempotency]
+
+  - rubric_item_id: R5
+    title: 幂等键冲突未识别
+    severity: functional
+    f1_symptom: 同一个 key 换了 body 重发，服务没报冲突，直接又下了一单。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 同 key 先 quantity=1 后 quantity=2 返回 201；期望 409 idempotency_conflict。'
+      source_command: python3 -m unittest discover -s hidden-tests/tests -k test_same_key_different_body
+      redactions: [hidden-tests]
+    detect:
+      source: script
+      check_ids: [TestIdempotency.test_same_key_different_body_conflicts, HG1]
+    evidence_required: [command_output]
+    tags: [idempotency, error_state]
+
+  - rubric_item_id: R9
+    title: 依赖故障时未降级
+    severity: functional
+    f1_symptom: 库存服务挂掉之后，health 还显示 ok，下单接口直接 500，不是契约里的降级行为。
+    f2_evidence:
+      kind: runtime_trace
+      text: '依赖停掉后：health {"status":"ok","inventory":"ok"}；下单 500 {"error":{"code":"internal_error"}}。期望 health degraded + 503 inventory_unavailable + Retry-After: 5。'
+      source_command: python3 -m unittest discover -s hidden-tests/tests -k TestFaultInjection
+      redactions: [hidden-tests]
+    detect:
+      source: script
+      check_ids: [TestFaultInjection, HG1]
+    evidence_required: [command_output]
+    tags: [resilience, degradation]
+
+  - rubric_item_id: R8
+    title: 幂等记录未持久化
+    severity: functional
+    f1_symptom: 服务重启后，之前下的单查不到了，重试又下了一单。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 重启后 GET 原 order_id 返回 404；同 key 重放也未命中首次结果。'
+      source_command: python3 -m unittest discover -s hidden-tests/tests -k TestPersistence
+      redactions: [hidden-tests]
+    detect:
+      source: script
+      check_ids: [TestPersistence, HG1]
+    evidence_required: [command_output]
+    tags: [persistence]
+
+  - rubric_item_id: R2
+    title: 创建订单成功路径回归
+    severity: functional
+    f1_symptom: 下单成功后返回的订单字段或金额与约定不一致。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 期望 201 且 total_cents=price_cents*quantity；实际响应缺少字段或金额不符。'
+      source_command: python3 -m unittest discover -s hidden-tests/tests -k TestCreateOrder
+      redactions: [hidden-tests]
+    detect:
+      source: script
+      check_ids: [TestCreateOrder, HG1]
+    evidence_required: [command_output]
+    tags: [order]
+
+  - rubric_item_id: R3
+    title: 请求体校验缺失
+    severity: functional
+    f1_symptom: 参数写错时服务不报错，行为很奇怪。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 空 sku、quantity=0、缺 Idempotency-Key 等场景未返回 400 invalid_request。'
+      source_command: python3 -m unittest discover -s hidden-tests/tests -k TestCreateOrder
+      redactions: [hidden-tests]
+    detect:
+      source: script
+      check_ids: [TestCreateOrder, HG1]
+    evidence_required: [command_output]
+    tags: [validation, error-state]
+
+  - rubric_item_id: R6
+    title: 库存不足未拒绝下单
+    severity: functional
+    f1_symptom: 库存是 0 的 SKU 也能下单成功。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: B-1 库存 0，下单 quantity=1 返回 201；期望 422 out_of_stock。'
+      source_command: python3 -m unittest discover -s hidden-tests/tests -k TestCreateOrder
+      redactions: [hidden-tests]
+    detect:
+      source: script
+      check_ids: [TestCreateOrder, HG1]
+    evidence_required: [command_output]
+    tags: [stock, error-state]
+
+  - rubric_item_id: R12
+    title: 测试文件被修改（作弊）
+    severity: fatal
+    f1_symptom: 无（验证侧发现，永不进入反馈）。
+    f2_evidence:
+      kind: test_failure
+      text: 'LOCK VIOLATION: tests/test_smoke.py 的 sha256 与 locks.sha256 不一致。'
+      source_command: python3 hidden-tests/check_locks.py
+      redactions: [hidden-tests]
+    detect:
+      source: script
+      check_ids: [check_locks.py, HG2]
+    evidence_required: [command_output]
+    tags: [anti-cheat]

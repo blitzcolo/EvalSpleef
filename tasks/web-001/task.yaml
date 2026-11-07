@@ -1,0 +1,158 @@
+# web-001 题目元数据（字段对齐 schemas/task.schema.json）
+id: web-001
+version: 1.0.0
+track: web
+layer: engineering
+title: 看板拖拽排序 + 暗色模式：把半成品交互补完
+subtitle: 在无构建单页起始代码上实现跨列拖拽、列内排序、键盘操作、空状态、持久化与主题切换
+platform: linux-container
+difficulty: 3
+difficulty_calibration:
+  status: pending
+  target_tier_range: [A, B]
+  models_tried: []
+status: active
+author: tasks-a
+created: "2026-11-06"
+updated: "2026-11-06"
+language: [javascript, html, css]
+tags: [frontend, drag-and-drop, accessibility, dark-mode, playwright, no-build]
+
+instruction: instruction.md
+persona: persona.md
+rubric_ref: rubric.yaml
+defects_ref: defects.yaml
+
+workspace:
+  mount: /workspace
+  starter: workspace/
+  entry_files: [index.html, app.js, styles.css, README.md]
+  protected_paths: []
+  writable_paths: [index.html, app.js, styles.css]
+
+resources:
+  image: llm-eval/web-001
+  image_digest: TODO(pin-on-host)
+  cpu: 2
+  memory_mb: 2048
+  disk_mb: 2048
+  network: false
+  docs_whitelist: []
+  tools: [bash, read, write, edit, browser, screenshot]
+  os: linux
+
+isolation:
+  agent_user: agent
+  environment_mode: separate
+  network_mode: no-network
+  lint_extend_select: [unpinned-image, root-agent]
+  notes: 验证侧用 python3 http.server 提供静态页 + Playwright 无头 Chromium；Agent 侧不联网。
+
+network:
+  mode: "off"
+  allowlist: []
+  search_proxy: false
+
+tools: [bash, read, write, edit, browser, screenshot]
+
+budget:
+  max_rounds: 8
+  max_feedback_rounds: 4
+  max_nudges: 2
+  max_total_tokens: 1500000
+  max_wall_clock_s: 3600
+  max_cost_usd: 8
+  max_observe_s: 600
+  currency: USD
+  pricing_table_version: 2026-11-a
+  escalation:
+    f1_no_progress_rounds: 2
+    f2_no_progress_rounds: 2
+
+hard_gates:
+  - id: HG1
+    title: Playwright 交互验收全部通过
+    kind: script
+    script: hidden-tests/run.sh
+    required: true
+    pass_condition: npx playwright test 退出码 == 0（T1-T10 全过）
+    description: 覆盖拖拽、列内排序、刷新持久化、键盘移动、空状态、计数、暗色模式、DOM 契约。
+    timeout_s: 600
+  - id: HG2
+    title: 页面无构建可运行且无控制台错误
+    kind: script
+    script: hidden-tests/run.sh
+    required: true
+    pass_condition: 静态服务下 index.html 可加载；T1 断言 console/pageerror 为空
+    description: 起始代码保持单页无构建；验收侧用 python3 http.server 提供静态页。
+    timeout_s: 300
+  - id: HG3
+    title: 起始 DOM 契约未被破坏
+    kind: script
+    script: hidden-tests/run.sh
+    required: true
+    pass_condition: T10 通过（data-testid/data-column/data-card-id 数量与命名不变）
+    description: 验收依赖稳定钩子；Agent 可重构样式与逻辑但不得删改这些属性。
+    timeout_s: 300
+
+stop_conditions:
+  success: 所有 hard_gates 通过 且 无未修复的 functional/fatal 缺陷
+  failed: 预算耗尽或任一硬门槛失败
+  failure_budget: 预算耗尽判 Failed 并带 budget_exhausted 标记
+  minor_affects: minor 缺陷只影响 P/A 区分（视觉细节、动效）
+
+reference_solutions:
+  - id: a
+    path: answers/reference-a.js
+    approach: 原生 JS pointer events + 手写状态机 + 直接 DOM 渲染
+    runnable: true
+    notes: 替换 workspace/app.js 即完成；本地可静态打开，Playwright 用例全过。
+  - id: b
+    path: answers/reference-b.jsx
+    approach: React 函数组件 + hooks + 声明式状态
+    runnable: false
+    notes: 需 Node 构建链路；构建产物 dist 通过 APP_DIR=dist 跑同一套 Playwright 用例（TODO(run-on-host)）。
+
+artifacts:
+  - path: index.html
+    kind: source
+    required: true
+    max_bytes: 262144
+    description: 入口页面；验收侧直接以静态服务打开。
+  - path: app.js
+    kind: source
+    required: false
+    max_bytes: 524288
+    description: 若保留原生实现，交互逻辑在此。
+  - path: styles.css
+    kind: source
+    required: false
+    max_bytes: 262144
+    description: 样式与主题变量。
+
+canary:
+  manifest: canary.md
+  locations:
+    - workspace/index.html 的构建注释行（harness 注入）
+    - workspace/.env.example 注释行（harness 注入）
+    - 渲染后 instruction.md 末尾 HTML 注释
+  expected_trace:
+    - Agent 首次读取 index.html 的命令回显
+    - 提交产物中不应出现任何 CNRY 令牌
+  exclude_from_hash_lock: false
+
+verification:
+  entry: hidden-tests/run.sh
+  selftest: bash hidden-tests/run.sh
+  expected_runtime_s: 90
+  timeouts_s:
+    suite: 600
+    single_case: 60
+  mutation_harness: hidden-tests/kanban.spec.js
+
+extensions:
+  generation:
+    starter: workspace/
+    reference_build: dist/
+  evaluator: harbor
+  browser: chromium-headless

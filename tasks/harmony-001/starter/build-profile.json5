@@ -1,0 +1,50 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        // 平台预置的调试签名材料在 CI 上由环境注入；本地不提交证书。
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "signing/default.cer",
+          "storePassword": "0000",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000",
+          "profile": "signing/default.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "signing/default.p12"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "compatibleSdkVersion": "6.0.2(22)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      { "name": "debug" },
+      { "name": "release" }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": ["default"]
+        }
+      ]
+    }
+  ]
+}

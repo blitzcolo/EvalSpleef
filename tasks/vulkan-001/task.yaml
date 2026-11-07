@@ -1,0 +1,143 @@
+# vulkan-001 题目元数据（对齐 schemas/task.schema.json v1.0）
+id: vulkan-001
+version: 1.0.0
+track: vulkan
+layer: platform
+title: Vulkan 从零管线绘制带阴影场景
+platform: gpu-node
+difficulty: 5
+difficulty_calibration:
+  status: pending
+  target_tier_range: [C+, B]
+status: draft
+author: research
+created: "2026-11-06"
+updated: "2026-11-06"
+language: [cpp, glsl]
+tags: [vulkan, graphics, shadow-map, validation-layers, gpu]
+
+instruction: instruction.md
+persona: persona.md
+rubric_ref: rubric.yaml
+defects_ref: defects.yaml
+
+workspace:
+  mount: /workspace
+  starter: starter/
+  entry_files: [README.md, src/main.cpp, src/shadow_math.cpp, src/shadow_math.h, shaders/, CMakeLists.txt]
+  protected_paths:
+    - src/shadow_math.h
+
+resources:
+  image: "registry.local/llm-eval/vulkan-build:1.3.290"
+  image_digest: "TODO(pin-on-host): 上线前固定 GPU 构建镜像 digest"
+  cpu: 4
+  memory_mb: 8192
+  disk_mb: 20480
+  gpu: true
+  os: linux
+  network: false
+  docs_whitelist:
+    - registry.khronos.org
+    - vulkan.lunarg.com
+    - docs.vulkan.org
+  tools: [bash, read, write, edit]
+  services: []
+  notes: GPU 节点容器内跑；无 GPU 的宿主仅用于静态与 CPU 数学段；lavapipe 只做功能验证，不采性能。
+
+isolation:
+  agent_user: agent
+  environment_mode: separate
+  network_mode: no-network
+  lint_extend_select: [unpinned-image, root-agent]
+  notes: GPU 节点每 trial 独占容器并限制显存/算力；截图与 SPIR-V 只作为 artifact 拷进验证沙箱。
+
+budget:
+  max_rounds: 10
+  max_feedback_rounds: 7
+  max_nudges: 2
+  max_total_tokens: 5000000
+  max_wall_clock_s: 10800
+  max_cost_usd: 60
+  max_observe_s: 1200
+  escalation:
+    f1_no_progress_rounds: 2
+    f2_no_progress_rounds: 2
+
+hard_gates:
+  - id: HG1
+    title: 构建成功且验证层零 error
+    kind: script
+    script: hidden-tests/run.sh --gpu
+    required: true
+    pass_condition: exit_code == 0
+    description: cmake 构建通过；运行 120 帧；验证层无 error；输出 out/scene.ppm。
+    timeout_s: 2400
+  - id: HG2
+    title: 隐藏验收（静态 + CPU 阴影数学）
+    kind: script
+    script: hidden-tests/run.sh
+    required: true
+    pass_condition: exit_code == 0
+    description: 工程结构/验证层/阴影资源/着色器接线静态检查通过，shadow_math 数值测试 22 项全过。
+    timeout_s: 300
+  - id: HG3
+    title: 契约文件未被修改
+    kind: script
+    script: hidden-tests/static_checks.py --locks-only
+    required: true
+    pass_condition: exit_code == 0
+    description: src/shadow_math.h 的 sha256 与 locks.json 一致。
+    timeout_s: 60
+  - id: HG4
+    title: 截图与参考图相似度达标
+    kind: script
+    script: hidden-tests/image_metrics.py hidden-tests/refs/scene_reference.ppm out/scene.ppm --mad 12 --ratio 0.92
+    required: true
+    pass_condition: exit_code == 0
+    description: 平均绝对差 ≤ 12 且逐通道匹配率 ≥ 0.92；参考图由 GPU 宿主机生成后随题包发布。
+    timeout_s: 120
+
+stop_conditions:
+  success: 所有 hard_gates 通过，且无未修复的 functional/fatal 缺陷。
+  failed: 预算耗尽或任一 hard_gate 失败。
+  failure_budget: 轮数/token/墙钟/费用任一触顶即停止并判 Failed。
+  minor_affects: minor 缺陷（R7-R11）只影响 P/A 与半档。
+
+reference_solutions:
+  - id: a
+    path: answers/reference-a.patch
+    approach: 单命令缓冲内两段渲染（阴影深度 + 主通道）；PCF 用 texture() 3x3 循环；CPU 侧直接列主序实现
+    runnable: true
+    notes: 应用方式 cd starter && patch -p1 < answers/reference-a.patch
+  - id: b
+    path: answers/reference-b.patch
+    approach: 阴影通道拆成独立函数；PCF 用 textureOffset 九连击；CPU 侧行向量累加 + 预计算步长
+    runnable: true
+    notes: 与 A 行为一致、结构不同；同一套数值测试与截图阈值。
+
+references:
+  a: answers/reference-a.patch
+  b: answers/reference-b.patch
+  empty_agent: answers/empty-agent.md
+  patch_apply: patch -p1
+
+canary:
+  manifest: canary.md
+  locations:
+    - starter/README.md 末尾 HTML 注释行
+    - starter/src/main.cpp 文件头注释行
+    - starter/shaders/scene.vert 注释行
+  expected_trace:
+    - agent 读取 README / main.cpp 的工具输出
+    - 构建日志中回显的源文件路径
+    - 产物归档中的入口源码
+  exclude_from_hash_lock: true
+
+verification:
+  entry: hidden-tests/run.sh
+  selftest: bash hidden-tests/run.sh --selftest
+  expected_runtime_s: 300
+  timeouts_s:
+    suite: 1200
+    single_case: 180

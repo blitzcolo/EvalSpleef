@@ -1,0 +1,3 @@
+transaction_id,occurred_at,currency,amount,kind
+A001,2026-06-01,CNY,1.00,charge
+A002,2026-06-02,CNY,abc,charge

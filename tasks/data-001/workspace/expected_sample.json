@@ -1,0 +1,36 @@
+{
+  "total_valid": 39,
+  "malformed": 11,
+  "malformed_by_reason": {
+    "bad_format": 1,
+    "bad_timestamp": 2,
+    "bad_status": 1,
+    "bad_duration": 4,
+    "duplicate_rid": 3
+  },
+  "unique_clients": 8,
+  "error_rate": 0.4615,
+  "p95_duration_ms": 936.0,
+  "top_paths": [
+    {
+      "path": "/api/health",
+      "count": 10
+    },
+    {
+      "path": "/api/cart",
+      "count": 7
+    },
+    {
+      "path": "/api/orders",
+      "count": 6
+    },
+    {
+      "path": "/api/search",
+      "count": 6
+    },
+    {
+      "path": "/api/login",
+      "count": 4
+    }
+  ]
+}

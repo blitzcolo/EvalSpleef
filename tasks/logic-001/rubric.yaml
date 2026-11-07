@@ -1,0 +1,161 @@
+# logic-001 原子化二元 rubric
+# 字段对齐 schemas/rubric.schema.json（grading 维护，1.0）；条目只问一件事，f1_symptom 用普通用户口吻。
+schema_version: "1.0"
+task_id: logic-001
+rubric_version: 1.0.0
+title: logic-001 规则归纳：答案正确性、自洽性与推导质量
+
+items:
+  - id: R1
+    kind: script
+    severity: fatal
+    description: 答案文件是纯 JSON，顶层只有 instances 一个键
+    pass_criteria: 文件非空、去除首尾空白后以 { 开头并以 } 结尾；json.loads 成功；顶层键集合 == {instances}；instances 是列表
+    applies_to: [answer_text]
+    evidence_required: [file_path, command_output]
+    f1_symptom: 交上来的东西我这边当数据读不出来，看着像一段带说明的文字。
+    f2_evidence: "解析输出：顶层出现未允许的额外键；期望键集合为 {instances}。"
+    tags: [format, json]
+
+  - id: R2
+    kind: script
+    severity: fatal
+    description: 5 个实例的 rule 与 next 全部正确
+    pass_criteria: id 1..5 各出现一次；每个 rule 与题包唯一解逐字段相同；每个 next 与唯一解 6 位逐位相同
+    applies_to: [answer_text]
+    evidence_required: [file_path]
+    f1_symptom: 有几组推出来的下一步跟我手里的记录走势对不上。
+    f2_evidence: "比对输出：实例 3 next 位置 0 记录期望 7、提交为 3；实例 5 的 rule.a 期望 7、提交为 3。"
+    tags: [answer, correctness]
+
+  - id: R3
+    kind: script
+    severity: functional
+    description: 每个答案规则都能复现该组记录中的全部转移
+    pass_criteria: 对每个实例，用 answer.rule 逐次变换 boards[i] 得到 boards[i+1] 全部成立
+    applies_to: [answer_text]
+    evidence_required: [file_path, command_output]
+    f1_symptom: 第 3 组你写的规则套回记录，走到中间一步就对不上了。
+    f2_evidence: "自洽校验输出：实例 3 第 2 次转移位置 4 记录 7，按提交规则计算得 3。"
+    tags: [consistency]
+
+  - id: R4
+    kind: script
+    severity: fatal
+    description: 受保护输入 instances.json 未被修改
+    pass_criteria: 工作区 instances.json 的 sha256 等于题包预置哈希
+    applies_to: [answer_text, doc]
+    evidence_required: [file_path]
+    f1_symptom: 你动过原始记录吗？我这边对不上最初的版本了。
+    f2_evidence: "哈希输出：workspace/instances.json 当前哈希与预置哈希不一致。"
+    tags: [anti_cheat, integrity]
+
+  - id: R5
+    kind: script
+    severity: functional
+    description: 每个实例的 rule 字段取值都在规则族允许范围内
+    pass_criteria: perm ∈ 8 个合法名字；a ∈ {1,3,7,9}；b 为 0..9 整数；next 为 6 个 0..9 整数
+    applies_to: [answer_text]
+    evidence_required: [file_path]
+    f1_symptom: 规则那一栏看着不像表里的写法，像自己起的名。
+    f2_evidence: "枚举校验输出：实例 1 perm=rotate 不在允许集合；实例 2 a=2 不在 {1,3,7,9}。"
+    tags: [format, family]
+
+  - id: R6
+    kind: llm_judge
+    severity: functional
+    description: 推导给出至少一条可用记录数值复核的具体约束
+    judge_question: 该实例的推导是否给出至少一条可用记录中具体格子数值复核的约束？
+    pass_criteria: 出现具体位置/数值的等式或排除理由，可被 readers 照着重算
+    fail_examples:
+      - 只写「经过分析规则是 xxx」而没有可复核依据
+      - 只写「枚举后唯一」而没有说明枚举结果或排除依据
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 推导那段看不到能让我核对的依据，只有结论。
+    tags: [derivation, evidence]
+
+  - id: R7
+    kind: llm_judge
+    severity: functional
+    description: 推导说明规则族内只有唯一候选
+    judge_question: 该实例的推导是否说明了规则族内只有唯一候选？
+    pass_criteria: 明确指出其余候选被记录排除，而不是把唯一性当成前提
+    fail_examples:
+      - 只写「所以唯一」但前文没有排除过程
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 你写了唯一，但没说为什么能得到这个唯一。
+    tags: [derivation, uniqueness]
+
+  - id: R8
+    kind: llm_judge
+    severity: minor
+    description: 推导只引用记录中可见的棋盘数值
+    judge_question: 推导是否只引用记录中可见的棋盘数值？
+    pass_criteria: 引用的棋盘、格子位置与数值都能在 instances.json 中找到；未引入外部信息
+    fail_examples:
+      - 引用隐藏测试、参考答案、内部消息
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 推导里出现了记录里没有的东西，我看不懂出处。
+    tags: [derivation]
+
+  - id: R9
+    kind: llm_judge
+    severity: minor
+    description: 推导结论与提交的 rule 和 next 一致
+    judge_question: 推导结论是否与所交的规则和下一棋盘一致？
+    pass_criteria: 推导中写出的规则参数与 next 的推导结果等于提交值
+    fail_examples:
+      - 推导说 perm=rev_halves 但 rule.perm=rev
+    applies_to: [derivation, answer_text]
+    evidence_required: [file_path]
+    f1_symptom: 推导里说的规则和答案里写的对不上。
+    tags: [derivation, consistency]
+
+  - id: R10
+    kind: llm_judge
+    severity: minor
+    description: 推导不含与解题无关的寒暄、提问或重复内容
+    judge_question: 推导是否没有与解题无关的寒暄或提问？
+    pass_criteria: 每个 derivation 都是陈述句；没有「需要我继续吗」「谢谢」之类的对话内容
+    fail_examples:
+      - derivation 末尾写「如果你需要我再补充」
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 答案里混了几句跟我提问有关的话，不像纯数据。
+    tags: [derivation, hygiene]
+
+  - id: R11
+    kind: script
+    severity: minor
+    description: 推导篇幅合规（不超过 300 字、3 句、不含代码块）
+    pass_criteria: 每个 derivation 去空白后长度 ≤ 300；句数 ≤ 3；不含三反引号代码块
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 推导太长了，我找不到重点。
+    f2_evidence: "格式校验输出：实例 2 推导长度 412 字符，超过 300 上限。"
+    tags: [format, derivation]
+
+  - id: R12
+    kind: script
+    severity: fatal
+    description: 每个实例都有 derivation 字段
+    pass_criteria: 5 个实例均含 derivation，且为字符串
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 有一组只有结果没有推导，我没法判断是不是猜的。
+    f2_evidence: "结构校验输出：实例 4 缺少 derivation 字段。"
+    tags: [format, derivation]
+
+extensions:
+  stopping_rule:
+    success: 所有 hard_gates 通过 且 无未修复的 functional/fatal 缺陷
+    blocking_severities: [functional, fatal]
+    minor_affects: P/A
+    max_open_blocking: 0
+  feedback_capacity:
+    max_feedback_rounds: 3
+    note: functional/fatal 条目共 6 条；F1 每轮只报一条，预算不足时优先报 script 类硬门槛失败。
+  author: tasks-a

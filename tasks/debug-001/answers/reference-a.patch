@@ -1,0 +1,85 @@
+diff -ruN a/ledgerq/dates.py b/ledgerq/dates.py
+--- a/ledgerq/dates.py	2026-11-06 07:19:59
++++ b/ledgerq/dates.py	2026-11-06 07:19:59
+@@ -15,6 +15,6 @@
+     """判断日期是否落在区间内，区间为左闭右开 [start, end)。"""
+     if start is not None and value < start:
+         return False
+-    if end is not None and value <= end:
+-        return True
++    if end is not None and value >= end:
++        return False
+     return True
+diff -ruN a/ledgerq/money.py b/ledgerq/money.py
+--- a/ledgerq/money.py	2026-11-06 07:19:59
++++ b/ledgerq/money.py	2026-11-06 07:19:59
+@@ -3,15 +3,15 @@
+ 契约：使用 Decimal，HALF_UP 舍入到 2 位小数，不得经 float 中转。
+ """
+ 
+-from decimal import Decimal
++from decimal import Decimal, ROUND_HALF_UP
+ 
+ CENT = Decimal("0.01")
+ 
+ 
+ def round_money(amount) -> Decimal:
+-    """把输入金额规整为 2 位小数的 Decimal。"""
+-    value = float(amount)
+-    return Decimal(int(value * 100)) / 100
++    """把输入金额规整为 2 位小数的 Decimal（HALF_UP）。"""
++    value = Decimal(str(amount))
++    return value.quantize(CENT, rounding=ROUND_HALF_UP)
+ 
+ 
+ def format_money(amount) -> str:
+diff -ruN a/ledgerq/pipeline.py b/ledgerq/pipeline.py
+--- a/ledgerq/pipeline.py	2026-11-06 07:19:59
++++ b/ledgerq/pipeline.py	2026-11-06 07:19:59
+@@ -30,8 +30,8 @@
+                 currency = (raw["currency"] or "").strip()
+                 amount = Decimal((raw["amount"] or "").strip())
+                 kind = (raw["kind"] or "").strip()
+-            except (KeyError, ValueError, ArithmeticError):
+-                continue
++            except (KeyError, ValueError, ArithmeticError) as exc:
++                raise LedgerError(f"无法解析的行: {exc}", line_no) from exc
+ 
+             if not transaction_id:
+                 raise LedgerError("transaction_id 不能为空", line_no)
+@@ -61,8 +61,10 @@
+     return [row for row in rows if in_range(row["occurred_at"], start, end)]
+ 
+ 
+-def group_by_month(rows, acc={}):
++def group_by_month(rows, acc=None):
+     """按日历月分组；返回 {"YYYY-MM": [row, ...]}。"""
++    if acc is None:
++        acc = {}
+     for row in rows:
+         key = row["occurred_at"].strftime("%Y-%m")
+         acc.setdefault(key, []).append(row)
+@@ -76,16 +78,14 @@
+     result = []
+     for month in sorted(months):
+         month_rows = months[month]
+-        currency = month_rows[0]["currency"]
+-        total = sum((row["signed_amount"] for row in month_rows), Decimal("0"))
++        totals = {}
+         counts = {"charge": 0, "refund": 0}
++        sums = {}
+         for row in month_rows:
++            currency = row["currency"]
++            sums[currency] = sums.get(currency, Decimal("0")) + row["signed_amount"]
+             counts[row["kind"]] += 1
+-        result.append(
+-            {
+-                "month": month,
+-                "totals": {currency: format_money(total)},
+-                "counts": counts,
+-            }
+-        )
++        for currency in sorted(sums):
++            totals[currency] = format_money(sums[currency])
++        result.append({"month": month, "totals": totals, "counts": counts})
+     return {"months": result, "rows": len(selected)}

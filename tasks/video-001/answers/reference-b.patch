@@ -1,0 +1,102 @@
+diff -ruN a/intro.py b/intro.py
+--- a/intro.py	2026-11-06 07:30:47
++++ b/intro.py	2026-11-06 07:30:47
+@@ -9,13 +9,15 @@
+ import sys
+ import time
+ 
+-# ---- 画面参数（半成品：与契约不符，需按 README 修正）----
+-WIDTH = 1280
+-HEIGHT = 720
+-FPS = 25
+-SECONDS = 24
++# ---- 画面参数（参考解 B：符合 README 契约）----
++WIDTH = 1920
++HEIGHT = 1080
++FPS = 30
++SECONDS = 30
+ ENCODE = [
+-    "-c:v", "mpeg4",
++    "-c:v", "libx264",
++    "-preset", "slow",
++    "-crf", "17",
+     "-pix_fmt", "yuv420p",
+     "-movflags", "+faststart",
+ ]
+@@ -113,18 +115,72 @@
+     return 1.0 - (1.0 - t) ** 3
+ 
+ 
++SCENES = [
++    ("mark", 0.0, 5.0),
++    ("title", 5.0, 10.0),
++    ("grid", 10.0, 15.0),
++    ("wave", 15.0, 20.0),
++    ("quote", 20.0, 25.0),
++    ("end", 25.0, 30.0),
++]
++
++
++def _clamp01(value):
++    return max(0.0, min(1.0, value))
++
++
++def _lerp(a, b, k):
++    return tuple(int(a[i] + (b[i] - a[i]) * k) for i in range(3))
++
++
+ def render_frame(t, canvas):
+-    """渲染 t 秒处的画面（半成品：只有一段静态标题）。"""
+     canvas.fill(BG)
+     width, height = canvas.width, canvas.height
+-    canvas.text(width // 2 - 5 * 26, height // 2 - 50, 8, "INTRO", FG)
+-    canvas.rect(0, height - 8, width, 8, ACCENT)
++    center_x = width // 2
++    if t < 5.0:
++        k = _clamp01(t / 3.5)
++        bar = int(360 * ease_out(k))
++        canvas.rect(center_x - 6, height // 2 - bar // 2, 12, bar, ACCENT)
++        canvas.text(center_x + 60, height // 2 - 60, 9, "N", FG)
++    elif t < 10.0:
++        k = _clamp01((t - 5.0) / 1.5)
++        y = int(height // 2 - 60 + 60 * (1.0 - ease_out(k)))
++        canvas.text(center_x - 5 * 16 * 8 // 2, y, 16, "NOVA", FG)
++        canvas.rect(center_x - 200, y + 180, 400, 5, ACCENT)
++        canvas.text(center_x - 5 * 9 * 4 // 2, y + 230, 4, "STUDIO 2027", MUTED)
++    elif t < 15.0:
++        labels = ("VOLUME", "MOTION", "SYSTEM", "STORY")
++        for index, label in enumerate(labels):
++            col, row = index % 2, index // 2
++            x = center_x - 560 + col * 570
++            y = 300 + row * 280
++            local = _clamp01((t - 10.0 - index * 0.5) / 1.0)
++            canvas.rect(x, y + int(40 * (1 - local)), 520, 220, (24, 22, 30))
++            canvas.rect(x, y + int(40 * (1 - local)), 520, 5, ACCENT)
++            canvas.text(x + 40, y + 80 + int(40 * (1 - local)), 5, label, FG)
++    elif t < 20.0:
++        shift = int((t - 15.0) * 160)
++        for index in range(8):
++            y = 140 + index * 110
++            canvas.rect((shift + index * 300) % (width + 400) - 400, y, 520, 34, _lerp(BG, ACCENT, 0.55 + 0.05 * (index % 4)))
++        canvas.text(center_x - 5 * 14 * 8 // 2, height // 2 - 100, 14, "MADE TO SHIP", FG)
++    elif t < 25.0:
++        canvas.text(center_x - 5 * 12 * 6 // 2, height // 2 - 40, 6, "DESIGN IS", MUTED)
++        canvas.text(center_x - 5 * 12 * 9 // 2, height // 2 + 60, 12, "HOW IT WORKS", FG)
++        canvas.rect(center_x - 80, height // 2 + 260, 160, 8, ACCENT)
++    else:
++        canvas.rect(center_x - 300, 420, 600, 150, (20, 20, 32))
++        canvas.text(center_x - 5 * 14 * 6 // 2, 450, 7, "NOVA", FG)
++        canvas.text(center_x - 5 * 9 * 12 // 2, 530, 3, "STUDIO 2027 - CONTACT", MUTED)
++        for index in range(3):
++            canvas.rect(center_x - 220 + index * 180, 620, 120, 10, ACCENT)
+     return canvas
+ 
+ 
+ def plan():
+     print("scene\tstart\tend\tname")
+-    print("1\t0.0\t24.0\ttitle-placeholder")
++    for index, (name, start, end) in enumerate(SCENES, start=1):
++        print(f"{index}\t{start}\t{end}\t{name}")
+ 
+ 
+ def render_video(path):

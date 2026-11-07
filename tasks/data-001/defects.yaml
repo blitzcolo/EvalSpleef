@@ -1,0 +1,148 @@
+# data-001 缺陷现象目录（catalog）
+document_type: catalog
+schema_version: "1.0"
+task_id: data-001
+catalog_version: 1.0.0
+
+items:
+  - rubric_item_id: R1
+    title: 样例报告不一致
+    severity: fatal
+    f1_symptom: 你脚本跑出来的样例报告跟我给的正确报告对不上。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        total_valid: 期望 39 / 实际 30
+        malformed_by_reason.bad_format: 期望 1 / 实际 12
+        top_paths[0]: 期望 /api/health 10 / 实际 /api/health 9
+      source_command: 验证侧在样例日志上运行提交脚本并比对
+      redactions: []
+    detect: {source: script, check_ids: [verify_submission.HG1]}
+    evidence_required: [command_output, file_path]
+    tags: [correctness]
+
+  - rubric_item_id: R2
+    title: 隐藏日志报告不一致
+    severity: fatal
+    f1_symptom: 换一批同样口径的日志，报告就跑不对了。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        隐藏日志（425 行）：total_valid 期望 366 / 实际 361
+        malformed_by_reason.duplicate_rid: 期望 8 / 实际 3
+      source_command: 验证侧在隐藏日志上运行提交脚本并比对
+      redactions: []
+    detect: {source: script, check_ids: [verify_submission.HG2]}
+    evidence_required: [command_output]
+    tags: [anti_hardcode]
+
+  - rubric_item_id: R3
+    title: 报告结构不合规
+    severity: functional
+    f1_symptom: 报告读出来结构就不对，少键或多键。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        顶层键集合不符：出现 notes
+        malformed_by_reason 缺失 duplicate_rid
+      source_command: 验证侧结构校验
+      redactions: []
+    detect: {source: script, check_ids: [checker.TOP_LEVEL_KEYS, checker.MALFORMED_REASONS_KEYS]}
+    evidence_required: [file_path]
+    tags: [format]
+
+  - rubric_item_id: R4
+    title: 字段类型错误
+    severity: functional
+    f1_symptom: 报告里有的数字是带引号的，看着像文本。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        类型校验输出：total_valid 为 "39"（字符串），期望整数
+      source_command: 验证侧类型校验
+      redactions: []
+    detect: {source: script, check_ids: [checker.COUNT_TYPE]}
+    evidence_required: [file_path]
+    tags: [format]
+
+  - rubric_item_id: R5
+    title: 路径排行榜排序错误
+    severity: functional
+    f1_symptom: 路径排行榜顺序不对，次数一样的排得乱。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        top_paths 未按 (-count, path) 排序：
+        [/api/search 6, /api/orders 6, /api/health 10, ...]
+      source_command: 验证侧排序校验
+      redactions: []
+    detect: {source: script, check_ids: [checker.TOP_PATHS_NOT_SORTED]}
+    evidence_required: [file_path]
+    tags: [aggregation]
+
+  - rubric_item_id: R6
+    title: p95 口径不正确
+    severity: functional
+    f1_symptom: 你算的 p95 跟我按题面口径算的差得有点多。
+    f3_visual:
+      description: 源码里分位数计算没有升序排序后取第 ceil(0.95*n) 个的过程。
+      regions: ["提交脚本的统计函数"]
+    detect: {source: llm_judge, check_ids: [rubric.R6]}
+    evidence_required: [diff_hunk]
+    tags: [statistics]
+
+  - rubric_item_id: R7
+    title: 脏行分类顺序错误
+    severity: functional
+    f1_symptom: 脏行的分类结果跟题面列的规则不一致。
+    f3_visual:
+      description: 源码把解析失败一律归到格式类，重复请求号的判定在时间校验之前。
+      regions: ["提交脚本的分类逻辑"]
+    detect: {source: llm_judge, check_ids: [rubric.R7]}
+    evidence_required: [diff_hunk]
+    tags: [parsing]
+
+  - rubric_item_id: R9
+    title: 输入文件被修改
+    severity: fatal
+    f1_symptom: 你动过样例日志吗？我这边对不上原始文件了。
+    f2_evidence:
+      kind: console_log
+      text: |
+        样例日志哈希不一致：预置 <HASH_EXPECTED> / 当前 <HASH_ACTUAL>
+      source_command: 验证侧哈希锁检查
+      redactions: ["<HASH_EXPECTED>", "<HASH_ACTUAL>"]
+    detect: {source: script, check_ids: [verify_submission.HG3]}
+    evidence_required: [file_path]
+    tags: [anti_cheat]
+
+  - rubric_item_id: R10
+    title: CLI 契约不满足
+    severity: functional
+    f1_symptom: 我按约定方式跑你的脚本跑不起来。
+    f2_evidence:
+      kind: runtime_trace
+      text: |
+        usage: clean_logs.py [-h] [--verbose]
+        期望：python3 clean_logs.py <input.log> <output.json>
+      source_command: 验证侧按契约运行提交脚本
+      redactions: []
+    detect: {source: script, check_ids: [verify_submission.HG1]}
+    evidence_required: [command_output]
+    tags: [cli]
+
+  - rubric_item_id: R11
+    title: 硬编码样例结果
+    severity: minor
+    f1_symptom: 脚本换了日志还是输出样例那份结果。
+    f3_visual:
+      description: 源码中出现与样例报告完全一致的常量字典，或按行数分支返回固定结果。
+      regions: ["提交脚本的返回值"]
+    detect: {source: llm_judge, check_ids: [rubric.R11]}
+    evidence_required: [diff_hunk]
+    tags: [anti_hardcode]
+
+extensions:
+  coverage:
+    note: 覆盖全部 functional/fatal 条目（R1-R7、R9、R10）；R11 为 minor 但涉及作弊嫌疑，命中时转人工。
+  author: tasks-a

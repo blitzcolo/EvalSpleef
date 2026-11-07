@@ -1,0 +1,362 @@
+diff -ruN harmony-001-a-base/entry/src/main/cpp/image_ops.cpp harmony-001-a-new/entry/src/main/cpp/image_ops.cpp
+--- harmony-001-a-base/entry/src/main/cpp/image_ops.cpp	2026-11-06 07:47:37
++++ harmony-001-a-new/entry/src/main/cpp/image_ops.cpp	2026-11-06 07:47:37
+@@ -1,35 +1,111 @@
+-// image_ops.cpp — 图像处理内核实现（当前是空壳，需要你补全）。
+-//
+-// 只允许改本文件或新增 .cpp/.h（新增文件必须在 CMakeLists.txt 里登记）。
+-// 不要把 NAPI 类型带进来：本文件必须能被普通 host 编译器单独编译。
++// image_ops.cpp — 参考解 A：逐像素直接实现（整数定点 + 显式 clamp）。
+ #include "image_ops.h"
+ 
++#include <algorithm>
++#include <cmath>
++#include <vector>
++
+ namespace imageops {
++namespace {
+ 
++inline int clampInt(int v) {
++  return v < 0 ? 0 : (v > 255 ? 255 : v);
++}
++
++inline uint8_t* pixelAt(const ImageView& img, int32_t x, int32_t y) {
++  return img.pixels + static_cast<size_t>(y) * img.stride + static_cast<size_t>(x) * 4;
++}
++
++}  // namespace
++
+ void grayscale(const ImageView& img) {
+-  (void)img;  // TODO: 按 image_ops.h 的公式实现
++  for (int32_t y = 0; y < img.height; ++y) {
++    uint8_t* row = img.pixels + static_cast<size_t>(y) * img.stride;
++    for (int32_t x = 0; x < img.width; ++x) {
++      uint8_t* p = row + static_cast<size_t>(x) * 4;
++      const int luma = (77 * p[0] + 150 * p[1] + 29 * p[2] + 128) >> 8;
++      p[0] = static_cast<uint8_t>(luma);
++      p[1] = static_cast<uint8_t>(luma);
++      p[2] = static_cast<uint8_t>(luma);
++    }
++  }
+ }
+ 
+ void adjustBrightness(const ImageView& img, int32_t delta) {
+-  (void)img;
+-  (void)delta;
++  for (int32_t y = 0; y < img.height; ++y) {
++    uint8_t* row = img.pixels + static_cast<size_t>(y) * img.stride;
++    for (int32_t x = 0; x < img.width; ++x) {
++      uint8_t* p = row + static_cast<size_t>(x) * 4;
++      for (int c = 0; c < 3; ++c) {
++        p[c] = static_cast<uint8_t>(clampInt(static_cast<int>(p[c]) + delta));
++      }
++    }
++  }
+ }
+ 
+ void adjustContrast(const ImageView& img, float factor) {
+-  (void)img;
+-  (void)factor;
++  for (int32_t y = 0; y < img.height; ++y) {
++    uint8_t* row = img.pixels + static_cast<size_t>(y) * img.stride;
++    for (int32_t x = 0; x < img.width; ++x) {
++      uint8_t* p = row + static_cast<size_t>(x) * 4;
++      for (int c = 0; c < 3; ++c) {
++        const double v = (static_cast<double>(p[c]) - 128.0) * static_cast<double>(factor) + 128.0;
++        p[c] = static_cast<uint8_t>(clampInt(static_cast<int>(std::lround(v))));
++      }
++    }
++  }
+ }
+ 
+ void boxBlur3(const ImageView& img) {
+-  (void)img;
++  if (img.width <= 0 || img.height <= 0) {
++    return;
++  }
++  std::vector<uint8_t> src(img.pixels, img.pixels + static_cast<size_t>(img.stride) * img.height);
++  for (int32_t y = 0; y < img.height; ++y) {
++    for (int32_t x = 0; x < img.width; ++x) {
++      uint8_t* dst = pixelAt(img, x, y);
++      int sum[3] = {0, 0, 0};
++      for (int dy = -1; dy <= 1; ++dy) {
++        const int sy = std::min(std::max(y + dy, 0), img.height - 1);
++        for (int dx = -1; dx <= 1; ++dx) {
++          const int sx = std::min(std::max(x + dx, 0), img.width - 1);
++          const size_t o = static_cast<size_t>(sy) * img.stride + static_cast<size_t>(sx) * 4;
++          for (int c = 0; c < 3; ++c) {
++            sum[c] += src[o + c];
++          }
++        }
++      }
++      for (int c = 0; c < 3; ++c) {
++        dst[c] = static_cast<uint8_t>((sum[c] + 4) / 9);
++      }
++    }
++  }
+ }
+ 
+ bool rotate90(const ImageView& src, uint8_t* dst, int32_t* outWidth, int32_t* outHeight) {
+-  (void)src;
+-  (void)dst;
+-  (void)outWidth;
+-  (void)outHeight;
+-  return false;
++  if (dst == nullptr || outWidth == nullptr || outHeight == nullptr) {
++    return false;
++  }
++  if (src.width <= 0 || src.height <= 0) {
++    return false;
++  }
++  const int32_t w = src.width;
++  const int32_t h = src.height;
++  for (int32_t y = 0; y < h; ++y) {
++    for (int32_t x = 0; x < w; ++x) {
++      const uint8_t* s = src.pixels + static_cast<size_t>(y) * src.stride + static_cast<size_t>(x) * 4;
++      const int32_t nx = h - 1 - y;
++      const int32_t ny = x;
++      uint8_t* d = dst + (static_cast<size_t>(ny) * h + static_cast<size_t>(nx)) * 4;
++      d[0] = s[0];
++      d[1] = s[1];
++      d[2] = s[2];
++      d[3] = s[3];
++    }
++  }
++  *outWidth = h;
++  *outHeight = w;
++  return true;
+ }
+ 
+ }  // namespace imageops
+diff -ruN harmony-001-a-base/entry/src/main/cpp/napi_init.cpp harmony-001-a-new/entry/src/main/cpp/napi_init.cpp
+--- harmony-001-a-base/entry/src/main/cpp/napi_init.cpp	2026-11-06 07:47:37
++++ harmony-001-a-new/entry/src/main/cpp/napi_init.cpp	2026-11-06 07:47:37
+@@ -1,7 +1,8 @@
+-// napi_init.cpp — NAPI 绑定层（当前只注册了一个占位函数，需要你补全 5 个图像接口）。
++// napi_init.cpp — 参考解 A：宏生成 5 个绑定函数，共用参数解析与缓冲区复制。
+ #include <cstdint>
+ #include <cstring>
+-#include <memory>
++#include <new>
++#include <vector>
+ 
+ #include "napi/native_api.h"
+ #include "hilog/log.h"
+@@ -9,31 +10,140 @@
+ 
+ namespace {
+ 
+-constexpr int32_t kArgCount = 3;
++struct BufferArgs {
++  std::vector<uint8_t> pixels;
++  int32_t width = 0;
++  int32_t height = 0;
++  size_t pendingArg = 3;
++};
+ 
++void ThrowTypeError(napi_env env, const char* message) {
++  napi_throw_type_error(env, nullptr, message);
++}
++
++bool ReadInt(napi_env env, napi_value value, int32_t* out) {
++  return napi_get_value_int32(env, value, out) == napi_ok;
++}
++
++bool ReadBuffer(napi_env env, napi_value value, BufferArgs* args) {
++  void* raw = nullptr;
++  size_t length = 0;
++  if (napi_get_arraybuffer_info(env, value, &raw, &length) != napi_ok || raw == nullptr) {
++    return false;
++  }
++  args->pixels.assign(static_cast<uint8_t*>(raw), static_cast<uint8_t*>(raw) + length);
++  return true;
++}
++
++imageops::ImageView MakeView(BufferArgs* args) {
++  return imageops::ImageView{args->pixels.data(), args->width, args->height, args->width * 4};
++}
++
+ napi_value MakeBuffer(napi_env env, const uint8_t* data, size_t length) {
+   void* raw = nullptr;
+   napi_value buffer = nullptr;
+-  napi_create_arraybuffer(env, length, &raw, &buffer);
++  if (napi_create_arraybuffer(env, length, &raw, &buffer) != napi_ok) {
++    ThrowTypeError(env, "cannot allocate output buffer");
++    return nullptr;
++  }
+   if (raw != nullptr && data != nullptr) {
+     std::memcpy(raw, data, length);
+   }
+   return buffer;
+ }
+ 
+-// TODO: 实现 grayscale / adjustBrightness / adjustContrast / boxBlur3 / rotate90 五个绑定函数。
+-// 要求：
+-//   1) 入参 (ArrayBuffer, width, height[, 参数])；宽度/高度必须 > 0 且与缓冲区长度一致；
+-//   2) 调用 image_ops.h 的内核函数；
+-//   3) 返回新的 ArrayBuffer；参数非法时抛 napi_throw_type_error。
++bool ParseCommon(napi_env env, napi_callback_info info, BufferArgs* args) {
++  size_t argc = 5;
++  napi_value argv[5] = {nullptr};
++  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) {
++    return false;
++  }
++  if (argc < 3) {
++    ThrowTypeError(env, "expects (buffer, width, height)");
++    return false;
++  }
++  if (!ReadBuffer(env, argv[0], args) || !ReadInt(env, argv[1], &args->width) ||
++      !ReadInt(env, argv[2], &args->height)) {
++    ThrowTypeError(env, "invalid (buffer, width, height)");
++    return false;
++  }
++  if (args->width <= 0 || args->height <= 0 ||
++      args->pixels.size() < static_cast<size_t>(args->width) * args->height * 4) {
++    ThrowTypeError(env, "buffer size does not match width*height*4");
++    return false;
++  }
++  return true;
++}
+ 
+-napi_value NopPlaceholder(napi_env env, napi_callback_info info) {
+-  return MakeBuffer(env, nullptr, 0);
++napi_value Grayscale(napi_env env, napi_callback_info info) {
++  BufferArgs args;
++  if (!ParseCommon(env, info, &args)) return nullptr;
++  auto view = MakeView(&args);
++  imageops::grayscale(view);
++  return MakeBuffer(env, args.pixels.data(), args.pixels.size());
+ }
+ 
++napi_value Brightness(napi_env env, napi_callback_info info) {
++  size_t argc = 4;
++  napi_value argv[4] = {nullptr};
++  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
++  BufferArgs args;
++  if (!ParseCommon(env, info, &args)) return nullptr;
++  int32_t delta = 0;
++  if (argc < 4 || !ReadInt(env, argv[3], &delta)) {
++    ThrowTypeError(env, "expects delta number");
++    return nullptr;
++  }
++  auto view = MakeView(&args);
++  imageops::adjustBrightness(view, delta);
++  return MakeBuffer(env, args.pixels.data(), args.pixels.size());
++}
++
++napi_value Contrast(napi_env env, napi_callback_info info) {
++  size_t argc = 4;
++  napi_value argv[4] = {nullptr};
++  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
++  BufferArgs args;
++  if (!ParseCommon(env, info, &args)) return nullptr;
++  double factor = 1.0;
++  if (argc < 4 || napi_get_value_double(env, argv[3], &factor) != napi_ok || factor <= 0.0) {
++    ThrowTypeError(env, "expects factor > 0");
++    return nullptr;
++  }
++  auto view = MakeView(&args);
++  imageops::adjustContrast(view, static_cast<float>(factor));
++  return MakeBuffer(env, args.pixels.data(), args.pixels.size());
++}
++
++napi_value Blur(napi_env env, napi_callback_info info) {
++  BufferArgs args;
++  if (!ParseCommon(env, info, &args)) return nullptr;
++  auto view = MakeView(&args);
++  imageops::boxBlur3(view);
++  return MakeBuffer(env, args.pixels.data(), args.pixels.size());
++}
++
++napi_value Rotate(napi_env env, napi_callback_info info) {
++  BufferArgs args;
++  if (!ParseCommon(env, info, &args)) return nullptr;
++  auto view = MakeView(&args);
++  std::vector<uint8_t> out(args.pixels.size());
++  int32_t ow = 0;
++  int32_t oh = 0;
++  if (!imageops::rotate90(view, out.data(), &ow, &oh)) {
++    ThrowTypeError(env, "rotate90 failed");
++    return nullptr;
++  }
++  return MakeBuffer(env, out.data(), static_cast<size_t>(ow) * oh * 4);
++}
++
+ napi_value Init(napi_env env, napi_value exports) {
+   napi_property_descriptor desc[] = {
+-      {"nop", nullptr, NopPlaceholder, nullptr, nullptr, nullptr, napi_default, nullptr},
++      {"grayscale", nullptr, Grayscale, nullptr, nullptr, nullptr, napi_default, nullptr},
++      {"adjustBrightness", nullptr, Brightness, nullptr, nullptr, nullptr, napi_default, nullptr},
++      {"adjustContrast", nullptr, Contrast, nullptr, nullptr, nullptr, napi_default, nullptr},
++      {"boxBlur3", nullptr, Blur, nullptr, nullptr, nullptr, napi_default, nullptr},
++      {"rotate90", nullptr, Rotate, nullptr, nullptr, nullptr, napi_default, nullptr},
+   };
+   napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
+   return exports;
+diff -ruN harmony-001-a-base/entry/src/main/ets/pages/Index.ets harmony-001-a-new/entry/src/main/ets/pages/Index.ets
+--- harmony-001-a-base/entry/src/main/ets/pages/Index.ets	2026-11-06 07:47:37
++++ harmony-001-a-new/entry/src/main/ets/pages/Index.ets	2026-11-06 07:47:37
+@@ -32,27 +32,44 @@
+     this.status = '已载入 ' + this.width + 'x' + this.height;
+   }
+ 
+-  // TODO: 从源图取出 RGBA 缓冲区（pixmap.readPixelsToBuffer），调用 imageOps 的对应函数，
+-  // 再用 image.createPixelMap 从返回的 ArrayBuffer 生成新 PixelMap 并赋给 this.preview。
+-  private applyGrayscale(): void {
+-    this.status = '灰度：待实现';
++  private async applyOp(kind: string): Promise<void> {
++    if (this.source === undefined) {
++      return;
++    }
++    const src = this.source;
++    const info = await src.getImageInfo();
++    const w = info.size.width;
++    const h = info.size.height;
++    const buffer = new ArrayBuffer(w * h * 4);
++    await src.readPixelsToBuffer(buffer);
++    let out: ArrayBuffer;
++    if (kind === 'gray') {
++      out = imageOps.grayscale(buffer, w, h);
++    } else if (kind === 'bright') {
++      out = imageOps.adjustBrightness(buffer, w, h, 40);
++    } else if (kind === 'contrast') {
++      out = imageOps.adjustContrast(buffer, w, h, 1.5);
++    } else if (kind === 'blur') {
++      out = imageOps.boxBlur3(buffer, w, h);
++    } else {
++      out = imageOps.rotate90(buffer, w, h);
++    }
++    const opts: image.InitializationOptions = {
++      size: kind === 'rotate' ? { width: h, height: w } : { width: w, height: h },
++      pixelFormat: image.PixelMapFormat.RGBA_8888,
++      editable: true
++    };
++    const next = await image.createPixelMap(out, opts);
++    this.preview = next;
++    this.status = '已应用：' + kind;
++    promptAction.showToast({ message: this.status, duration: 1200 });
+   }
+ 
+-  private applyBrightness(): void {
+-    this.status = '提亮：待实现';
+-  }
+-
+-  private applyContrast(): void {
+-    this.status = '对比度：待实现';
+-  }
+-
+-  private applyBlur(): void {
+-    this.status = '模糊：待实现';
+-  }
+-
+-  private applyRotate(): void {
+-    this.status = '旋转：待实现';
+-  }
++  private applyGrayscale(): void { this.applyOp('gray'); }
++  private applyBrightness(): void { this.applyOp('bright'); }
++  private applyContrast(): void { this.applyOp('contrast'); }
++  private applyBlur(): void { this.applyOp('blur'); }
++  private applyRotate(): void { this.applyOp('rotate'); }
+ 
+   build() {
+     Column({ space: 12 }) {

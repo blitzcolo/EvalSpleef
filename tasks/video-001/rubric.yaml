@@ -1,0 +1,143 @@
+# video-001 rubric（对齐 schemas/rubric.schema.json v1.0）
+schema_version: "1.0"
+task_id: video-001
+rubric_version: 1.0.0
+title: 30 秒片头动画导出 MP4
+items:
+  - id: R1
+    kind: script
+    severity: functional
+    description: 导出文件容器/编码/像素格式符合契约。
+    pass_criteria: probe.py 通过：format_name=mp4、codec_name=h264、pix_fmt=yuv420p。
+    applies_to: [video, log]
+    evidence_required: [command_output]
+    f1_symptom: 导出的片子有些播放器打不开，或者颜色看着不对。
+    f2_evidence: 'ffprobe 原文：format_name=mpeg4、codec_name=mpeg4、pix_fmt 非 yuv420p。'
+    hidden: true
+    tags: [encoding]
+    author: tasks-b
+    notes: 对应缺陷 D1；starter 用 mpeg4 编码。
+
+  - id: R2
+    kind: script
+    severity: functional
+    description: 导出的分辨率与帧率符合契约。
+    pass_criteria: probe.py 通过：1920x1080、avg_frame_rate=30/1、r_frame_rate=30/1。
+    applies_to: [video, log]
+    evidence_required: [command_output]
+    f1_symptom: 片子投到大屏上不够清楚，动作也有点卡。
+    f2_evidence: 'ffprobe 原文：1280x720、25 fps；期望 1920x1080、30 fps。'
+    hidden: true
+    tags: [resolution, frame_rate]
+    author: tasks-b
+    notes: 对应缺陷 D1。
+
+  - id: R3
+    kind: script
+    severity: functional
+    description: 时长为 30.0 秒且总帧数为 900。
+    pass_criteria: probe.py 通过：format.duration 在 29.9..30.1、nb_frames=900。
+    applies_to: [video]
+    evidence_required: [command_output]
+    f1_symptom: 导出来的片子只有 24 秒，发布会槽位是 30 秒。
+    f2_evidence: 'ffprobe 原文：duration=24.000000、nb_frames=600。'
+    hidden: true
+    tags: [duration]
+    author: tasks-b
+    notes: 对应缺陷 D1。
+
+  - id: R4
+    kind: script
+    severity: minor
+    description: 输出为单视频流、无音频流。
+    pass_criteria: probe.py 通过：streams 中不存在 codec_type=audio。
+    applies_to: [video]
+    evidence_required: [command_output]
+    f1_symptom: 片尾有杂音，或者我们后期轨对不上。
+    hidden: true
+    tags: [audio]
+    author: tasks-b
+    notes: 忽略 BGM 素材，纯画面。
+
+  - id: R5
+    kind: script
+    severity: functional
+    description: 节拍表为五段且时间轴覆盖 0-30 秒。
+    pass_criteria: plan_check.py 通过：--plan 输出 >=5 段、首段 0、末段 30、相邻连续。
+    applies_to: [stdout, source]
+    evidence_required: [command_output]
+    f1_symptom: 整支片子几乎是一个静态画面，中间没有节奏变化。
+    f2_evidence: '--plan 输出只有 1 段 0-24s；期望五段覆盖 0-30s。'
+    hidden: true
+    tags: [storyboard]
+    author: tasks-b
+    notes: 对应缺陷 D2/D3。
+
+  - id: R6
+    kind: script
+    severity: functional
+    description: 画面为深色背景且品牌主色贯穿多个场景。
+    pass_criteria: frames.py 通过：抽帧平均亮度 <90、>=4/6 帧含主色、全片最大主色占比 >=0.003。
+    applies_to: [video, screenshot]
+    evidence_required: [video_frame]
+    f1_symptom: 画面一会儿全黑一会儿很亮，看起来不像同一套视觉。
+    f3_visual: 抽帧后看背景：正常是深蓝灰底，有问题时整帧纯黑或背景发灰。
+    hidden: true
+    tags: [visual, palette]
+    author: tasks-b
+    notes: 缺陷 D3 的画面表现。
+
+  - id: R7
+    kind: script
+    severity: functional
+    description: 动画有推进且结尾有落版内容。
+    pass_criteria: frames.py 通过：t=5 与 t=12 平均亮度差 >=3、t=29 的 ink_ratio >=0.005。
+    applies_to: [video]
+    evidence_required: [video_frame]
+    f1_symptom: 结尾没有落版，片子像是没做完就断了。
+    f3_visual: 抽 29 秒那一帧：正常应有 NOVA 与谢谢观看落版，问题帧是大片空白。
+    hidden: true
+    tags: [motion, end_card]
+    author: tasks-b
+    notes: 缺陷 D3。
+
+  - id: R8
+    kind: agent_judge
+    severity: minor
+    description: 五段节奏与配色具有整体视觉一致性。
+    judge_question: 抽帧画面的排版、字号层级与主色使用在五段之间是否保持一致？
+    pass_criteria: 裁判看 6 张抽帧；主色与标题位置/字号无明显跳变即 pass。
+    applies_to: [video, screenshot]
+    evidence_required: [video_frame]
+    f1_symptom: 每一段像不同人做的，风格跳来跳去。
+    hidden: false
+    tags: [visual, consistency]
+    author: tasks-b
+    notes: 软条目，区分 P/A。
+
+  - id: R9
+    kind: agent_judge
+    severity: minor
+    description: 渲染可复现。
+    judge_question: 同一命令两次渲染的同一时间点帧是否逐字节一致？
+    pass_criteria: 裁判对比两次 --render-frame 输出的 sha256，一致即 pass。
+    applies_to: [source, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 每次导出的片子细节都在变，没法做版本管理。
+    hidden: false
+    tags: [determinism]
+    author: tasks-b
+    notes: 契约"确定性"一条。
+
+  - id: R10
+    kind: script
+    severity: fatal
+    description: tests/ 下测试文件哈希未变。
+    pass_criteria: python3 hidden-tests/check_locks.py 退出码 0。
+    applies_to: [source, diff]
+    evidence_required: [command_output]
+    f1_symptom: 无（验证侧发现，永不进入反馈）。
+    hidden: true
+    tags: [anti_cheat]
+    author: tasks-b
+    notes: 硬门槛 HG2。

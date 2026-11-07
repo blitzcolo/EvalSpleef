@@ -1,0 +1,141 @@
+# logic-002 原子化二元 rubric（字段对齐 schemas/rubric.schema.json 1.0）
+schema_version: "1.0"
+task_id: logic-002
+rubric_version: 1.0.0
+title: logic-002 折叠孔洞：答案正确性、格式与推导质量
+
+items:
+  - id: R1
+    kind: script
+    severity: fatal
+    description: 答案文件是纯 JSON 且顶层只有 instances 键
+    pass_criteria: 去空白后以 { 开头、} 结尾；json.loads 成功；顶层键集合 == {instances}
+    applies_to: [answer_text]
+    evidence_required: [file_path, command_output]
+    f1_symptom: 交上来的东西我打不开，像一段说明文字。
+    f2_evidence: "解析输出：顶层键集合不符合预期。"
+    notes: "检测来源：script；check_ids：verify_submission.HG2"
+    tags: [format, json]
+
+  - id: R2
+    kind: script
+    severity: fatal
+    description: 4 组 holes 与唯一解完全一致
+    pass_criteria: 4 个 id 齐全；每个 holes 列表与唯一解逐位相同
+    applies_to: [answer_text]
+    evidence_required: [file_path]
+    f1_symptom: 有几组你说的洞跟我自己折出来的对不上。
+    f2_evidence: "比对输出：实例 2 期望 8 个洞，提交 7 个；实例 4 有 4 处位置不同。"
+    notes: "检测来源：script；check_ids：verify_submission.HG1, checker.HOLES_MISMATCH"
+    tags: [answer, correctness]
+
+  - id: R3
+    kind: script
+    severity: functional
+    description: holes 是去重后的升序编号列表
+    pass_criteria: 每个 holes 严格升序、无重复、取值 1..32
+    applies_to: [answer_text]
+    evidence_required: [file_path]
+    f1_symptom: 洞的编号顺序有点怪，大的排前面了。
+    f2_evidence: "格式校验输出：实例 1 holes 为降序 [27,22,11,6]。"
+    notes: "检测来源：script；check_ids：checker.HOLES_UNSORTED, checker.HOLES_DUPLICATED"
+    tags: [format]
+
+  - id: R4
+    kind: script
+    severity: fatal
+    description: 受保护输入 instances.json 未被修改
+    pass_criteria: 工作区 instances.json 的 sha256 等于题包预置哈希
+    applies_to: [answer_text, doc]
+    evidence_required: [file_path]
+    f1_symptom: 你动过原始记录吗？我这边对不上最开始那一版了。
+    f2_evidence: "哈希输出：当前文件哈希与预置哈希不一致。"
+    notes: "检测来源：script；check_ids：verify_submission.HG3"
+    tags: [anti_cheat, integrity]
+
+  - id: R5
+    kind: llm_judge
+    severity: functional
+    description: 推导给出了折叠过程的中间状态依据
+    judge_question: 该实例的推导是否给出了折叠过程中可复核的中间状态？
+    pass_criteria: 至少写出一次折叠后某列包含哪些格子，或折后宽度与层数的具体关系
+    fail_examples:
+      - 只写「根据折叠规则可算出」而没有中间状态
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 推导里看不到折的过程中哪些格子叠在一起。
+    tags: [derivation, evidence]
+
+  - id: R6
+    kind: llm_judge
+    severity: functional
+    description: 推导解释了我的洞来自哪些层/哪些格子
+    judge_question: 该实例的推导是否说明了洞对应的原始格子来源？
+    pass_criteria: 明确指出每个孔位穿过了哪几层，或给出柱状对照关系
+    fail_examples:
+      - 只给最终列表不解释来源
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 你只给了洞的列表，我想知道每个洞是怎么来的。
+    tags: [derivation]
+
+  - id: R7
+    kind: llm_judge
+    severity: minor
+    description: 推导仅引用可见的题目信息
+    judge_question: 推导是否只引用题目中可见的折叠序列和打孔列？
+    pass_criteria: 引用内容都能在 instances.json 与题面中找到
+    fail_examples:
+      - 引用隐藏答案或测试脚本
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 推导里出现了记录里没有的东西，我不知道哪来的。
+    tags: [derivation]
+
+  - id: R8
+    kind: llm_judge
+    severity: minor
+    description: derivation 简洁、无寒暄且结论与答案一致
+    judge_question: 推导结论是否与提交的洞列表一致？
+    pass_criteria: derivation 是陈述句、无对话内容，且描述的洞与 holes 相同
+    fail_examples:
+      - derivation 说洞在 2、3 格但 holes 写 5、6
+    applies_to: [derivation, answer_text]
+    evidence_required: [file_path]
+    f1_symptom: 推导里说的洞跟列表里写的对不上。
+    tags: [derivation, consistency]
+
+  - id: R9
+    kind: script
+    severity: minor
+    description: 推导篇幅合规（≤300 字、≤3 句、无代码块）
+    pass_criteria: 每个 derivation 长度 ≤ 300、句数 ≤ 3、不含三反引号代码块
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 推导太长了，我找不到重点。
+    f2_evidence: "格式校验输出：实例 2 推导 418 字符，超过 300。"
+    notes: "检测来源：script；check_ids：checker.DERIVATION_TOO_LONG"
+    tags: [format, derivation]
+
+  - id: R10
+    kind: script
+    severity: fatal
+    description: 每个实例都有 derivation 字段
+    pass_criteria: 4 个实例均含字符串 derivation
+    applies_to: [derivation]
+    evidence_required: [file_path]
+    f1_symptom: 有一组只有洞没有推导，我没法判断是不是猜的。
+    f2_evidence: "结构校验输出：实例 4 缺少 derivation。"
+    notes: "检测来源：script；check_ids：checker.DERIVATION_MISSING"
+    tags: [format, derivation]
+
+extensions:
+  stopping_rule:
+    success: 所有 hard_gates 通过 且 无未修复的 functional/fatal 缺陷
+    blocking_severities: [functional, fatal]
+    minor_affects: P/A
+    max_open_blocking: 0
+  feedback_capacity:
+    max_feedback_rounds: 3
+    note: functional/fatal 共 5 条；F1 每轮只报一条，优先报硬门槛类失败。
+  author: tasks-a

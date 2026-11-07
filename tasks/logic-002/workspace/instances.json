@@ -1,0 +1,52 @@
+{
+  "task": "logic-002",
+  "family_version": "fold-and-punch-v1",
+  "panel_count": 32,
+  "instances": [
+    {
+      "id": 1,
+      "folds": [
+        "L",
+        "L"
+      ],
+      "punches": [
+        3
+      ]
+    },
+    {
+      "id": 2,
+      "folds": [
+        "L",
+        "L",
+        "R"
+      ],
+      "punches": [
+        4
+      ]
+    },
+    {
+      "id": 3,
+      "folds": [
+        "R",
+        "L",
+        "L"
+      ],
+      "punches": [
+        1,
+        4
+      ]
+    },
+    {
+      "id": 4,
+      "folds": [
+        "R",
+        "L",
+        "L",
+        "L"
+      ],
+      "punches": [
+        1
+      ]
+    }
+  ]
+}

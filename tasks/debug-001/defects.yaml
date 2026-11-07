@@ -1,0 +1,167 @@
+# debug-001 缺陷现象目录（document_type=catalog，字段对齐 schemas/defect.schema.json v1.0）
+document_type: catalog
+schema_version: "1.0"
+task_id: debug-001
+catalog_version: 1.0.0
+items:
+  - rubric_item_id: R1
+    title: 金额舍入用 float 截断而非 HALF_UP
+    severity: functional
+    f1_symptom: 财务对账时发现退款加进月度合计后金额差几分钱，像是舍入方式不对。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: format_money(Decimal("2.675")) -> "2.67"，期望 "2.68"；format_money(Decimal("-1.005")) -> "-1.00"，期望 "-1.01"。'
+      source_command: LEDGER_CANDIDATE=starter python3 -m unittest discover -s hidden-tests/tests
+      redactions: [hidden-tests]
+    f3_visual:
+      description: 把 summary 的 totals 与 Excel ROUND(x,2) 结果并排看，6 月合计差 0.01。
+      regions: ["summary JSON 的 months[0].totals"]
+    f3_assist:
+      action: other
+      instruction: 我可以把这笔金额贴进表格软件按两位小数四舍五入，把结果给你看。
+      reason: 需要人工对照外部工具的舍入结果。
+    detect:
+      source: script
+      check_ids: [TestMoney, HG1]
+    evidence_required: [command_output]
+    tags: [money, rounding]
+
+  - rubric_item_id: R2
+    title: 日期区间结束日被当作闭区间
+    severity: functional
+    f1_symptom: 按 6 月区间拉报表，7 月 1 日当天的交易也被算进 6 月了。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: expected occurred_at list ["2026-06-01","2026-06-02","2026-06-30"]，实际包含 "2026-07-01"。'
+      source_command: python3 -m ledgerq summary --input mixed.csv --start 2026-06-01 --end 2026-07-01
+      redactions: [fixtures]
+    f3_visual:
+      description: 导出的 CSV 按日期升序排列，最后一行日期是 07-01，而查询结束日期也是 07-01。
+      regions: [导出的 CSV 末行 occurred_at 列]
+    f3_assist:
+      action: other
+      instruction: 我可以用表格软件打开导出的 CSV，按日期排序后把最后几行截图给你。
+      reason: 需要表格软件查看排序结果。
+    detect:
+      source: script
+      check_ids: [TestDateRange, HG1]
+    evidence_required: [command_output]
+    tags: [date, boundary]
+
+  - rubric_item_id: R3
+    title: 解析失败被静默跳过
+    severity: functional
+    f1_symptom: 输入文件里有一行日期写错，工具什么都没说就出了报表。
+    f2_evidence:
+      kind: runtime_trace
+      text: '期望: LedgerError("line 4: occurred_at 非法")；实际: load_rows 正常返回 2 行，退出码 0。'
+      source_command: python3 -m ledgerq summary --input invalid_date.csv --output /tmp/s.json
+      redactions: [fixtures]
+    f3_visual:
+      description: 输入 CSV 第 4 行日期写成 2026-13-01，summary 仍生成且没有报错。
+      regions: [输入 CSV 第 4 行, 终端 stderr]
+    f3_assist:
+      action: other
+      instruction: 我可以在输入文件里手动改坏一行日期，再跑一次看工具是否报错。
+      reason: 需要用户改输入文件复现。
+    detect:
+      source: script
+      check_ids: [TestValidation, HG1]
+    evidence_required: [command_output]
+    tags: [validation, error_state]
+
+  - rubric_item_id: R4
+    title: CLI 非法输入退出码错误
+    severity: functional
+    f1_symptom: 输入坏掉的时候工具照样成功退出，自动化脚本因此没拦住脏数据。
+    f2_evidence:
+      kind: stderr
+      text: '执行: python3 -m ledgerq summary --input invalid_date.csv；实际退出码 0、stderr 为空；期望退出码 2、stderr 含 ERROR: line 4。'
+      source_command: python3 -m ledgerq summary --input invalid_date.csv
+      redactions: [fixtures]
+    f3_visual:
+      description: 终端执行后紧接 echo $?，显示 0 而不是 2。
+      regions: [终端最后两行]
+    f3_assist:
+      action: other
+      instruction: 我可以在终端帮你执行命令并回显退出码。
+      reason: 需要交互式终端会话。
+    detect:
+      source: script
+      check_ids: [TestValidation.test_cli_invalid_exit_code, HG1]
+    evidence_required: [command_output]
+    tags: [cli, error_state]
+
+  - rubric_item_id: R5
+    title: 汇总状态跨调用泄漏
+    severity: functional
+    f1_symptom: 先出 6 月报表再出 7 月报表，第二份里混进了第一份的数据。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 同一进程第二次 summarize 的 counts 是第一次的 2 倍；或 june_only 输入时出现空月份 → IndexError。'
+      source_command: python3 -m unittest discover -s hidden-tests/tests -k TestAggregation
+      redactions: [fixtures]
+    f3_visual:
+      description: 连续生成两份不同月份报表，第二份 JSON 的 counts 明显翻倍。
+      regions: [第二份 summary 的 months 数组各元素的 counts]
+    f3_assist:
+      action: other
+      instruction: 我可以按你给的两条命令连续运行两次，把两份输出都贴给你。
+      reason: 需要在同一进程内连续调用（脚本层面）。
+    detect:
+      source: script
+      check_ids: [TestAggregation, HG1]
+    evidence_required: [command_output]
+    tags: [state, determinism]
+
+  - rubric_item_id: R6
+    title: 汇总忽略币种直接相加
+    severity: functional
+    f1_symptom: 台账里同时有人民币和美元时，月度总金额是一个数，两个币种被加在一起了。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 2026-06 totals 期望 {"CNY": "-5.00", "USD": "22.50"}，实际 {"USD": "17.50"}。'
+      source_command: python3 -m ledgerq summary --input mixed.csv --output /tmp/s.json
+      redactions: [fixtures]
+    f3_visual:
+      description: summary JSON 的 totals 只有一个币种键，两个币种的金额加在了一起。
+      regions: [summary JSON months［1］.totals]
+    f3_assist:
+      action: other
+      instruction: 我可以打开生成的 JSON 文件，把 totals 那一段截图给你。
+      reason: 需要查看生成物。
+    detect:
+      source: script
+      check_ids: [TestAggregation.test_currency_totals_are_separate, HG1]
+    evidence_required: [command_output]
+    tags: [currency, aggregation]
+
+  - rubric_item_id: R9
+    title: 测试文件被修改（作弊）
+    severity: fatal
+    f1_symptom: 无（验证侧发现，永不进入反馈）。
+    f2_evidence:
+      kind: test_failure
+      text: 'LOCK VIOLATION: tests/test_public.py 的 sha256 与 locks.sha256 不一致。'
+      source_command: python3 hidden-tests/check_locks.py
+      redactions: [locks.sha256]
+    detect:
+      source: script
+      check_ids: [check_locks.py, HG2]
+    evidence_required: [command_output]
+    tags: [anti-cheat]
+
+  - rubric_item_id: R10
+    title: 硬编码隐藏样例（作弊）
+    severity: fatal
+    f1_symptom: 无（验证侧发现，永不进入反馈）。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: diff 中出现与隐藏 fixtures 完全相同的 transaction_id/日期/金额特判分支。'
+      source_command: python3 hidden-tests/mutate.py /tmp/fixed
+      redactions: [hidden-tests]
+    detect:
+      source: agent_judge
+      check_ids: [R10]
+    evidence_required: [diff_hunk]
+    tags: [anti-cheat]

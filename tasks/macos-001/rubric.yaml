@@ -1,0 +1,127 @@
+# macos-001 rubric（对齐 schemas/rubric.schema.json v1.0）
+schema_version: "1.0"
+task_id: macos-001
+rubric_version: 1.0.0
+title: Metal 粒子渲染 20fps→60fps 优化
+items:
+  - id: R1
+    kind: script
+    severity: fatal
+    description: 5 次独立运行的平均帧时间中位数 <= 16.7ms。
+    pass_criteria: checks.py --mode perf 通过：本机参考解 A/B 分别 0.167/0.105ms，基线 57.0ms。
+    applies_to: [frame_trace, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 测下来平均帧时间 57ms 左右，离 60fps 差得远。
+    f2_evidence: 'bench 输出：avg_frame_ms=57.0、fps=17.5；期望中位数 <= 16.7ms。'
+    hidden: true
+    tags: [performance, frame_time]
+    author: tasks-b
+    notes: 硬门槛 HG1；只在裸机性能机计分。
+
+  - id: R2
+    kind: script
+    severity: functional
+    description: 渲染结果包含可见粒子（非背景像素 >= 画面 1%）。
+    pass_criteria: checks.py --mode functional 通过：640x360/2000 粒子时 non_background_pixels > 2304。
+    applies_to: [frame_trace, screenshot]
+    evidence_required: [video_frame]
+    f1_symptom: 优化之后画面变成一片黑，粒子不见了。
+    hidden: true
+    tags: [visual]
+    author: tasks-b
+    notes: 硬门槛 HG3 的一部分。
+
+  - id: R3
+    kind: script
+    severity: minor
+    description: JSON 输出字段与入口参数语义保持不变。
+    pass_criteria: checks.py 校验 11 个必需字段存在且 particles/width/height/frames 与入参一致。
+    applies_to: [stdout]
+    evidence_required: [command_output]
+    f1_symptom: 我们 CI 解析 JSON 的那段脚本挂了。
+    hidden: true
+    tags: [contract]
+    author: tasks-b
+    notes: 回归保护项。
+
+  - id: R4
+    kind: script
+    severity: functional
+    description: 渲染确定性（同参数两次运行 frame_hash 相同）。
+    pass_criteria: functional 检查两次运行 frame_hash 一致。
+    applies_to: [stdout]
+    evidence_required: [command_output]
+    f1_symptom: 每次跑出来的画面细节都在变，没法做回归对比。
+    hidden: true
+    tags: [determinism]
+    author: tasks-b
+    notes: 参考解 B 曾因使用墙钟时间导致不确定，已改为帧序号驱动。
+
+  - id: R5
+    kind: agent_judge
+    severity: functional
+    description: 消除逐粒子 draw call。
+    judge_question: 提交实现是否把粒子合批为与粒子数无关的常数次 draw call？
+    pass_criteria: 裁判读 diff：drawPrimitives 调用次数不随粒子数增长即 pass；仍每粒子一次即 fail。
+    applies_to: [source, diff]
+    evidence_required: [diff_hunk]
+    f1_symptom: 粒子一多就掉帧，感觉 CPU 那侧卡住了。
+    hidden: false
+    tags: [batching]
+    author: tasks-b
+    notes: 参考解 A/B 都满足；对应缺陷 D2。
+
+  - id: R6
+    kind: agent_judge
+    severity: functional
+    description: 消除每帧阻塞等待。
+    judge_question: 渲染循环内是否不再每帧阻塞等待 GPU 完成？
+    pass_criteria: 裁判读 diff：渲染循环内无每帧 waitUntilCompleted（最后一帧回读除外）即 pass。
+    applies_to: [source, diff]
+    evidence_required: [diff_hunk]
+    f1_symptom: 感觉 GPU 每帧都空转，帧率上不去。
+    hidden: false
+    tags: [synchronization]
+    author: tasks-b
+    notes: 参考解 A 用三缓冲 + semaphore；B 用 GPU 内动画。
+
+  - id: R7
+    kind: agent_judge
+    severity: minor
+    description: 未引入第三方依赖或改变构建方式。
+    judge_question: 提交产物是否没有引入任何第三方依赖？
+    pass_criteria: 裁判执行 make bench 成功且 diff 中无第三方包引入。
+    applies_to: [source, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 换台机器就构建不出来了。
+    hidden: false
+    tags: [build]
+    author: tasks-b
+    notes: 沙箱无网络。
+
+  - id: R8
+    kind: script
+    severity: fatal
+    description: tests/ 下测试文件哈希未变。
+    pass_criteria: python3 hidden-tests/check_locks.py 退出码 0。
+    applies_to: [source, diff]
+    evidence_required: [command_output]
+    f1_symptom: 无（验证侧发现，永不进入反馈）。
+    hidden: true
+    tags: [anti_cheat]
+    author: tasks-b
+    notes: 硬门槛 HG2。
+
+  - id: R9
+    kind: agent_judge
+    severity: minor
+    description: 关键优化点有注释或命名支撑。
+    judge_question: 提交实现中的关键优化点是否能通过注释或命名理解？
+    pass_criteria: 裁判检查 diff 中 GPU 相关新增/修改代码，有必要的注释或命名说明即 pass。
+    applies_to: [source, diff]
+    evidence_required: [diff_hunk]
+    f1_symptom: 代码看不懂，后续没人敢改。
+    hidden: false
+    tags: [quality]
+    author: tasks-b
+    notes: 软条目。

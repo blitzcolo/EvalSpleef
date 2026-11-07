@@ -1,0 +1,213 @@
+diff -ruN a/ledgerq/dates.py b/ledgerq/dates.py
+--- a/ledgerq/dates.py	2026-11-06 07:19:59
++++ b/ledgerq/dates.py	2026-11-06 07:19:59
+@@ -1,20 +1,17 @@
+-"""日期解析与区间筛选。"""
++"""日期解析与区间筛选（参考解 B）：改用 fromisoformat 与显式区间判定。"""
+ 
+ from datetime import date
+ 
+-ISO_FORMAT = "%Y-%m-%d"
+ 
+-
+ def parse_date(text: str) -> date:
+-    """解析 YYYY-MM-DD；非法输入抛 ValueError。"""
+-    year, month, day = text.split("-")
+-    return date(int(year), int(month), int(day))
++    """解析 ISO 日期（YYYY-MM-DD）；非法输入抛 ValueError。"""
++    if not isinstance(text, str) or len(text) != 10 or text[4] != "-" or text[7] != "-":
++        raise ValueError(f"日期格式应为 YYYY-MM-DD，收到: {text!r}")
++    return date.fromisoformat(text)
+ 
+ 
+ def in_range(value: date, start: date | None, end: date | None) -> bool:
+-    """判断日期是否落在区间内，区间为左闭右开 [start, end)。"""
+-    if start is not None and value < start:
+-        return False
+-    if end is not None and value <= end:
+-        return True
+-    return True
++    """左闭右开区间 [start, end)。"""
++    lower_ok = start is None or value >= start
++    upper_ok = end is None or value < end
++    return lower_ok and upper_ok
+diff -ruN a/ledgerq/money.py b/ledgerq/money.py
+--- a/ledgerq/money.py	2026-11-06 07:19:59
++++ b/ledgerq/money.py	2026-11-06 07:19:59
+@@ -1,19 +1,20 @@
+-"""金额处理。
++"""金额处理（参考解 B）：显式指数与 localcontext 控制舍入。"""
+ 
+-契约：使用 Decimal，HALF_UP 舍入到 2 位小数，不得经 float 中转。
+-"""
++from decimal import Decimal, ROUND_HALF_UP, localcontext
+ 
+-from decimal import Decimal
++TWO_PLACES = Decimal("1.00")
+ 
+-CENT = Decimal("0.01")
+ 
+-
+ def round_money(amount) -> Decimal:
+-    """把输入金额规整为 2 位小数的 Decimal。"""
+-    value = float(amount)
+-    return Decimal(int(value * 100)) / 100
++    """按 HALF_UP 舍入到 2 位小数。"""
++    value = amount if isinstance(amount, Decimal) else Decimal(str(amount))
++    with localcontext() as ctx:
++        ctx.prec = 28
++        return value.quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+ 
+ 
+ def format_money(amount) -> str:
+-    """输出固定 2 位小数的金额字符串，例如 120.00、-0.05。"""
+-    return f"{round_money(amount):.2f}"
++    """固定两位小数字符串。"""
++    rounded = round_money(amount)
++    sign = "-" if rounded < 0 else ""
++    return f"{sign}{abs(rounded):.2f}"
+diff -ruN a/ledgerq/pipeline.py b/ledgerq/pipeline.py
+--- a/ledgerq/pipeline.py	2026-11-06 07:19:59
++++ b/ledgerq/pipeline.py	2026-11-06 07:19:59
+@@ -1,6 +1,7 @@
+-"""加载、校验与汇总流水。"""
++"""加载、校验与汇总流水（参考解 B）：csv.reader + defaultdict 单遍聚合。"""
+ 
+ import csv
++from collections import Counter, defaultdict
+ from decimal import Decimal
+ 
+ from .dates import in_range, parse_date
+@@ -11,37 +12,48 @@
+ VALID_KINDS = ("charge", "refund")
+ 
+ 
+-def load_rows(path: str) -> list[dict]:
+-    """读取 CSV 并校验每一行；任何不合法数据抛 LedgerError。
++def _clean(value) -> str:
++    return (value or "").strip()
+ 
+-    Row 字段：transaction_id / occurred_at(date) / currency /
+-    amount(Decimal) / kind / line / signed_amount(Decimal)。
+-    """
+-    rows = []
+-    seen = set()
++
++def load_rows(path: str) -> list[dict]:
++    """读取 CSV 并逐行校验：列数、日期、币种、金额、kind、重复 ID。"""
++    rows: list[dict] = []
++    seen: set[str] = set()
+     with open(path, newline="", encoding="utf-8") as handle:
+-        reader = csv.DictReader(handle)
+-        if reader.fieldnames != list(COLUMNS):
++        reader = csv.reader(handle)
++        try:
++            header = next(reader)
++        except StopIteration:
++            raise LedgerError("文件为空") from None
++        if tuple(_clean(cell) for cell in header) != COLUMNS:
+             raise LedgerError(f"表头应为 {','.join(COLUMNS)}")
+-        for line_no, raw in enumerate(reader, start=2):
+-            try:
+-                transaction_id = (raw["transaction_id"] or "").strip()
+-                occurred_at = parse_date((raw["occurred_at"] or "").strip())
+-                currency = (raw["currency"] or "").strip()
+-                amount = Decimal((raw["amount"] or "").strip())
+-                kind = (raw["kind"] or "").strip()
+-            except (KeyError, ValueError, ArithmeticError):
+-                continue
+-
++        for line_no, record in enumerate(reader, start=2):
++            if len(record) != len(COLUMNS):
++                raise LedgerError(f"列数应为 {len(COLUMNS)}，实际 {len(record)}", line_no)
++            transaction_id, occurred_text, currency, amount_text, kind = (
++                _clean(cell) for cell in record
++            )
+             if not transaction_id:
+                 raise LedgerError("transaction_id 不能为空", line_no)
+             if transaction_id in seen:
+                 raise LedgerError(f"重复的 transaction_id: {transaction_id}", line_no)
++            try:
++                occurred_at = parse_date(occurred_text)
++            except ValueError as exc:
++                raise LedgerError(f"occurred_at 非法: {occurred_text}", line_no) from exc
+             if kind not in VALID_KINDS:
+                 raise LedgerError(f"未知的 kind: {kind}", line_no)
++            if len(currency) != 3 or currency.upper() != currency or not currency.isalpha():
++                raise LedgerError(f"currency 非法: {currency}", line_no)
++            try:
++                amount = Decimal(amount_text)
++            except ArithmeticError as exc:
++                raise LedgerError(f"amount 非法: {amount_text}", line_no) from exc
+             if amount < 0:
+                 raise LedgerError("amount 必须非负", line_no)
+             seen.add(transaction_id)
++            delta = amount if kind == "charge" else -amount
+             rows.append(
+                 {
+                     "transaction_id": transaction_id,
+@@ -50,42 +62,47 @@
+                     "amount": amount,
+                     "kind": kind,
+                     "line": line_no,
+-                    "signed_amount": amount if kind == "charge" else -amount,
++                    "signed_amount": delta,
+                 }
+             )
+     return rows
+ 
+ 
+ def select_range(rows, start=None, end=None):
+-    """按 [start, end) 过滤；start/end 接受 date 或 None。"""
++    """按 [start, end) 过滤。"""
+     return [row for row in rows if in_range(row["occurred_at"], start, end)]
+ 
+ 
+-def group_by_month(rows, acc={}):
+-    """按日历月分组；返回 {"YYYY-MM": [row, ...]}。"""
++def group_by_month(rows, acc=None):
++    """按日历月分组；返回按月份升序的 dict。"""
++    bucket = acc if acc is not None else {}
+     for row in rows:
+-        key = row["occurred_at"].strftime("%Y-%m")
+-        acc.setdefault(key, []).append(row)
+-    return acc
++        bucket.setdefault(row["occurred_at"].strftime("%Y-%m"), []).append(row)
++    return dict(sorted(bucket.items()))
+ 
+ 
+ def summarize(rows, start=None, end=None) -> dict:
+-    """生成 summary JSON 结构。"""
++    """单遍聚合：月份 -> 币种 -> Decimal，最后统一格式化。"""
+     selected = select_range(rows, start, end)
+-    months = group_by_month(selected)
++    sums: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
++    counts: dict[str, Counter] = defaultdict(Counter)
++    months: dict[str, list[dict]] = defaultdict(list)
++    for row in selected:
++        month = row["occurred_at"].strftime("%Y-%m")
++        months[month].append(row)
++        sums[month][row["currency"]] += row["signed_amount"]
++        counts[month][row["kind"]] += 1
+     result = []
+     for month in sorted(months):
+-        month_rows = months[month]
+-        currency = month_rows[0]["currency"]
+-        total = sum((row["signed_amount"] for row in month_rows), Decimal("0"))
+-        counts = {"charge": 0, "refund": 0}
+-        for row in month_rows:
+-            counts[row["kind"]] += 1
++        totals = {cur: format_money(total) for cur, total in sorted(sums[month].items())}
+         result.append(
+             {
+                 "month": month,
+-                "totals": {currency: format_money(total)},
+-                "counts": counts,
++                "totals": totals,
++                "counts": {
++                    "charge": counts[month]["charge"],
++                    "refund": counts[month]["refund"],
++                },
+             }
+         )
+     return {"months": result, "rows": len(selected)}

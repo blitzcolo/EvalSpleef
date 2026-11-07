@@ -1,0 +1,165 @@
+# web-001 原子化二元 rubric（字段对齐 schemas/rubric.schema.json 1.0）
+schema_version: "1.0"
+task_id: web-001
+rubric_version: 1.0.0
+title: web-001 看板交互：功能正确性、可访问性与视觉
+
+items:
+  - id: R1
+    kind: script
+    severity: fatal
+    description: 跨列拖拽落到目标卡片之前并立即生效
+    pass_criteria: 拖 card-1 到 doing 列的 card-4 上，松手后 doing 列为 [card-1, card-4]，todo 计数 2
+    applies_to: [screenshot, source]
+    evidence_required: [screenshot, command_output]
+    f1_symptom: 我按住卡片拖到另一列松手，它又弹回去了。
+    f2_evidence: "自动化输出：T2 期望 doing=[card-1, card-4]，实际 [card-4, card-1] / 未移动。"
+    notes: "检测来源：agent_judge；check_ids：playwright.T2"
+    tags: [drag, functional]
+
+  - id: R2
+    kind: script
+    severity: fatal
+    description: 列内排序可把卡片插到目标卡片前
+    pass_criteria: 拖 card-3 到 card-1 上，todo 变为 [card-3, card-1, card-2]
+    applies_to: [screenshot, source]
+    evidence_required: [screenshot, command_output]
+    f1_symptom: 同一列里拖动卡片，顺序还是原来的。
+    f2_evidence: "自动化输出：T3 期望 todo=[card-3, card-1, card-2]，实际顺序未变。"
+    notes: "检测来源：agent_judge；check_ids：playwright.T3"
+    tags: [drag, reorder]
+
+  - id: R3
+    kind: script
+    severity: fatal
+    description: 拖拽与主题选择在刷新后保持
+    pass_criteria: 移动卡片后 reload 顺序不变；切换主题后 reload 的 html[data-theme] 仍为 dark
+    applies_to: [screenshot, source]
+    evidence_required: [screenshot, command_output]
+    f1_symptom: 拖完刷新一下，顺序全变回原来的了。
+    f2_evidence: "自动化输出：T2/T7 reload 后状态回退到种子 / data-theme=light。"
+    notes: "检测来源：agent_judge；check_ids：playwright.T2, playwright.T7"
+    tags: [persistence]
+
+  - id: R4
+    kind: script
+    severity: functional
+    description: 键盘可跨列移动卡片
+    pass_criteria: 聚焦卡片后按 ArrowRight 进入下一列，ArrowLeft 回到上一列；顺序立即生效
+    applies_to: [source, screenshot]
+    evidence_required: [command_output]
+    f1_symptom: 用 Tab 能选中卡片，但按方向键什么都不动。
+    f2_evidence: "自动化输出：T4 按 ArrowRight 后 doing 列未出现 card-1。"
+    notes: "检测来源：agent_judge；check_ids：playwright.T4"
+    tags: [a11y, keyboard]
+
+  - id: R5
+    kind: script
+    severity: functional
+    description: 键盘可在列内上下重排
+    pass_criteria: 聚焦卡片后 ArrowUp/ArrowDown 改变列内顺序，刷新后保持
+    applies_to: [source, screenshot]
+    evidence_required: [command_output]
+    f1_symptom: 方向键上下按了没反应，卡片顺序没变。
+    f2_evidence: "自动化输出：T5 按 ArrowUp 后 todo 顺序未变化。"
+    notes: "检测来源：agent_judge；check_ids：playwright.T5"
+    tags: [a11y, keyboard]
+
+  - id: R6
+    kind: script
+    severity: functional
+    description: 空列显示空状态提示并更新计数
+    pass_criteria: 清空 todo 后 empty-state-todo 可见、计数 0；done 列计数为 5
+    applies_to: [screenshot]
+    evidence_required: [screenshot, command_output]
+    f1_symptom: 我把一列卡片都拖走之后，下面那句提示还是不出现。
+    f2_evidence: "自动化输出：T6 empty-state-todo 期望 visible，实际 hidden。"
+    notes: "检测来源：agent_judge；check_ids：playwright.T6"
+    tags: [empty_state, counts]
+
+  - id: R7
+    kind: script
+    severity: functional
+    description: 暗色模式整页生效且刷新保持
+    pass_criteria: 点击后 html[data-theme]=dark，body 背景色变化；reload 后仍为 dark
+    applies_to: [screenshot]
+    evidence_required: [screenshot, command_output]
+    f1_symptom: 点切换主题没反应，页面还是白的。
+    f2_evidence: "自动化输出：T7 点击后 data-theme 仍为 light。"
+    notes: "检测来源：agent_judge；check_ids：playwright.T7"
+    tags: [theme]
+
+  - id: R8
+    kind: script
+    severity: fatal
+    description: DOM 契约（testid/column/card-id）保持不变
+    pass_criteria: T10 通过；[data-card-id] 共 6 个，三列 testid 与列表均存在
+    applies_to: [source]
+    evidence_required: [command_output]
+    f1_symptom: 我的自动化脚本找不到卡片了。
+    f2_evidence: "自动化输出：T10 [data-card-id] 数量不为 6。"
+    notes: "检测来源：agent_judge；check_ids：playwright.T10"
+    tags: [contract]
+
+  - id: R9
+    kind: script
+    severity: functional
+    description: 页面加载无控制台错误
+    pass_criteria: T1 收集的 console error 与 pageerror 均为空
+    applies_to: [log]
+    evidence_required: [log_excerpt, command_output]
+    f1_symptom: 控制台里有一行红字。
+    f2_evidence: "控制台输出：Uncaught TypeError（原文）。"
+    notes: "检测来源：agent_judge；check_ids：playwright.T1"
+    tags: [console, robustness]
+
+  - id: R10
+    kind: llm_judge
+    severity: minor
+    description: 暗色模式对比度可读（正文与背景对比明显）
+    judge_question: 暗色模式截图中正文文字与背景的对比是否清晰可读？
+    pass_criteria: 三张截图（浅色/暗色列表/暗色空状态）中暗色下文字与卡片背景可辨认，无同色系
+    fail_examples:
+      - 暗色模式背景变黑但卡片仍是白色
+      - 文字与背景接近同色
+    applies_to: [screenshot]
+    evidence_required: [screenshot]
+    f1_symptom: 暗色模式切了，但卡片和字还是亮的，看着很刺眼。
+    tags: [visual, contrast]
+
+  - id: R11
+    kind: llm_judge
+    severity: minor
+    description: 实现代码无遗留调试输出与死代码
+    judge_question: 实现代码是否没有遗留的调试输出？
+    pass_criteria: 逻辑与渲染分离；无 console.log 调试残留；无死代码
+    fail_examples:
+      - 所有逻辑塞在全局事件监听里且保留 console.log
+    applies_to: [source]
+    evidence_required: [diff_hunk]
+    f1_symptom: 页面能用，但代码里留了一堆调试输出。
+    tags: [maintainability]
+
+  - id: R12
+    kind: llm_judge
+    severity: minor
+    description: 拖拽过程有可感知的视觉反馈
+    judge_question: 拖拽过程中是否有可感知的视觉反馈（半透明、落点高亮等）？
+    pass_criteria: 截图或实现中可见 dragging 状态样式，落点有提示
+    fail_examples:
+      - 拖动时页面毫无变化
+    applies_to: [screenshot, source]
+    evidence_required: [screenshot]
+    f1_symptom: 拖拽时我只看到卡片变半透明，没看到插入位置的提示。
+    tags: [visual, feedback]
+
+extensions:
+  stopping_rule:
+    success: 所有 hard_gates 通过 且 无未修复的 functional/fatal 缺陷
+    blocking_severities: [functional, fatal]
+    minor_affects: P/A
+    max_open_blocking: 0
+  feedback_capacity:
+    max_feedback_rounds: 4
+    note: 12 条中 blocking 9 条（多为 script 硬门槛镜像）；F1 每轮只报一条，先报拖拽/持久化类。
+  author: tasks-a

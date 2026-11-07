@@ -1,0 +1,143 @@
+# vulkan-001 缺陷现象目录（document_type=catalog）
+# 约定：hidden=true 的条目只提供 F1 现象，F2/F3 素材不得出现（见 docs/03 §8）。
+document_type: catalog
+schema_version: "1.0"
+task_id: vulkan-001
+catalog_version: 1.0.0
+items:
+  - rubric_item_id: R1
+    title: 构建失败
+    severity: fatal
+    f1_symptom: 我这边根本编译不出来，一个能跑的程序都没有。
+    f2_evidence:
+      kind: compile_error
+      text: |-
+        > [ 25%] Building CXX object CMakeFiles/vulkan_shadow.dir/src/main.cpp.o
+        error: 'VK_IMAGE_USAGE_SAMPLED_BIT' was not declared in this scope
+        ninja: build stopped: subcommand failed.
+      source_command: cmake --build build -j
+      redactions: [<PATH>]
+    detect:
+      source: script
+      check_ids: [HG1]
+    evidence_required: [command_output]
+    tags: [build]
+
+  - rubric_item_id: R2
+    title: 验证层 error 或运行时崩溃
+    severity: fatal
+    f1_symptom: 程序跑起来窗口闪一下就没了。
+    f2_evidence:
+      kind: stderr
+      text: |-
+        [vk] Validation Error: [ VUID-VkImageCreateInfo-usage-00966 ] Object 0: ...
+        [vk] Validation Error: [ VUID-vkCmdDraw-None-08600 ] ...
+      source_command: ./build/vulkan_shadow --frames 120
+      redactions: [<HANDLE>, <VUID 细节>]
+    detect:
+      source: script
+      check_ids: [HG1]
+    evidence_required: [log_excerpt]
+    tags: [validation]
+
+  - rubric_item_id: R3
+    title: 没有输出截图
+    severity: fatal
+    f1_symptom: 跑完了但没给我图，我没法判断效果。
+    detect:
+      source: script
+      check_ids: [HG1]
+    evidence_required: [command_output]
+    tags: [screenshot]
+
+  - rubric_item_id: R4
+    title: 阴影贴图未真实使用
+    severity: functional
+    f1_symptom: 地上没有影子，方块像飘在空中。
+    detect:
+      source: script
+      check_ids: [HG2, static_checks]
+    evidence_required: [file_path]
+    tags: [shadow_map]
+
+  - rubric_item_id: R5
+    title: 阴影数学实现错误
+    severity: functional
+    f1_symptom: 影子位置和光的方向对不上，光从上面照影子却在左边。
+    detect:
+      source: script
+      check_ids: [HG2, test_shadow_math]
+    evidence_required: [command_output]
+    tags: [shadow_math]
+
+  - rubric_item_id: R6
+    title: 契约文件被修改
+    severity: fatal
+    f1_symptom: 我要求别动的那份接口说明好像被改了。
+    detect:
+      source: script
+      check_ids: [HG3]
+    evidence_required: [command_output]
+    tags: [integrity]
+
+  - rubric_item_id: R7
+    title: 截图与参考图偏差过大
+    severity: functional
+    f1_symptom: 出来的画面跟样子差挺多，颜色和构图都不太对。
+    detect:
+      source: script
+      check_ids: [HG4]
+    evidence_required: [screenshot, command_output]
+    tags: [visual_similarity]
+
+  - rubric_item_id: R8
+    title: 阴影方向错误
+    severity: minor
+    f1_symptom: 影子位置不对，光从左上打过来，影子却跑到左边去了。
+    f3_visual:
+      description: 方块右下方地面没有暗区，左上侧地面反而有一块深色。
+      regions: [屏幕左侧中部地面]
+    detect:
+      source: llm_judge
+      check_ids: [R8]
+    evidence_required: [screenshot]
+    tags: [shadow_direction]
+
+  - rubric_item_id: R9
+    title: 阴影边缘硬锯齿
+    severity: minor
+    f1_symptom: 影子边缘像刀切的一样，一格一格的。
+    f3_visual:
+      description: 阴影边界处出现明显的方块状锯齿，缺少过渡灰阶。
+      regions: [阴影边界]
+    detect:
+      source: llm_judge
+      check_ids: [R9]
+    evidence_required: [screenshot]
+    tags: [softness]
+
+  - rubric_item_id: R10
+    title: 场景构图不符
+    severity: minor
+    f1_symptom: 画面里看不出有地面和方块，跟我要的场景不一样。
+    f3_visual:
+      description: 画面大部分为单色，没有可辨识的地面边界与方块轮廓。
+      regions: [整幅画面]
+    detect:
+      source: llm_judge
+      check_ids: [R10]
+    evidence_required: [screenshot]
+    tags: [scene]
+
+  - rubric_item_id: R11
+    title: 渲染伪影
+    severity: minor
+    f1_symptom: 地面上一道道的，像条纹一样。
+    f3_visual:
+      description: 地面出现等高线状明暗条纹，覆盖超过 20% 地面区域。
+      regions: [地面区域]
+    detect:
+      source: llm_judge
+      check_ids: [R11]
+    evidence_required: [screenshot]
+    tags: [artifacts]

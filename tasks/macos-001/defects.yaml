@@ -1,0 +1,98 @@
+# macos-001 缺陷现象目录（document_type=catalog）
+document_type: catalog
+schema_version: "1.0"
+task_id: macos-001
+catalog_version: 1.0.0
+items:
+  - rubric_item_id: R1
+    title: 帧时间远超 16.7ms
+    severity: fatal
+    f1_symptom: 测下来平均帧时间 57ms 左右，离 60fps 差得远。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 本机实测 avg_frame_ms=57.0（fps=17.5），门槛中位数 <= 16.7ms。'
+      source_command: python3 hidden-tests/checks.py --mode perf --binary build/ParticleBench
+      redactions: [build/ParticleBench]
+    detect:
+      source: script
+      check_ids: [checks.py, HG1]
+    evidence_required: [command_output]
+    tags: [performance]
+
+  - rubric_item_id: R5
+    title: 逐粒子 draw call 与逐粒子 buffer 分配
+    severity: functional
+    f1_symptom: 粒子一多就掉帧，感觉 CPU 那侧卡住了。
+    f2_evidence:
+      kind: runtime_trace
+      text: '代码审查：24000 粒子/帧对应 24000 次 drawPrimitives 与 24000 次 makeBuffer。'
+      source_command: make bench
+      redactions: []
+    detect:
+      source: agent_judge
+      check_ids: [R5]
+    evidence_required: [diff_hunk]
+    tags: [batching]
+
+  - rubric_item_id: R6
+    title: 每帧阻塞等待 GPU
+    severity: functional
+    f1_symptom: 感觉 GPU 每帧都空转，帧率上不去。
+    f2_evidence:
+      kind: runtime_trace
+      text: '渲染循环中每帧 commandBuffer.waitUntilCompleted()，CPU/GPU 串行。'
+      source_command: make bench
+      redactions: []
+    detect:
+      source: agent_judge
+      check_ids: [R6]
+    evidence_required: [diff_hunk]
+    tags: [synchronization]
+
+  - rubric_item_id: R2
+    title: 优化后画面丢失粒子
+    severity: functional
+    f1_symptom: 优化之后画面变成一片黑，粒子不见了。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: non_background_pixels=0，期望 >= 画面 1%。'
+      source_command: python3 hidden-tests/checks.py --mode functional --binary build/ParticleBench
+      redactions: [build/ParticleBench]
+    f3_visual:
+      description: 渲染结果整帧纯深色，看不到粒子点阵。
+      regions: [整帧]
+    detect:
+      source: script
+      check_ids: [checks.py, HG3]
+    evidence_required: [video_frame]
+    tags: [visual]
+
+  - rubric_item_id: R4
+    title: 渲染不确定
+    severity: functional
+    f1_symptom: 每次跑出来的画面细节都在变，没法做回归对比。
+    f2_evidence:
+      kind: test_failure
+      text: 'FAIL: 两次运行 frame_hash 不一致。'
+      source_command: python3 hidden-tests/checks.py --mode functional --binary build/ParticleBench
+      redactions: []
+    detect:
+      source: script
+      check_ids: [checks.py, HG3]
+    evidence_required: [command_output]
+    tags: [determinism]
+
+  - rubric_item_id: R8
+    title: 测试文件被修改（作弊）
+    severity: fatal
+    f1_symptom: 无（验证侧发现，永不进入反馈）。
+    f2_evidence:
+      kind: test_failure
+      text: 'LOCK VIOLATION: tests/test_contract.py 的 sha256 与 locks.sha256 不一致。'
+      source_command: python3 hidden-tests/check_locks.py
+      redactions: [locks.sha256]
+    detect:
+      source: script
+      check_ids: [check_locks.py, HG2]
+    evidence_required: [command_output]
+    tags: [anti-cheat]

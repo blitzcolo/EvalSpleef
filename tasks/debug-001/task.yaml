@@ -1,0 +1,132 @@
+# debug-001 题目元数据（字段严格对齐 schemas/task.schema.json v1.0）
+id: debug-001
+version: 1.0.0
+track: debug
+layer: engineering
+title: 台账汇总工具的无提示修复
+platform: linux-container
+difficulty: 3
+difficulty_calibration:
+  status: pending
+  target_tier_range: [A, B]
+  models_tried: []
+  notes: 新题未用前代模型标定；可运行验证与参考解实测已记录在 notes.md。
+status: active
+author: tasks-b
+created: "2026-11-06"
+updated: "2026-11-06"
+language: [python]
+tags: [debug, no-hint, stdlib, regression]
+
+instruction: instruction.md
+persona: persona.md
+rubric_ref: rubric.yaml
+defects_ref: defects.yaml
+
+workspace:
+  mount: /workspace
+  starter: starter/
+  entry_files: [README.md, ledgerq/, tests/, sample/]
+  protected_paths: [tests/]
+
+resources:
+  image: python:3.12-slim
+  image_digest: TODO(pin-on-host)
+  cpu: 2
+  memory_mb: 2048
+  disk_mb: 1024
+  os: linux
+  network: false
+  docs_whitelist: []
+  tools: [bash, read, write, edit]
+  services: []
+  notes: 纯 CPU 题；无网络；Python 3.11+ 标准库即可。
+
+budget:
+  max_rounds: 6
+  max_feedback_rounds: 3
+  max_nudges: 2
+  max_total_tokens: 2000000
+  max_wall_clock_s: 3600
+  max_cost_usd: 15
+  max_observe_s: 600
+  escalation:
+    f1_no_progress_rounds: 2
+    f2_no_progress_rounds: 2
+
+hard_gates:
+  - id: HG1
+    title: 隐藏回归测试全部通过
+    kind: script
+    script: hidden-tests/run.sh
+    required: true
+    pass_condition: exit_code == 0
+    description: 22 条隐藏回归测试（含 CLI 端到端与哈希锁）全部通过；对应 R1-R7。
+    timeout_s: 300
+  - id: HG2
+    title: 测试文件哈希未变
+    kind: script
+    script: hidden-tests/check_locks.py
+    required: true
+    pass_condition: exit_code == 0
+    description: tests/ 下文件 sha256 与 locks.sha256 一致；被修改即判作弊。
+    timeout_s: 60
+  - id: HG3
+    title: 原有可见测试仍通过
+    kind: script
+    script: command:python3 -m unittest discover -s tests
+    required: true
+    pass_condition: exit_code == 0
+    description: starter 自带 4 条可见测试不得被修复破坏。
+    timeout_s: 120
+
+stop_conditions:
+  success: 所有 hard_gates 通过，且无未修复的 functional/fatal 缺陷。
+  failed: 预算耗尽或任一 hard_gate 失败。
+  failure_budget: 轮数/token/墙钟/费用任一触顶即停止并判 Failed。
+  minor_affects: minor 缺陷（R7/R8/R11）只影响 P/A 区分，不阻断成功。
+
+reference_solutions:
+  - id: a
+    path: answers/reference-a.patch
+    approach: 最小定点修复（保留原结构，只改三个函数的错误逻辑）
+    runnable: true
+    notes: cp -R starter /tmp/ref-a && (cd /tmp/ref-a && patch -p1 < answers/reference-a.patch)
+  - id: b
+    path: answers/reference-b.patch
+    approach: 解析/聚合/舍入三处重写（csv.reader、fromisoformat、defaultdict 单遍聚合）
+    runnable: true
+    notes: 应用同 A；公开 API 与 CLI 保持不变。
+
+references:
+  a: answers/reference-a.patch
+  b: answers/reference-b.patch
+  empty_agent: answers/empty-agent.md
+  patch_apply: patch -p1
+
+isolation:
+  agent_user: agent
+  environment_mode: separate
+  network_mode: no-network
+  notes: Agent 以非 root 用户 agent 运行；Agent 环境与验证环境分离；默认完全断网。
+
+canary:
+  manifest: canary.md
+  locations:
+    - starter/README.md 末尾 HTML 注释行
+    - starter/ledgerq/__init__.py 模块 docstring 第 2 行
+    - starter/NOTICE.txt 构建标记行
+  expected_trace:
+    - agent.step 读取 README.md 的工具输出
+    - 产物快照中 starter/README.md 的内容
+    - agent 修改 __init__.py 时的 diff 上下文
+  exclude_from_hash_lock: true
+
+verification:
+  entry: hidden-tests/run.sh
+  selftest: bash hidden-tests/run.sh --selftest
+  expected_runtime_s: 60
+  timeouts_s:
+    suite: 300
+    single_case: 60
+  mutation_harness: hidden-tests/mutate.py

@@ -1,0 +1,157 @@
+# data-001 题目元数据（字段对齐 schemas/task.schema.json）
+id: data-001
+version: 1.0.0
+track: data
+layer: engineering
+title: 脏日志清洗：按固定口径产出统计报告
+subtitle: 混合格式 + 5 类脏行的访问日志，交付可复跑清洗脚本并在隐藏日志上验收
+platform: linux-container
+difficulty: 2
+difficulty_calibration:
+  status: pending
+  target_tier_range: [P, A]
+  models_tried: []
+status: active
+author: tasks-a
+created: "2026-11-06"
+updated: "2026-11-06"
+language: [python]
+tags: [data-cleaning, log-parsing, tolerance, anti-hardcode, stdlib]
+
+instruction: instruction.md
+persona: persona.md
+rubric_ref: rubric.yaml
+defects_ref: defects.yaml
+
+workspace:
+  mount: /workspace
+  starter: workspace/
+  entry_files: [access.log, expected_sample.json]
+  protected_paths: [access.log, expected_sample.json]
+  writable_paths: [clean_logs.py]
+
+resources:
+  image: llm-eval/data-001
+  image_digest: TODO(pin-on-host)
+  cpu: 2
+  memory_mb: 2048
+  disk_mb: 1024
+  network: false
+  docs_whitelist: []
+  tools: [bash, read, write, edit]
+  os: linux
+  notes: 镜像预装 Python 3.12 与 pandas（可选）；标准库实现同样可通过。
+
+isolation:
+  agent_user: agent
+  environment_mode: separate
+  network_mode: no-network
+  lint_extend_select: [unpinned-image, root-agent]
+  notes: 清洗脚本在验证沙箱里对隐藏日志执行；Agent 环境与验证沙箱独立，输入只读。
+
+network:
+  mode: "off"
+  allowlist: []
+  search_proxy: false
+
+tools: [bash, read, write, edit]
+
+budget:
+  max_rounds: 6
+  max_feedback_rounds: 3
+  max_nudges: 2
+  max_total_tokens: 500000
+  max_wall_clock_s: 2400
+  max_cost_usd: 4
+  max_observe_s: 300
+  currency: USD
+  pricing_table_version: 2026-11-a
+  escalation:
+    f1_no_progress_rounds: 2
+    f2_no_progress_rounds: 2
+
+hard_gates:
+  - id: HG1
+    title: 可见样例报告与期望一致
+    kind: script
+    script: hidden-tests/verify_submission.py
+    required: true
+    pass_condition: HG1_sample_ok == true
+    description: 在样例 access.log 上运行提交脚本，报告与 expected_sample.json 精确/容差一致。
+    timeout_s: 600
+  - id: HG2
+    title: 隐藏日志报告与 oracle 一致
+    kind: script
+    script: hidden-tests/verify_submission.py
+    required: true
+    pass_condition: HG2_hidden_ok == true
+    description: 在验证侧生成的隐藏日志上运行提交脚本，报告与 oracle 的差异全部在容差内。
+    timeout_s: 600
+  - id: HG3
+    title: 受保护输入未被篡改且脚本可执行
+    kind: script
+    script: hidden-tests/verify_submission.py
+    required: true
+    pass_condition: HG3_integrity_ok == true
+    description: 样例输入与期望样例的 sha256 未变；提交脚本存在并在超时内退出码 0。
+    timeout_s: 120
+
+stop_conditions:
+  success: 所有 hard_gates 通过 且 无未修复的 functional/fatal 缺陷
+  failed: 预算耗尽或任一硬门槛失败
+  failure_budget: 预算耗尽判 Failed 并带 budget_exhausted 标记
+  minor_affects: minor 缺陷只影响 P/A 区分
+
+reference_solutions:
+  - id: a
+    path: answers/reference-a.py
+    approach: pandas 向量化：str.extract + json_normalize + 布尔掩码
+    runnable: false
+    notes: 依赖 pandas（镜像预装）；本机无 pandas，本地隐藏测试只做 py_compile，运行验证 TODO(run-on-host)。
+  - id: b
+    path: answers/reference-b.py
+    approach: 纯 Python 流式：逐行三格式识别 + Counter 聚合
+    runnable: true
+    notes: python3 answers/reference-b.py workspace/access.log /tmp/report.json
+
+artifacts:
+  - path: clean_logs.py
+    kind: source
+    required: true
+    max_bytes: 262144
+    description: 清洗脚本，接口 python3 clean_logs.py <input.log> <output.json>。
+  - path: report.json
+    kind: answer
+    required: false
+    description: 样例报告（可选，验证侧用脚本重跑，不直接采信）。
+
+canary:
+  manifest: canary.md
+  locations:
+    - workspace/access.log 中的 _build 注释行（harness 注入）
+    - workspace/.env.example 注释行（harness 注入）
+    - 渲染后 instruction.md 末尾 HTML 注释
+  expected_trace:
+    - Agent 首次读取 access.log 的命令回显
+    - clean_logs.py 被提交后验证侧运行时的 stderr 回显（不得含令牌明文）
+  exclude_from_hash_lock: false
+
+verification:
+  entry: hidden-tests/run.sh
+  selftest: bash hidden-tests/run.sh
+  expected_runtime_s: 60
+  timeouts_s:
+    suite: 600
+    single_case: 120
+  mutation_harness: hidden-tests/test_hidden.py
+
+extensions:
+  generation:
+    generator: hidden-tests/gen_data.py
+    sample_seed: 880001
+    hidden_seed: 771001
+    dataset_version: dirty-accesslog-v1
+  tolerances:
+    error_rate_abs: 0.0001
+    p95_ms_abs: 1.0
+  evaluator: harbor

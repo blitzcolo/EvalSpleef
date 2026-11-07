@@ -1,0 +1,112 @@
+diff -ruN a/Sources/ParticleBench/ParticleRenderer.swift b/Sources/ParticleBench/ParticleRenderer.swift
+--- a/Sources/ParticleBench/ParticleRenderer.swift	2026-11-06 07:35:47
++++ b/Sources/ParticleBench/ParticleRenderer.swift	2026-11-06 07:35:47
+@@ -11,7 +11,10 @@
+     let frameHash: String
+ }
+ 
+-/// 基线实现（慢）：每个粒子一次 draw call；每帧新建 buffer；每帧 waitUntilCompleted。
++/// 参考解 A：合批 + 降同步。
++/// 1) 所有粒子一次 instanced draw call（消除 24000 次逐粒子 draw）；
++/// 2) 三缓冲常驻 instance buffer + DispatchSemaphore，CPU 不等 GPU 当前帧；
++/// 3) 只在最后一帧做一次离屏回读。
+ final class ParticleRenderer {
+     private let device: MTLDevice
+     private let queue: MTLCommandQueue
+@@ -21,7 +24,9 @@
+     private let pass: MTLRenderPassDescriptor
+     private let config: Config
+     private let particles: [SIMD4<Float>]
+-    private let queueLock = NSLock()
++    private var ring: [MTLBuffer] = []
++    private let inFlight = DispatchSemaphore(value: 3)
++    private var frameIndex = 0
+ 
+     init?(config: Config) {
+         self.config = config
+@@ -65,6 +70,13 @@
+         self.readback = readback
+         self.pass = pass
+         self.particles = ParticleRenderer.makeParticles(count: config.particles)
++        let bytes = MemoryLayout<SIMD4<Float>>.stride * config.particles
++        for _ in 0..<3 {
++            guard let buffer = device.makeBuffer(length: bytes, options: .storageModeShared) else {
++                return nil
++            }
++            ring.append(buffer)
++        }
+     }
+ 
+     static func makeParticles(count: Int) -> [SIMD4<Float>] {
+@@ -87,37 +99,39 @@
+ 
+     func run(iterations: Int) -> RenderStats {
+         let start = DispatchTime.now().uptimeNanoseconds
+-        for _ in 0..<iterations {
++        let bytes = MemoryLayout<SIMD4<Float>>.stride * config.particles
++        var lastCommandBuffer: MTLCommandBuffer?
++        for frame in 0..<iterations {
++            inFlight.wait()
++            let buffer = ring[frameIndex % 3]
++            frameIndex += 1
++            particles.withUnsafeBytes { raw in
++                memcpy(buffer.contents(), raw.baseAddress!, bytes)
++            }
+             let commandBuffer = queue.makeCommandBuffer()!
++            commandBuffer.addCompletedHandler { [inFlight] _ in inFlight.signal() }
+             let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass)!
+             encoder.setRenderPipelineState(pipeline)
++            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+             var viewport = SIMD2<Float>(Float(config.width), Float(config.height))
+             encoder.setVertexBytes(&viewport, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+-            // 基线慢路径：每个粒子每帧新建一个 MTLBuffer + 单独一次 drawPrimitives
+-            var perParticleBuffers: [MTLBuffer] = []
+-            perParticleBuffers.reserveCapacity(particles.count)
+-            for particle in particles {
+-                var value = particle
+-                guard let buffer = device.makeBuffer(
+-                    bytes: &value, length: MemoryLayout<SIMD4<Float>>.stride,
+-                    options: .storageModeShared) else { continue }
+-                perParticleBuffers.append(buffer)
+-                encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+-                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
+-            }
+-            _ = perParticleBuffers.count
++            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6,
++                                   instanceCount: config.particles)
+             encoder.endEncoding()
+-            let blit = commandBuffer.makeBlitCommandEncoder()!
+-            blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0,
+-                      sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+-                      sourceSize: MTLSize(width: config.width, height: config.height, depth: 1),
+-                      to: readback, destinationOffset: 0,
+-                      destinationBytesPerRow: config.width * 4,
+-                      destinationBytesPerImage: config.width * config.height * 4)
+-            blit.endEncoding()
++            if frame == iterations - 1 {
++                let blit = commandBuffer.makeBlitCommandEncoder()!
++                blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0,
++                          sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
++                          sourceSize: MTLSize(width: config.width, height: config.height, depth: 1),
++                          to: readback, destinationOffset: 0,
++                          destinationBytesPerRow: config.width * 4,
++                          destinationBytesPerImage: config.width * config.height * 4)
++                blit.endEncoding()
++            }
+             commandBuffer.commit()
+-            commandBuffer.waitUntilCompleted()
++            lastCommandBuffer = commandBuffer
+         }
++        lastCommandBuffer?.waitUntilCompleted()
+         let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+         let pixels = readback.contents().bindMemory(to: UInt8.self, capacity: config.width * config.height * 4)
+         var nonBackground = 0
+@@ -135,7 +149,7 @@
+         return RenderStats(
+             deviceName: device.name,
+             metalVersion: "\(device.supportsFamily(.apple7) ? "apple7+" : "mac2")",
+-            mode: "slow-per-drawcall",
++            mode: "instanced-triple-buffered",
+             avgFrameMs: frameMs,
+             fps: 1000.0 / frameMs,
+             nonBackgroundPixels: nonBackground,

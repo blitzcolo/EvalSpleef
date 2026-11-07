@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>看板 · 任务板</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>团队看板</h1>
+    <div class="topbar__actions">
+      <span class="hint">拖动卡片可在列内排序、跨列移动</span>
+      <button data-testid="theme-toggle" class="btn" type="button" aria-label="切换主题">切换主题</button>
+    </div>
+  </header>
+
+  <main class="board" data-testid="board">
+    <section class="column" data-column="todo" data-testid="column-todo" aria-label="待办">
+      <header class="column__header">
+        <h2>待办</h2>
+        <span class="column__count" data-testid="card-count-todo">0</span>
+      </header>
+      <ul class="column__list" data-testid="list-todo" role="list"></ul>
+      <p class="empty" data-testid="empty-state-todo" hidden>这一列还没有卡片</p>
+    </section>
+    <section class="column" data-column="doing" data-testid="column-doing" aria-label="进行中">
+      <header class="column__header">
+        <h2>进行中</h2>
+        <span class="column__count" data-testid="card-count-doing">0</span>
+      </header>
+      <ul class="column__list" data-testid="list-doing" role="list"></ul>
+      <p class="empty" data-testid="empty-state-doing" hidden>这一列还没有卡片</p>
+    </section>
+    <section class="column" data-column="done" data-testid="column-done" aria-label="已完成">
+      <header class="column__header">
+        <h2>已完成</h2>
+        <span class="column__count" data-testid="card-count-done">0</span>
+      </header>
+      <ul class="column__list" data-testid="list-done" role="list"></ul>
+      <p class="empty" data-testid="empty-state-done" hidden>这一列还没有卡片</p>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

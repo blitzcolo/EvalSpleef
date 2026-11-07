@@ -1,0 +1,5 @@
+transaction_id,occurred_at,currency,amount,kind
+T0001,2026-06-03,CNY,120.00,charge
+T0002,2026-06-15,CNY,45.00,refund
+T0003,2026-06-21,CNY,200.00,charge
+T0004,2026-06-28,CNY,10.00,charge

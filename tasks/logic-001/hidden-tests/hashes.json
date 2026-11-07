@@ -1,0 +1,11 @@
+{
+  "algorithm": "sha256",
+  "locked_files": {
+    "generator.py": "7f2d2a2d40ca3b1574705362cc0cb5112b7fb208f9f185628ecbcbe3d1bf8fa4",
+    "checker.py": "8fa54d12d2f782cc50e2cfd65d9603c471321e86422f673ad99a15ab474d521b",
+    "verify_submission.py": "61964b4166703d26b9f86b687badc572e654d8b1c07cb1b2502d6c85a1a8f911",
+    "test_hidden.py": "d6f2a876f50cff2108976f8448b5ac4a2e9ea69d2a93eb12ec818838570eddd7",
+    "run.sh": "f58d0dc5d47077d4660c8c5215799a354afe0803055778fbf568118cfd61760a",
+    "../workspace/instances.json": "d8c488889f89cf7a85f09fa967e6f11e00c648975a1df60d8f7c015a0b1578bd"
+  }
+}

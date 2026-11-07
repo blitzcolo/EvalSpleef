@@ -1,0 +1,13 @@
+{
+  "modelVersion": "6.0.2",
+  "name": "harmony-001-demo",
+  "version": "1.0.0",
+  "description": "HarmonyOS image filter demo with NAPI plugin",
+  "main": "",
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {},
+  "devDependencies": {
+    "@ohos/hypium": "1.0.19"
+  }
+}

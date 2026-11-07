@@ -1,0 +1,249 @@
+diff -ruN a/ordersvc/auth.py b/ordersvc/auth.py
+--- a/ordersvc/auth.py	1969-12-31 16:00:00
++++ b/ordersvc/auth.py	2026-11-06 07:26:42
+@@ -0,0 +1,18 @@
++"""Bearer token 鉴权。"""
++
++
++class Auth:
++    def __init__(self, tokens_csv: str) -> None:
++        self.tokens = {token.strip() for token in tokens_csv.split(",") if token.strip()}
++
++    def token_from_header(self, header) -> str | None:
++        if not header:
++            return None
++        prefix = "Bearer "
++        if not header.startswith(prefix):
++            return None
++        token = header[len(prefix):].strip()
++        return token or None
++
++    def is_valid(self, token) -> bool:
++        return token is not None and token in self.tokens
+diff -ruN a/ordersvc/inventory.py b/ordersvc/inventory.py
+--- a/ordersvc/inventory.py	2026-11-06 07:26:42
++++ b/ordersvc/inventory.py	2026-11-06 07:26:42
+@@ -1,6 +1,7 @@
+-"""库存依赖客户端（urllib，标准库）。"""
++"""库存依赖客户端（urllib，标准库）：带有限重试。"""
+ 
+ import json
++import time
+ import urllib.error
+ import urllib.request
+ 
+@@ -10,22 +11,28 @@
+ 
+ 
+ class InventoryClient:
+-    def __init__(self, base_url: str, timeout: float = 1.0) -> None:
++    def __init__(self, base_url: str, timeout: float = 1.0, attempts: int = 3) -> None:
+         self.base_url = base_url.rstrip("/")
+         self.timeout = timeout
++        self.attempts = attempts
+ 
+     def stock(self, sku: str) -> dict | None:
+-        """返回 {"sku","price_cents","available"}；SKU 不存在返回 None。"""
++        """返回库存信息；SKU 不存在返回 None；依赖不可用抛 InventoryUnavailable。"""
+         url = f"{self.base_url}/stock/{sku}"
+-        try:
+-            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+-                return json.loads(response.read().decode("utf-8"))
+-        except urllib.error.HTTPError as exc:
+-            if exc.code == 404:
+-                return None
+-            raise InventoryUnavailable(f"inventory HTTP {exc.code}") from exc
+-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+-            raise InventoryUnavailable(str(exc)) from exc
++        last_error = None
++        for attempt in range(self.attempts):
++            try:
++                with urllib.request.urlopen(url, timeout=self.timeout) as response:
++                    return json.loads(response.read().decode("utf-8"))
++            except urllib.error.HTTPError as exc:
++                if exc.code == 404:
++                    return None
++                last_error = f"inventory HTTP {exc.code}"
++            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
++                last_error = str(exc)
++            if attempt + 1 < self.attempts:
++                time.sleep(0.05)
++        raise InventoryUnavailable(last_error or "inventory unavailable")
+ 
+     def healthy(self) -> bool:
+         try:
+diff -ruN a/ordersvc/ratelimit.py b/ordersvc/ratelimit.py
+--- a/ordersvc/ratelimit.py	1969-12-31 16:00:00
++++ b/ordersvc/ratelimit.py	2026-11-06 07:26:42
+@@ -0,0 +1,24 @@
++"""每 token 固定窗口限流。"""
++
++import time
++
++
++class FixedWindowLimiter:
++    def __init__(self, spec: str) -> None:
++        limit_text, _, window_text = spec.partition("/")
++        self.limit = int(limit_text)
++        self.window_s = float(window_text)
++        if self.limit < 1 or self.window_s <= 0:
++            raise ValueError(f"非法限流配置: {spec!r}")
++        self._state: dict[str, tuple[float, int]] = {}
++
++    def allow(self, token: str, now: float | None = None) -> bool:
++        now = time.monotonic() if now is None else now
++        window_start, count = self._state.get(token, (now, 0))
++        if now - window_start >= self.window_s:
++            window_start, count = now, 0
++        if count >= self.limit:
++            self._state[token] = (window_start, count)
++            return False
++        self._state[token] = (window_start, count + 1)
++        return True
+diff -ruN a/ordersvc/server.py b/ordersvc/server.py
+--- a/ordersvc/server.py	2026-11-06 07:26:42
++++ b/ordersvc/server.py	2026-11-06 07:26:42
+@@ -1,6 +1,6 @@
+-"""HTTP 路由与处理（骨架版）。
++"""HTTP 路由与处理（参考解 A：标准库同步实现，最小改动）。
+ 
+-API 契约见 API.md；本骨架只实现订单创建/查询与 JSON 落盘的 happy path。
++API 契约见 API.md。
+ """
+ 
+ import argparse
+@@ -8,24 +8,32 @@
+ import os
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ 
++from .auth import Auth
+ from .inventory import InventoryClient, InventoryUnavailable
++from .ratelimit import FixedWindowLimiter
+ from .store import Store, new_order_id
+ 
+ MAX_BODY = 64 * 1024
+ 
+ 
++def _canonical(sku: str, quantity: int) -> str:
++    return json.dumps({"sku": sku, "quantity": quantity}, sort_keys=True, ensure_ascii=False)
++
++
+ class App:
+-    def __init__(self, store: Store, inventory: InventoryClient) -> None:
++    def __init__(self, store: Store, inventory: InventoryClient, auth: Auth, limiter: FixedWindowLimiter) -> None:
+         self.store = store
+         self.inventory = inventory
++        self.auth = auth
++        self.limiter = limiter
+ 
+ 
+ def make_handler(app: App):
+     class Handler(BaseHTTPRequestHandler):
+         protocol_version = "HTTP/1.1"
+-        server_version = "ordersvc/0.1"
++        server_version = "ordersvc/1.0"
+ 
+-        def log_message(self, fmt, *args):  # 静默访问日志，验收只看行为
++        def log_message(self, fmt, *args):
+             return
+ 
+         def _send(self, status: int, payload, headers=None) -> None:
+@@ -47,13 +55,32 @@
+                 raise ValueError("body too large")
+             return self.rfile.read(length) if length else b""
+ 
++        def _authorize(self) -> str | None:
++            header = self.headers.get("Authorization")
++            token = app.auth.token_from_header(header)
++            if not app.auth.is_valid(token):
++                self._error(401, "unauthorized", "missing or invalid bearer token")
++                return None
++            return token
++
++        def _rate_limit(self, token: str) -> bool:
++            if not app.limiter.allow(token):
++                self._error(429, "rate_limited", "too many requests", {"Retry-After": "10"})
++                return False
++            return True
++
+         def do_GET(self) -> None:
+             if self.path == "/health":
+-                self._send(200, {"status": "ok", "inventory": "ok"})
++                if app.inventory.healthy():
++                    self._send(200, {"status": "ok", "inventory": "ok"})
++                else:
++                    self._send(200, {"status": "degraded", "inventory": "unavailable"})
+                 return
+             if self.path.startswith("/orders/"):
+-                order_id = self.path[len("/orders/"):]
+-                order = app.store.get_order(order_id)
++                token = self._authorize()
++                if token is None or not self._rate_limit(token):
++                    return
++                order = app.store.get_order(self.path[len("/orders/"):])
+                 if order is None:
+                     self._error(404, "not_found", "order not found")
+                     return
+@@ -65,6 +92,17 @@
+             if self.path != "/orders":
+                 self._error(404, "not_found", "unknown path")
+                 return
++            token = self._authorize()
++            if token is None or not self._rate_limit(token):
++                return
++            content_type = self.headers.get("Content-Type") or ""
++            if "application/json" not in content_type:
++                self._error(400, "invalid_request", "Content-Type must be application/json")
++                return
++            idem_key = self.headers.get("Idempotency-Key")
++            if idem_key is None or not (1 <= len(idem_key) <= 128) or not idem_key.isascii():
++                self._error(400, "invalid_request", "Idempotency-Key is required (1..128 ascii)")
++                return
+             try:
+                 payload = json.loads(self._read_body().decode("utf-8"))
+             except (ValueError, UnicodeDecodeError):
+@@ -81,10 +119,18 @@
+             if not isinstance(quantity, int) or isinstance(quantity, bool) or not 1 <= quantity <= 99:
+                 self._error(400, "invalid_request", "quantity must be an integer in 1..99")
+                 return
++            canonical = _canonical(sku, quantity)
++            replay = app.store.get_idempotent(idem_key)
++            if replay is not None:
++                if replay["request"] != canonical:
++                    self._error(409, "idempotency_conflict", "same Idempotency-Key with different body")
++                    return
++                self._send(replay["status"], replay["body"], {"Idempotent-Replayed": "true"})
++                return
+             try:
+                 stock = app.inventory.stock(sku)
+             except InventoryUnavailable as exc:
+-                self._error(500, "internal_error", str(exc))
++                self._error(503, "inventory_unavailable", str(exc), {"Retry-After": "5"})
+                 return
+             if stock is None or int(stock.get("available", 0)) < quantity:
+                 self._error(422, "out_of_stock", f"insufficient stock for {sku}")
+@@ -97,6 +143,9 @@
+                 "status": "created",
+             }
+             app.store.save_order(order)
++            app.store.save_idempotent(
++                idem_key, {"request": canonical, "status": 201, "body": order}
++            )
+             self._send(201, order)
+ 
+     return Handler
+@@ -117,8 +166,12 @@
+     parser.add_argument("--auth-tokens", default=os.environ.get("ORDERSVC_AUTH_TOKENS", ""))
+     parser.add_argument("--rate-limit", default=os.environ.get("ORDERSVC_RATE_LIMIT", "5/10"))
+     args = parser.parse_args(argv)
+-    del args.auth_tokens, args.rate_limit  # 骨架尚未实现鉴权与限流，见 API.md
+-    app = App(Store(args.state_dir), InventoryClient(args.inventory_url))
++    app = App(
++        Store(args.state_dir),
++        InventoryClient(args.inventory_url),
++        Auth(args.auth_tokens),
++        FixedWindowLimiter(args.rate_limit),
++    )
+     httpd = create_server("127.0.0.1", args.port, app)
+     print(f"ORDERSVC_LISTENING {httpd.server_address[1]}", flush=True)
+     try:

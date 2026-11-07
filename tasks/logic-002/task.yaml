@@ -1,0 +1,147 @@
+# logic-002 题目元数据（字段对齐 schemas/task.schema.json）
+id: logic-002
+version: 1.0.0
+track: logic
+layer: logic
+title: 折叠序列与孔洞位置：纸条对折打孔后展开
+subtitle: 给定对折方向序列与打孔列，求展开后被打穿的格子编号
+platform: linux-container
+difficulty: 3
+difficulty_calibration:
+  status: pending
+  target_tier_range: [A, B]
+  models_tried: []
+status: active
+author: tasks-a
+created: "2026-11-06"
+updated: "2026-11-06"
+language: [python, json]
+tags: [spatial-reasoning, fold-and-punch, unique-solution, parameterized]
+
+instruction: instruction.md
+persona: persona.md
+rubric_ref: rubric.yaml
+defects_ref: defects.yaml
+
+workspace:
+  mount: /workspace
+  starter: workspace/
+  entry_files: [instances.json]
+  protected_paths: [instances.json]
+  writable_paths: [answer.json]
+
+resources:
+  image: llm-eval/logic-002
+  image_digest: TODO(pin-on-host)
+  cpu: 2
+  memory_mb: 2048
+  disk_mb: 1024
+  network: false
+  docs_whitelist: []
+  tools: [bash, read, write, edit]
+
+isolation:
+  agent_user: agent
+  environment_mode: separate
+  network_mode: no-network
+  lint_extend_select: [unpinned-image, root-agent]
+  notes: 纯 CPU 题；Agent 与验证环境独立，无网络。
+
+network:
+  mode: "off"
+  allowlist: []
+  search_proxy: false
+
+tools: [bash, read, write, edit]
+
+budget:
+  max_rounds: 6
+  max_feedback_rounds: 3
+  max_nudges: 2
+  max_total_tokens: 300000
+  max_wall_clock_s: 1800
+  max_cost_usd: 2.5
+  max_observe_s: 300
+  currency: USD
+  pricing_table_version: 2026-11-a
+  escalation:
+    f1_no_progress_rounds: 2
+    f2_no_progress_rounds: 2
+
+hard_gates:
+  - id: HG1
+    title: 4 组孔洞位置全部正确
+    kind: script
+    script: hidden-tests/verify_submission.py
+    required: true
+    pass_condition: HG1_holes_correct == true
+    description: 逐实例比对 holes 集合（升序列表精确相等）；任一不符即失败。
+    timeout_s: 300
+  - id: HG2
+    title: 答案格式合规
+    kind: script
+    script: hidden-tests/verify_submission.py
+    required: true
+    pass_condition: HG2_format_ok == true
+    description: 纯 JSON、键集合精确、holes 升序去重且在 1..32、推导 1-3 句且 ≤300 字、无代码块。
+    timeout_s: 120
+  - id: HG3
+    title: 受保护输入未被篡改
+    kind: script
+    script: hidden-tests/verify_submission.py
+    required: true
+    pass_condition: HG3_input_untampered == true
+    description: 工作区 instances.json 的 sha256 必须等于题包预置值；被改动算作弊。
+    timeout_s: 120
+
+stop_conditions:
+  success: 所有 hard_gates 通过 且 无未修复的 functional/fatal 缺陷
+  failed: 预算耗尽或任一硬门槛失败
+  failure_budget: 轮数/token/墙钟/费用任一达到 budget 上限即 Failed
+  minor_affects: minor 缺陷只影响 P/A 区分
+
+reference_solutions:
+  - id: a
+    path: answers/reference-a.py
+    approach: 正向模拟：每列维护格子集合并逐折合并
+    runnable: true
+    notes: python3 answers/reference-a.py workspace/instances.json /tmp/answer-a.json
+  - id: b
+    path: answers/reference-b.py
+    approach: 逆向重建：从折后列号反推原始列号
+    runnable: true
+    notes: python3 answers/reference-b.py workspace/instances.json /tmp/answer-b.json
+
+artifacts:
+  - path: answer.json
+    kind: answer
+    required: true
+    max_bytes: 65536
+    description: 4 组 holes/derivation；唯一进入验证侧的产物。
+
+canary:
+  manifest: canary.md
+  locations:
+    - workspace/instances.json 顶层 _build 字段（harness 注入）
+    - workspace/.env.example 注释行（harness 注入）
+    - 渲染后 instruction.md 末尾 HTML 注释
+  expected_trace:
+    - Agent 首次读取 instances.json 的命令回显
+    - Agent 产物中引用的折叠序列片段
+  exclude_from_hash_lock: false
+
+verification:
+  entry: hidden-tests/run.sh
+  selftest: bash hidden-tests/run.sh
+  expected_runtime_s: 30
+  timeouts_s:
+    suite: 300
+    single_case: 60
+  mutation_harness: hidden-tests/test_hidden.py
+
+extensions:
+  generation:
+    generator: hidden-tests/generator.py
+    seed: 20261106
+    family_version: fold-and-punch-v1
+  evaluator: inspect-ai

@@ -1,0 +1,161 @@
+# web-001 缺陷现象目录（catalog）
+document_type: catalog
+schema_version: "1.0"
+task_id: web-001
+catalog_version: 1.0.0
+
+items:
+  - rubric_item_id: R1
+    title: 跨列拖拽不生效
+    severity: fatal
+    f1_symptom: 我按住卡片拖到另一列松手，它又弹回去了。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        T2 失败：期望 doing = [card-1, card-4]，实际 [card-4] / 未变化
+      source_command: npx playwright test
+      redactions: []
+    detect: {source: agent_judge, check_ids: [playwright.T2]}
+    evidence_required: [screenshot, command_output]
+    tags: [drag]
+
+  - rubric_item_id: R2
+    title: 列内排序不生效
+    severity: fatal
+    f1_symptom: 同一列里拖动卡片，顺序还是原来的。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        T3 失败：期望 todo = [card-3, card-1, card-2]，实际顺序未变
+      source_command: npx playwright test
+      redactions: []
+    detect: {source: agent_judge, check_ids: [playwright.T3]}
+    evidence_required: [screenshot, command_output]
+    tags: [drag, reorder]
+
+  - rubric_item_id: R3
+    title: 状态不持久化
+    severity: fatal
+    f1_symptom: 拖完刷新一下，顺序全变回原来的了。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        T2 reload 后 doing 列回到种子数据 [card-4]
+        T7 reload 后 data-theme=light
+      source_command: npx playwright test
+      redactions: []
+    detect: {source: agent_judge, check_ids: [playwright.T2, playwright.T7]}
+    evidence_required: [screenshot, command_output]
+    tags: [persistence]
+
+  - rubric_item_id: R4
+    title: 键盘跨列失效
+    severity: functional
+    f1_symptom: 用 Tab 能选中卡片，但按方向键什么都不动。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        T4 失败：聚焦 card-1 按 ArrowRight 后 doing 列未出现 card-1
+      source_command: npx playwright test
+      redactions: []
+    detect: {source: agent_judge, check_ids: [playwright.T4]}
+    evidence_required: [command_output]
+    tags: [a11y]
+
+  - rubric_item_id: R5
+    title: 键盘列内排序失效
+    severity: functional
+    f1_symptom: 方向键上下按了没反应，卡片顺序没变。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        T5 失败：聚焦 card-2 按 ArrowUp 后 todo 顺序未变化
+      source_command: npx playwright test
+      redactions: []
+    detect: {source: agent_judge, check_ids: [playwright.T5]}
+    evidence_required: [command_output]
+    tags: [a11y]
+
+  - rubric_item_id: R6
+    title: 空状态与计数不更新
+    severity: functional
+    f1_symptom: 我把一列卡片都拖走之后，下面那句提示还是不出现。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        T6 失败：empty-state-todo 期望 visible，实际 hidden
+        列计数期望 0，实际 3
+      source_command: npx playwright test
+      redactions: []
+    detect: {source: agent_judge, check_ids: [playwright.T6]}
+    evidence_required: [screenshot, command_output]
+    tags: [empty-state]
+
+  - rubric_item_id: R7
+    title: 暗色模式不生效
+    severity: functional
+    f1_symptom: 点切换主题没反应，页面还是白的。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        T7 失败：点击后 html[data-theme] 仍为 light
+      source_command: npx playwright test
+      redactions: []
+    detect: {source: agent_judge, check_ids: [playwright.T7]}
+    evidence_required: [screenshot, command_output]
+    tags: [theme]
+
+  - rubric_item_id: R8
+    title: DOM 契约被破坏
+    severity: fatal
+    f1_symptom: 我的自动化脚本找不到卡片了。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        T10 失败：[data-card-id] 数量 4（期望 6）；list-doing 不存在
+      source_command: npx playwright test
+      redactions: []
+    detect: {source: agent_judge, check_ids: [playwright.T10]}
+    evidence_required: [command_output]
+    tags: [contract]
+
+  - rubric_item_id: R9
+    title: 页面控制台报错
+    severity: functional
+    f1_symptom: 控制台里有一行红字。
+    f2_evidence:
+      kind: runtime_trace
+      text: |
+        pageerror: Cannot read properties of null (reading dataset)
+      source_command: npx playwright test
+      redactions: []
+    detect: {source: agent_judge, check_ids: [playwright.T1]}
+    evidence_required: [log_excerpt, command_output]
+    tags: [console]
+
+  - rubric_item_id: R10
+    title: 暗色对比度不足
+    severity: minor
+    f1_symptom: 暗色模式切了，但卡片和字还是亮的，看着很刺眼。
+    f3_visual:
+      description: 截图显示暗色模式下页面背景为深色、卡片仍为白色，区域配色不协调。
+      regions: ["看板三列区域", "卡片背景"]
+    detect: {source: llm_judge, check_ids: [rubric.R10]}
+    evidence_required: [screenshot]
+    tags: [visual]
+
+  - rubric_item_id: R12
+    title: 拖拽缺少视觉反馈
+    severity: minor
+    f1_symptom: 拖拽时我只看到卡片变半透明，没看到插入位置的提示。
+    f3_visual:
+      description: 拖动过程中没有落点高亮或插入占位，只有被拖卡片半透明。
+      regions: ["目标列卡片之间"]
+    detect: {source: llm_judge, check_ids: [rubric.R12]}
+    evidence_required: [screenshot]
+    tags: [visual]
+
+extensions:
+  coverage:
+    note: 覆盖全部 functional/fatal 条目（R1-R9）；R10/R12 为 minor 视觉素材。
+  author: tasks-a

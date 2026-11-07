@@ -1,0 +1,158 @@
+# harmony-001 缺陷现象目录（document_type=catalog）
+# 约定：hidden=true 的条目只提供 F1 现象，F2/F3 素材不得出现（见 docs/03 §8）。
+document_type: catalog
+schema_version: "1.0"
+task_id: harmony-001
+catalog_version: 1.0.0
+items:
+  - rubric_item_id: R1
+    title: 构建失败
+    severity: fatal
+    f1_symptom: 我拿到的包装不上，说没有安装包。
+    f2_evidence:
+      kind: compile_error
+      text: |-
+        > hvigor ERROR: Failed to run the build task.
+        ERROR: ArkTS Compiler Error [...]
+      source_command: hvigorw assembleHap --mode module -p product=default -p buildMode=debug --no-daemon
+      redactions: [<PATH>, <LINE>]
+    detect:
+      source: script
+      check_ids: [HG1]
+    evidence_required: [command_output]
+    tags: [build]
+
+  - rubric_item_id: R2
+    title: 启动崩溃
+    severity: fatal
+    f1_symptom: 点开图标就退回桌面。
+    f2_evidence:
+      kind: runtime_trace
+      text: |-
+        E CppCrash: Signal:11 ...
+        E AppRecovery: ...
+      source_command: hdc shell hilog -T imagefilters -t app
+      redactions: [<PID>, <TID>, <SO_PATH>]
+    detect:
+      source: script
+      check_ids: [HG1]
+    evidence_required: [log_excerpt]
+    tags: [startup]
+
+  - rubric_item_id: R3
+    title: 原生处理结果为空操作或数值错误
+    severity: functional
+    f1_symptom: 图片处理完跟没处理一样。
+    detect:
+      source: script
+      check_ids: [HG2, test_image_ops]
+    evidence_required: [command_output]
+    tags: [image_processing]
+
+  - rubric_item_id: R4
+    title: 原生接口未注册或与类型声明不一致
+    severity: functional
+    f1_symptom: 点按钮没反应，界面那边也拿不到处理结果。
+    detect:
+      source: script
+      check_ids: [HG2, static_checks]
+    evidence_required: [file_path]
+    tags: [napi]
+
+  - rubric_item_id: R5
+    title: 界面到原生的调用链路缺失
+    severity: functional
+    f1_symptom: 预览区永远是原图，按钮像摆设。
+    detect:
+      source: script
+      check_ids: [HG2, static_checks]
+    evidence_required: [file_path]
+    tags: [ui_pipeline]
+
+  - rubric_item_id: R6
+    title: 契约文件被修改
+    severity: fatal
+    f1_symptom: 我要求别动的那份说明文件好像被改了。
+    detect:
+      source: script
+      check_ids: [HG3]
+    evidence_required: [command_output]
+    tags: [integrity]
+
+  - rubric_item_id: R7
+    title: 选图后预览为空
+    severity: minor
+    f1_symptom: 选完图后预览区还是空的。
+    f3_visual:
+      description: 预览区显示为灰白占位，没有图片内容。
+      regions: [预览区中心区域]
+    detect:
+      source: llm_judge
+      check_ids: [R7]
+    evidence_required: [screenshot]
+    tags: [ui]
+
+  - rubric_item_id: R8
+    title: 灰度偏色
+    severity: minor
+    f1_symptom: 点了灰度，画面有点发红。
+    f3_visual:
+      description: 整体画面发红，白色区域也带红色调。
+      regions: [整幅画面]
+    detect:
+      source: llm_judge
+      check_ids: [R8]
+    evidence_required: [screenshot]
+    tags: [visual]
+
+  - rubric_item_id: R9
+    title: 旋转无效
+    severity: minor
+    f1_symptom: 点旋转后画面还是原来的方向。
+    f3_visual:
+      description: 旋转后画面方向未变化，宽高比也未变。
+      regions: [预览区]
+    detect:
+      source: llm_judge
+      check_ids: [R9]
+    evidence_required: [screenshot]
+    tags: [visual]
+
+  - rubric_item_id: R10
+    title: 处理大图时无反馈
+    severity: minor
+    f1_symptom: 点一下要等好久，期间界面像死了一样。
+    f3_visual:
+      description: 处理期间按钮仍可点击，无加载提示，状态文字不变。
+      regions: [按钮区, 状态文字]
+    detect:
+      source: llm_judge
+      check_ids: [R10]
+    evidence_required: [screenshot]
+    tags: [interaction]
+
+  - rubric_item_id: R11
+    title: 失败时闪退
+    severity: minor
+    f1_symptom: 出错了就直接退出去，没看到任何提示。
+    f3_visual:
+      description: 出错后应用回到桌面，没有任何提示文字。
+      regions: [屏幕底部]
+    detect:
+      source: llm_judge
+      check_ids: [R11]
+    evidence_required: [screenshot]
+    tags: [error_state]
+
+  - rubric_item_id: R12
+    title: 未选图时按钮未禁用
+    severity: minor
+    f1_symptom: 还没选图按钮就是亮的，点了也没反应。
+    f3_visual:
+      description: 初始页面处理按钮颜色与可点击态一致，没有禁用视觉。
+      regions: [按钮区]
+    detect:
+      source: llm_judge
+      check_ids: [R12]
+    evidence_required: [screenshot]
+    tags: [ui]

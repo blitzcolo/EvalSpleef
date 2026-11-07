@@ -1,0 +1,122 @@
+# logic-002 缺陷现象目录（catalog）
+document_type: catalog
+schema_version: "1.0"
+task_id: logic-002
+catalog_version: 1.0.0
+
+items:
+  - rubric_item_id: R1
+    title: 答案不可解析
+    severity: fatal
+    f1_symptom: 交上来的东西我打不开，像一段说明文字。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        解析失败：文件首字符不是 { 或末字符不是 }。
+        期望顶层键集合 = {instances}
+      source_command: 验证侧解析 answer.json
+      redactions: ["<PATH>"]
+    detect: {source: script, check_ids: [verify_submission.HG2]}
+    evidence_required: [file_path, command_output]
+    tags: [format]
+
+  - rubric_item_id: R2
+    title: 孔洞位置错误
+    severity: fatal
+    f1_symptom: 有几组你说的洞跟我自己折出来的对不上。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        实例 2：期望 8 个洞，提交 7 个
+        实例 4：期望与提交有 4 处位置不同
+      source_command: 验证侧比对 answer.json
+      redactions: []
+    detect: {source: script, check_ids: [verify_submission.HG1, checker.HOLES_MISMATCH]}
+    evidence_required: [file_path]
+    tags: [answer]
+
+  - rubric_item_id: R3
+    title: 孔洞列表未排序或重复
+    severity: functional
+    f1_symptom: 洞的编号顺序有点怪，大的排前面了。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        实例 1 holes=[27, 22, 11, 6]：非升序
+        实例 3 holes 出现重复编号
+      source_command: 验证侧格式校验
+      redactions: []
+    detect: {source: script, check_ids: [checker.HOLES_UNSORTED, checker.HOLES_DUPLICATED]}
+    evidence_required: [file_path]
+    tags: [format]
+
+  - rubric_item_id: R4
+    title: 受保护输入被修改
+    severity: fatal
+    f1_symptom: 你动过原始记录吗？我这边对不上最开始那一版了。
+    f2_evidence:
+      kind: console_log
+      text: |
+        instances.json 哈希不一致：预置 <HASH_EXPECTED>，当前 <HASH_ACTUAL>
+      source_command: 验证侧哈希锁检查
+      redactions: ["<HASH_EXPECTED>", "<HASH_ACTUAL>"]
+    detect: {source: script, check_ids: [verify_submission.HG3]}
+    evidence_required: [file_path]
+    tags: [anti_cheat]
+
+  - rubric_item_id: R5
+    title: 推导缺少折叠过程
+    severity: functional
+    f1_symptom: 推导里看不到折的过程中哪些格子叠在一起。
+    f3_visual:
+      description: 推导区只有最终洞列表和一句结论，没有中间列的格子构成。
+      regions: ["答案 derivation 文本区"]
+    detect: {source: llm_judge, check_ids: [rubric.R5]}
+    evidence_required: [file_path]
+    tags: [derivation]
+
+  - rubric_item_id: R6
+    title: 推导未说明洞的来源
+    severity: functional
+    f1_symptom: 你只给了洞的列表，我想知道每个洞是怎么来的。
+    f3_visual:
+      description: 推导没有指出任一孔位穿过哪几层或对应的原始格子。
+      regions: ["答案 derivation 文本区"]
+    detect: {source: llm_judge, check_ids: [rubric.R6]}
+    evidence_required: [file_path]
+    tags: [derivation]
+
+  - rubric_item_id: R9
+    title: 推导超长或含代码块
+    severity: minor
+    f1_symptom: 推导太长了，我找不到重点。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        实例 2 derivation 长度 418 字符（上限 300）
+      source_command: 验证侧格式校验
+      redactions: []
+    detect: {source: script, check_ids: [checker.DERIVATION_TOO_LONG]}
+    evidence_required: [file_path]
+    tags: [format]
+
+  - rubric_item_id: R10
+    title: 缺少推导字段
+    severity: fatal
+    f1_symptom: 有一组只有洞没有推导，我没法判断是不是猜的。
+    f2_evidence:
+      kind: test_failure
+      text: |
+        结构校验输出：实例 4 缺少 derivation 字段
+      source_command: 验证侧结构校验
+      redactions: []
+    detect:
+      source: script
+      check_ids: [checker.DERIVATION_MISSING]
+    evidence_required: [file_path]
+    tags: [format, derivation]
+
+extensions:
+  coverage:
+    note: 覆盖 functional/fatal 条目 R1-R6、R10（R10 与 R1 共用结构校验现象时可换措辞）。
+  author: tasks-a

@@ -1,0 +1,158 @@
+# harmony-001 rubric（对齐 schemas/rubric.schema.json v1.0）
+# 判分口径：硬门槛（HG1-HG3）由脚本给出；以下条目只覆盖硬门槛之外的软性验收。
+schema_version: "1.0"
+task_id: harmony-001
+rubric_version: 1.0.0
+title: 鸿蒙图片滤镜：ArkTS 界面 + C++ NAPI 插件
+items:
+  - id: R1
+    kind: script
+    severity: fatal
+    description: 能在命令行完整构建出可安装的 debug HAP。
+    pass_criteria: hvigorw assembleHap --mode module -p product=default -p buildMode=debug 退出码 0，且 entry/build/default/outputs/default/ 下存在 *-signed.hap。
+    applies_to: [stdout, log]
+    evidence_required: [command_output]
+    f1_symptom: 我拿到的包装不上，说没有安装包。
+    f2_evidence: 构建命令以非 0 退出，最后几行是编译错误。
+    hidden: true
+    tags: [build, fatal]
+    author: research
+
+  - id: R2
+    kind: script
+    severity: fatal
+    description: 装到设备后能启动且 10 秒内不崩溃。
+    pass_criteria: hdc install 返回成功；hdc shell aa start -a EntryAbility -b com.example.imagefilters 后 10 秒内 hilog 无 crash/abort 关键字。
+    applies_to: [device_state, log]
+    evidence_required: [log_excerpt]
+    f1_symptom: 点开图标就退回桌面。
+    f2_evidence: 启动后设备日志里出现进程崩溃信息。
+    hidden: true
+    tags: [startup, device]
+    author: research
+
+  - id: R3
+    kind: script
+    severity: functional
+    description: 原生侧五个图像处理函数的像素结果符合接口说明。
+    pass_criteria: bash hidden-tests/run.sh 的 C++ 数值段全部通过（灰度/提亮/对比度/模糊/旋转共 25 项断言）。
+    applies_to: [source, stdout]
+    evidence_required: [command_output]
+    f1_symptom: 图片处理完跟没处理一样。
+    hidden: true
+    tags: [image_processing, correctness]
+    author: research
+
+  - id: R4
+    kind: script
+    severity: functional
+    description: 原生模块导出的五个接口与界面层类型声明一一对应。
+    pass_criteria: 静态检查通过：napi_init.cpp 注册了五个同名函数并 include 处理头文件，index.d.ts 声明五个导出。
+    applies_to: [source]
+    evidence_required: [file_path]
+    f1_symptom: 点按钮没反应，界面那边也拿不到处理结果。
+    hidden: true
+    tags: [napi, contract]
+    author: research
+
+  - id: R5
+    kind: script
+    severity: functional
+    description: 界面把像素取出、调原生、写回预览的链路完整。
+    pass_criteria: 静态检查通过：Index.ets 导入 NAPI 模块，出现全部五个调用，并使用 readPixelsToBuffer 与 createPixelMap。
+    applies_to: [source]
+    evidence_required: [file_path]
+    f1_symptom: 预览区永远是原图，按钮像摆设。
+    hidden: true
+    tags: [ui_pipeline]
+    author: research
+
+  - id: R6
+    kind: script
+    severity: fatal
+    description: 接口契约文件未被修改。
+    pass_criteria: python3 hidden-tests/static_checks.py --locks-only 退出码 0（image_ops.h 与 index.d.ts 的 sha256 与 locks.json 一致）。
+    applies_to: [source]
+    evidence_required: [command_output]
+    f1_symptom: 我要求别动的那份说明文件好像被改了。
+    hidden: true
+    tags: [integrity, cheat_guard]
+    author: research
+
+  - id: R7
+    kind: llm_judge
+    severity: minor
+    description: 选图后预览区显示的是所选图片。
+    judge_question: 截图里预览区显示的图片与所选图片内容一致吗？
+    pass_criteria: 截图显示预览区为所选图片的缩略显示，背景为浅灰占位区域，图片完整未裁切到关键内容。
+    applies_to: [screenshot]
+    evidence_required: [screenshot]
+    f1_symptom: 选完图后预览区还是空的。
+    f3_visual: 预览区显示为灰白占位，没有图片内容。；位置：预览区中心区域
+    tags: [ui, preview]
+    author: research
+
+  - id: R8
+    kind: llm_judge
+    severity: minor
+    description: 灰度处理后的画面没有明显偏色。
+    judge_question: 处理后的画面整体呈现为无彩色的灰度画面吗？
+    pass_criteria: 处理后画面各像素 R/G/B 通道接近相等，无可见色偏（允许 ≤2 级色阶差异）。
+    applies_to: [screenshot]
+    evidence_required: [screenshot]
+    f1_symptom: 点了灰度，画面有点发红。
+    f3_visual: 整体画面发红，白色区域也带红色调。；位置：整幅画面
+    tags: [visual, grayscale]
+    author: research
+
+  - id: R9
+    kind: llm_judge
+    severity: minor
+    description: 旋转 90° 后预览方向正确。
+    judge_question: 旋转后预览区的画面相对旋转前是否顺时针转了 90 度？
+    pass_criteria: 旋转后原横向内容变为纵向，且内容方向为顺时针 90°；预览区未出现拉伸变形。
+    applies_to: [screenshot]
+    evidence_required: [screenshot]
+    f1_symptom: 点旋转后画面还是原来的方向。
+    f3_visual: 旋转后画面方向未变化，宽高比也未变。；位置：预览区
+    tags: [visual, rotate]
+    author: research
+
+  - id: R10
+    kind: llm_judge
+    severity: minor
+    description: 处理大图时界面仍有可用反馈，不出现长时间无响应。
+    judge_question: 处理大图期间界面是否出现了可见的处理中反馈？
+    pass_criteria: 处理期间按钮呈现禁用或加载状态，或出现提示条；处理完成后状态文本更新。
+    applies_to: [screenshot, log]
+    evidence_required: [screenshot]
+    f1_symptom: 点一下要等好久，期间界面像死了一样。
+    f3_visual: 处理期间按钮仍可点击，无加载提示，状态文字不变。；位置：按钮区, 状态文字
+    tags: [interaction, performance]
+    author: research
+
+  - id: R11
+    kind: llm_judge
+    severity: minor
+    description: 处理失败时给出中文提示而非闪退。
+    judge_question: 处理失败时界面上是否出现了中文错误提示？
+    pass_criteria: 失败路径（如未选图、非法参数）显示中文提示文本，应用进程未退出。
+    applies_to: [screenshot, log]
+    evidence_required: [screenshot]
+    f1_symptom: 出错了就直接退出去，没看到任何提示。
+    f3_visual: 出错后应用回到桌面，没有任何提示文字。；位置：屏幕底部
+    tags: [error_state]
+    author: research
+
+  - id: R12
+    kind: llm_judge
+    severity: minor
+    description: 未选图时各处理按钮为禁用状态。
+    judge_question: 未选择图片时处理按钮是否处于不可点击状态？
+    pass_criteria: 启动后未选图时，五个处理按钮显示为禁用（灰度化/降低透明度）且点击无效果。
+    applies_to: [screenshot]
+    evidence_required: [screenshot]
+    f1_symptom: 还没选图按钮就是亮的，点了也没反应。
+    f3_visual: 初始页面处理按钮颜色与可点击态一致，没有禁用视觉。；位置：按钮区
+    tags: [ui, state]
+    author: research
