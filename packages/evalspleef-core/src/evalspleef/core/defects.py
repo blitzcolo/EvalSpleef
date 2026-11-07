@@ -328,17 +328,19 @@ class DefectTracker:
         for item_id in partial:
             if item_id in seen:
                 continue
-            defect = active_by_item.get(item_id)
-            if defect is not None and defect.defect_id not in persisting_ids:
+            partial_defect = active_by_item.get(item_id)
+            if partial_defect is not None and partial_defect.defect_id not in persisting_ids:
                 # 有改善但未通过：仍算 persisting（未修复），progress=partial。
-                defect.status = DefectStatus.PERSISTING
-                defect.last_round = round_no
-                if round_no not in defect.rounds_failed:
-                    defect.rounds_failed = (*defect.rounds_failed, round_no)
-                defect.progress = DefectProgress.PARTIAL
-                defect.evidence = self._merge_evidence(defect.evidence, evidence.get(item_id, ()))
-                persisting_ids.append(defect.defect_id)
-                partial_ids.append(defect.defect_id)
+                partial_defect.status = DefectStatus.PERSISTING
+                partial_defect.last_round = round_no
+                if round_no not in partial_defect.rounds_failed:
+                    partial_defect.rounds_failed = (*partial_defect.rounds_failed, round_no)
+                partial_defect.progress = DefectProgress.PARTIAL
+                partial_defect.evidence = self._merge_evidence(
+                    partial_defect.evidence, evidence.get(item_id, ())
+                )
+                persisting_ids.append(partial_defect.defect_id)
+                partial_ids.append(partial_defect.defect_id)
 
         # 未失败的活跃缺陷 => 本轮复测通过。
         for item_id, defect in active_by_item.items():

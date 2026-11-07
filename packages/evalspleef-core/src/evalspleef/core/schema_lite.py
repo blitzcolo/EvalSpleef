@@ -71,7 +71,7 @@ def _json_equal(left: Any, right: Any) -> bool:
         return len(left) == len(right) and all(
             _json_equal(a, b) for a, b in zip(left, right, strict=False)
         )
-    return left == right
+    return bool(left == right)
 
 
 class SchemaStore:

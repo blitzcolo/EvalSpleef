@@ -16,7 +16,7 @@ import argparse
 import json
 import random
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,8 @@ from .models import (
     CellStatus,
     CheckKind,
     Defect,
+    DefectProgress,
+    DefectStatus,
     Evidence,
     FeedbackLevel,
     RubricItem,
@@ -141,7 +143,7 @@ def _defect_from_dict(data: Mapping[str, Any]) -> Defect:
         defect_id=str(data["defect_id"]),
         rubric_item_id=str(data["rubric_item_id"]),
         severity=Severity(str(data["severity"])),
-        status=str(data["status"]),
+        status=DefectStatus(str(data["status"])),
         first_round=int(data["first_round"]),
         last_round=int(data.get("last_round", data["first_round"])),
         rounds_failed=rounds,
@@ -152,7 +154,7 @@ def _defect_from_dict(data: Mapping[str, Any]) -> Defect:
             if data.get("max_level_during_open") is None
             else FeedbackLevel(str(data["max_level_during_open"]))
         ),
-        progress=str(data.get("progress", "none")),
+        progress=DefectProgress(str(data.get("progress", "none"))),
         evidence=tuple(Evidence.from_any(item) for item in data.get("evidence", ())),
     )
 
@@ -218,8 +220,8 @@ def run_lint(args: argparse.Namespace) -> int:
             failures.append((file_path, schema_name, errors))
         else:
             print(f"[ok] {file_path} <- {schema_name}")
-    for file_path in skipped:
-        print(f"[skip] {file_path}（无对应 schema 或文件类型为内部样例）")
+    for skipped_path in skipped:
+        print(f"[skip] {skipped_path}（无对应 schema 或文件类型为内部样例）")
     for file_path, schema_name, errors in failures:
         print(f"[FAIL] {file_path} <- {schema_name}")
         for error in errors:
@@ -447,7 +449,7 @@ def _build_demo_rubric() -> tuple[RubricSet, tuple[RubricItem, ...]]:
 def _judge_for_scenario(items: Sequence[RubricItem], *, fixed: set[str]) -> JudgePanel:
     """构造离线评审团：已修复条目判 pass，其余 fail。"""
 
-    def make_responder(should_pass: bool):
+    def make_responder(should_pass: bool) -> Callable[[str], str]:
         def responder(prompt: str) -> str:
             item_id = prompt.split("rubric_item_id: ")[1].split("\n")[0].strip()
             verdict = should_pass and item_id in fixed

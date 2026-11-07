@@ -459,7 +459,7 @@ def scan_trials(
 
 
 def scan_documents(
-    trials: Iterable[Mapping[str, Any]],
+    trials: Iterable[Mapping[str, Any] | CanaryTrial],
     *,
     token_owner: Mapping[str, str] | None = None,
     allowed_hosts: Iterable[str] = (),
