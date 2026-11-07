@@ -1,0 +1,74 @@
+# Isolation profile for HarmonyOS device pool and bare-metal performance host (FR-SBX-11).
+# I1-I16 per PRD appendix D.2.
+provider: device-pool
+declared_isolation: L4
+verified_isolation: null
+invariants:
+  I1:
+    how: 'physical device leased from inventory with exclusive lease_id; destroyed after trial and cannot be claimed by another trial concurrently'
+    probe: 'device state in inventory transitions free -> in_use -> handover_check'
+    waived: false
+  I2:
+    how: 'waived'
+    probe: 'hdc shell touch /system/.__ro_probe fails or returns read-only filesystem'
+    waived: true
+    reason: 'physical device root filesystem is vendor-flashed firmware; build container has isolated filesystem, and return hygiene verifies baseline hash'
+    compensating: 'baseline package diff and configuration sha256 checked at handover (I14)'
+    approved_by: 'eval-lead'
+    expires: '2027-03-01'
+  I3:
+    how: 'build container /tmp and workspace are trial-scoped; device temporary directory /data/local/tmp is wiped completely at handover'
+    probe: 'hdc shell rm -rf /data/local/tmp/* leaves no test artifacts'
+    waived: false
+  I4:
+    how: 'build container has no default network egress; device communicates only via USB/TCP hdc link to the host runner'
+    probe: 'no external internet route on build container'
+    waived: false
+  I5:
+    how: 'build container has no docker socket or host mounts; device access is restricted to whitelisted actions over hdc'
+    probe: 'test ! -S /var/run/docker.sock and agent has no unrestricted shell'
+    waived: false
+  I6:
+    how: 'build container runs as unprivileged agent user; device actions run via standard non-root shell user over hdc'
+    probe: 'id -u != 0 in build container'
+    waived: false
+  I7:
+    how: 'build container resources capped by host cgroups; device has dedicated physical hardware resources'
+    probe: 'device hardware model and SoC verified via hdc getprop / dump'
+    waived: false
+  I8:
+    how: 'no evaluation identity (task, batch, model) is injected into container environment or device properties'
+    probe: 'env scan contains no EVAL/TASK/BATCH variables'
+    waived: false
+  I9:
+    how: 'HAP packages and build templates are referenced by sha256 digest; signing credentials stay on host, never enter device'
+    probe: 'manifest digests match and no private keys on device'
+    waived: false
+  I10:
+    how: 'verifier runs in a separate verification sandbox; hidden tests are never pushed to the device during the agent phase'
+    probe: 'verifier_lease_id != agent_lease_id'
+    waived: false
+  I11:
+    how: 'evidence (screenshots, hilog) sanitized and size-capped on retrieval'
+    probe: 'downloaded evidence passes path and size sanitization'
+    waived: false
+  I12:
+    how: 'hidden test cases and reference answers stay on verifier host; device holds only the application under test'
+    probe: 'tests.sha256 checked on verifier side'
+    waived: false
+  I13:
+    how: 'cross-trial canary scan over retrieved logs and evidence'
+    probe: 'canary scan reports zero critical hits'
+    waived: false
+  I14:
+    how: 'mandatory handover checklist: force-stop apps, uninstall non-baseline packages, clear /data/local/tmp, reboot device, and verify baseline package list + sha256 hash; failing devices are quarantined and removed from pool'
+    probe: 'handover.json status=pass and package diff is empty'
+    waived: false
+  I15:
+    how: 'judge contexts run in independent isolated sessions'
+    probe: 'judge session id is trial-scoped'
+    waived: false
+  I16:
+    how: 'hdc commands and host build container operations are fully logged in audit log'
+    probe: 'audit log contains timestamped record of all hdc and exec commands'
+    waived: false
