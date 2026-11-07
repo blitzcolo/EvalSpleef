@@ -1,0 +1,72 @@
+# Line endings: LF in the repository and on every checkout.
+* text=auto eol=lf
+
+# Scripts that are executed inside guests or piped over stdin/SSH must stay LF,
+# including on Windows checkouts with core.autocrlf enabled.
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.ps1       text eol=lf
+Dockerfile* text eol=lf
+*.dockerfile text eol=lf
+Makefile    text eol=lf
+*.mk        text eol=lf
+
+# Windows-native batch files need CRLF to run reliably.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Task packs carry hash-locked content (tests, starters, patches, expected outputs).
+# Never normalise bytes there: a rewritten line ending changes the sha256 lock.
+tasks/**    -text
+
+# Diff hunk headers that understand the language.
+*.py        diff=python
+*.md        diff=markdown
+
+# Binary assets: never diff, never merge as text.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.webp      binary
+*.pdf       binary
+*.mp3       binary
+*.mp4       binary
+*.webm      binary
+*.wav       binary
+*.ogg       binary
+*.ttf       binary
+*.woff      binary
+*.woff2     binary
+*.zip       binary
+*.tar       binary
+*.gz        binary
+*.tgz       binary
+*.whl       binary
+*.so        binary
+*.dylib     binary
+*.dll       binary
+*.exe       binary
+*.hap       binary
+*.vhdx      binary
+*.qcow2     binary
+
+# Generated files: collapsed in review, never hand-edited.
+uv.lock          linguist-generated=true
+constraints.txt  linguist-generated=true
+*_pb2.py         linguist-generated=true
+*_pb2.pyi        linguist-generated=true
+*_pb2_grpc.py    linguist-generated=true
+
+# Specification documents are documentation, not source, for language statistics.
+PRD.md           linguist-documentation=true
+TECH-DESIGN.md   linguist-documentation=true
+docs/**          linguist-documentation=true
+
+# Keep repository-management files out of `git archive` release tarballs.
+.githooks        export-ignore
+.gitattributes   export-ignore
+.gitignore       export-ignore
+AGENTS.md        export-ignore
+PLAN.md          export-ignore

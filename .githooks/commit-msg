@@ -1,0 +1,4 @@
+#!/bin/sh
+# Enforces the commit message rules from AGENTS.md. Enable with:
+#   git config core.hooksPath .githooks
+exec python3 "$(git rev-parse --show-toplevel)/scripts/lint_commit_msg.py" "$1"

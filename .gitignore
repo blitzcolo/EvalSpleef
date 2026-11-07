@@ -1,0 +1,116 @@
+# ---------- OS / editor ----------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ---------- Agent tooling local state (never tracked) ----------
+.omo/
+.senpi/
+.claude/
+.codex/
+.cursor/
+.opencode/
+
+# ---------- Python / uv ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.import_linter_cache/
+.tox/
+.nox/
+.ipynb_checkpoints/
+
+# ---------- Node (tooling/docs only) ----------
+node_modules/
+
+# ---------- Secrets and credentials ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.kubeconfig
+kubeconfig
+secrets/
+*.secret
+*.secrets
+.netrc
+credentials.json
+hf_token*
+.huggingface/
+# hostd mTLS material issued at registration time
+hostd-certs/
+certs/
+
+# ---------- Platform runtime data (produced by running batches) ----------
+.spleef/
+var/
+runs/
+trials/
+batches/
+artifacts/
+reports/
+logs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+pgdata/
+postgres-data/
+minio-data/
+redis-data/
+tmp/
+.tmp/
+
+# ---------- Deploy-local overrides ----------
+docker-compose.override.yml
+deploy/**/.env
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# ---------- VM / disk images and golden artifacts (distributed via registries, never git) ----------
+*.vhd
+*.vhdx
+*.qcow2
+*.vmdk
+*.iso
+*.img
+*.ova
+*.dmg
+*.ipsw
+*.tvm
+packer_cache/
+templates/**/out/
+templates/**/output-*/
+
+# ---------- Profiling / benchmarks ----------
+*.prof
+.benchmarks/
