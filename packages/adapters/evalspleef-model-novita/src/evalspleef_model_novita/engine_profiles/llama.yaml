@@ -1,0 +1,11 @@
+# Llama 3.x uses JSON tool calls; Llama 4 uses the pythonic parser.
+name: llama
+match: [llama]
+tool_call_parser: llama3_json
+reasoning_parser: null
+quantization: null
+extra_args: []
+variants:
+  - match: [llama-4, llama4]
+    tool_call_parser: llama4_pythonic
+    reasoning_parser: null

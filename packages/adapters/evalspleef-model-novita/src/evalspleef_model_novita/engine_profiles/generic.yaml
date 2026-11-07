@@ -1,0 +1,9 @@
+# Fallback for any family without a dedicated profile: no parsers, so tool calling and
+# reasoning extraction must be established by the capability probe, not assumed.
+name: generic
+match: []
+tool_call_parser: null
+reasoning_parser: null
+quantization: null
+extra_args: []
+variants: []

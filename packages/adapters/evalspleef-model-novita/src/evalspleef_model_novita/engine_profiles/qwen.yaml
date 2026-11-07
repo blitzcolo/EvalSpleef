@@ -1,0 +1,12 @@
+# vLLM argument profile for the Qwen family. Parser names follow the vLLM tool-calling guide;
+# they must be re-checked against the vLLM version inside the pinned image.
+name: qwen
+match: [qwen, qwq]
+tool_call_parser: hermes
+reasoning_parser: qwen3
+quantization: null
+extra_args: []
+variants:
+  - match: [coder]
+    tool_call_parser: qwen3_xml
+    reasoning_parser: null
