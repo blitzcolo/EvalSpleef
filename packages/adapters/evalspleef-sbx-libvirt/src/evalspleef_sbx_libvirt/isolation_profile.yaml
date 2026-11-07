@@ -1,0 +1,75 @@
+# Isolation profile for the libvirt (QEMU/KVM) sandbox provider (FR-SBX-11).
+# I1-I16 per PRD appendix D.2; generated from evalspleef_sbx_libvirt.isolation
+# (the runtime source of truth) - keep both in sync, the tests enforce it.
+provider: libvirt
+declared_isolation: L3
+verified_isolation: null
+invariants:
+  I1:
+    how: 'every trial gets a fresh qcow2 overlay over the immutable golden image and a newly defined domain; the domain is undefined and the overlay deleted after the trial, and the lease id is recorded as a domain label'
+    probe: 'list(labels) returns the domain while live and nothing after destroy'
+    waived: false
+  I10:
+    how: 'verifier and judge roles are separate SandboxSpec roles scheduled to their own domains and leases; the provider never mixes them'
+    probe: 'verifier_lease_id != agent_lease_id for a trial'
+    waived: false
+  I11:
+    how: 'download walks the remote tree and rejects absolute or escaping symlinks, special files and setuid/setgid bits, and enforces size caps'
+    probe: 'downloading a symlink pointing at /etc/passwd raises TransferError'
+    waived: false
+  I12:
+    how: 'hidden tests never enter agent-side templates; hash locks live in the task pack, which the provider does not touch'
+    probe: 'tests.sha256 manifest matches the verifier-side files'
+    waived: false
+  I13:
+    how: 'a fresh overlay per trial means no state carries over; canary token placement is a control-plane concern recorded per trial'
+    probe: 'cross-trial canary scan reports zero critical hits'
+    waived: false
+  I14:
+    how: 'domains are destroyed at trial end and never returned to a pool; orphan domains are reclaimed by label through reap() and the TTL label'
+    probe: 'list(labels) is empty after destroy; spleef.expires_at bounds the domain lifetime'
+    waived: false
+  I15:
+    how: 'judge contexts run in their own trial-scoped domain like any other role'
+    probe: 'judge session is unique per trial'
+    waived: false
+  I16:
+    how: 'docs_whitelist/package_mirror are only offered when the provider is configured with an egress proxy and the policy carries via_proxy; the nwfilter permits only the proxy address, and the proxy logs every request'
+    probe: "the egress proxy's url.jsonl has one line per request; direct egress bypass is not offered"
+    waived: false
+  I2:
+    how: 'waived: the guest root disk is writable for the duration of the trial'
+    probe: 'mount writes are discarded with the per-trial overlay'
+    waived: true
+    reason: 'the guest kernel and toolchain expect a writable root disk; the root disk is a copy-on-write overlay that is destroyed with the domain'
+    compensating: 'key-path hash comparison plus canary token scan before and after the trial; the overlay is never reused'
+    approved_by: 'evaluation lead'
+    expires: '2027-03-01'
+  I3:
+    how: 'each trial writes only into its own overlay and its own /workspace; the golden image is opened read-only as the backing file and nothing is shared between domains'
+    probe: "a marker written by one trial is absent in the next trial's guest"
+    waived: false
+  I4:
+    how: 'NetMode.OFF attaches the domain to an isolated libvirt network with no forwarding, plus an nwfilter that drops all egress; allowlisted traffic uses the proxy network and the matching nwfilter'
+    probe: 'curl --max-time 3 https://example.com exits non-zero in an off sandbox'
+    waived: false
+  I5:
+    how: 'no host directories are mounted into the guest and no host devices or container sockets are passed through; only the overlay disk and the virtual NIC are attached'
+    probe: 'the guest mount table shows no host path and no container socket'
+    waived: false
+  I6:
+    how: 'commands run as the non-root run_as_user over SSH; the template user has no sudo rule'
+    probe: 'id -u is not 0 and sudo -n true fails'
+    waived: false
+  I7:
+    how: 'vcpu and memory are set from the requested Resources in the domain XML and enforced by the hypervisor'
+    probe: 'nproc and /proc/meminfo stay within the requested cpu and memory'
+    waived: false
+  I8:
+    how: "the provider injects no evaluation identity: the domain carries labels only in host-side metadata and the guest hostname is the template's neutral name; runner-side env -i whitelisting sits on top"
+    probe: 'env contains no TASK/BATCH/MODEL/EVAL-style names'
+    waived: false
+  I9:
+    how: 'templates are referenced by sha256 digest in TemplateRef and the backing file is resolved locally; long-lived credentials never enter the domain XML or the guest, only the per-trial gateway key is allowed'
+    probe: 'qemu-img info reports the recorded backing format; the guest env scan shows no long-lived credentials'
+    waived: false
