@@ -90,6 +90,7 @@ def load_cases() -> list[Case]:
 def discover_targets(config: pytest.Config) -> list[ConformanceTarget]:
     """All targets from entry points plus ``pytest_spleef_targets`` hook implementations."""
     targets: list[ConformanceTarget] = []
+    failures: dict[str, str] = {}
     for entry_point in entry_points(group="evalspleef.conformance_targets"):
         try:
             loaded = entry_point.load()
@@ -105,6 +106,19 @@ def discover_targets(config: pytest.Config) -> list[ConformanceTarget]:
                 stacklevel=2,
             )
             continue
+        except Exception as exc:
+            # Discovery only runs when targets are selected by name, so a failing adapter
+            # must not take down a run that selects another one. The failure is reported as
+            # a warning and, if the requested target is missing, in the usage error.
+            failures[entry_point.name] = f"{type(exc).__name__}: {exc}"
+            config.issue_config_time_warning(
+                pytest.PytestWarning(
+                    f"conformance target entry point {entry_point.name!r} failed "
+                    f"({failures[entry_point.name]}); it is ignored"
+                ),
+                stacklevel=2,
+            )
+            continue
         targets.extend(produced)
     hook_results: list[list[ConformanceTarget]] = config.hook.pytest_spleef_targets(config=config)
     for produced in hook_results:
@@ -115,8 +129,11 @@ def discover_targets(config: pytest.Config) -> list[ConformanceTarget]:
         unknown = [name for name in requested if name not in by_name]
         if unknown:
             known = ", ".join(sorted(by_name)) or "(none)"
+            failed = "".join(
+                f"; entry point {name!r} failed: {why}" for name, why in failures.items()
+            )
             raise pytest.UsageError(
-                f"unknown --spleef-provider {unknown!r}; known targets: {known}"
+                f"unknown --spleef-provider {unknown!r}; known targets: {known}{failed}"
             )
         return [by_name[name] for name in requested]
     return targets
@@ -238,20 +255,19 @@ def _build_report(items: list[ConformanceItem]) -> ConformanceReport:
     return ConformanceReport(targets=tuple(summaries), results=results)
 
 
-@pytest.hookimpl(wrapper=True)
-def pytest_collection(session: pytest.Session) -> Any:
-    """Generate conformance items after the regular collection ran."""
-    result = yield
-    requested: list[str] = session.config.getoption("--spleef-provider")
+def pytest_collection_modifyitems(
+    session: pytest.Session, config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Add the generated conformance items before pytest counts what it collected."""
+    requested: list[str] = config.getoption("--spleef-provider")
     if not requested:
-        return result
-    targets = discover_targets(session.config)
+        return
+    targets = discover_targets(config)
     cases = load_cases()
     collector = ConformanceCollector.from_parent(
         session, name="spleef-conformance", targets=targets, cases=cases
     )
-    session.items.extend(collector.collect())
-    return result
+    items.extend(collector.collect())
 
 
 def _run_cleanup(cleanup: Callable[[], Awaitable[None]]) -> None:

@@ -6,6 +6,7 @@ import asyncio
 import json
 import sys
 import types
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -209,6 +210,51 @@ def test_unknown_provider_name_is_an_error(pytester: pytest.Pytester) -> None:
     _write_targets(pytester)
     result = pytester.runpytest("--spleef-provider=does-not-exist")
     result.stderr.fnmatch_lines(["*unknown --spleef-provider*"])
+
+
+def test_fully_passing_run_exits_zero(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Generated items count as collected, so a passing run is a success, not exit code 5."""
+    _write_targets(pytester)
+    _install_cases(monkeypatch, (_passing_case(),))
+    result = pytester.runpytest("--spleef-provider=streaming", "--spleef-report=conf/report")
+    assert result.ret == pytest.ExitCode.OK
+    result.assert_outcomes(passed=1)
+
+
+class _BrokenEntryPoint:
+    name = "broken-adapter"
+
+    def load(self) -> Callable[[], list[ConformanceTarget]]:
+        def build() -> list[ConformanceTarget]:
+            raise RuntimeError("certificate generation failed")
+
+        return build
+
+
+def test_failing_adapter_does_not_block_a_run_that_selects_another_target(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broken adapter entry point is a warning, not an INTERNALERROR for unrelated runs."""
+    _write_targets(pytester)
+    _install_cases(monkeypatch, (_passing_case(),))
+    monkeypatch.setattr(plugin, "entry_points", lambda *, group: (_BrokenEntryPoint(),))
+    result = pytester.runpytest("--spleef-provider=streaming", "--spleef-report=conf/report")
+    assert result.ret == 0
+    result.stdout.fnmatch_lines(["*broken-adapter*RuntimeError: certificate generation failed*"])
+
+
+def test_unknown_provider_error_names_adapters_that_failed_to_load(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A requested target that is missing because its adapter crashed says so."""
+    _write_targets(pytester)
+    monkeypatch.setattr(plugin, "entry_points", lambda *, group: (_BrokenEntryPoint(),))
+    result = pytester.runpytest("--spleef-provider=broken-adapter-target")
+    result.stderr.fnmatch_lines(
+        ["*unknown --spleef-provider*broken-adapter*RuntimeError: certificate generation failed*"]
+    )
 
 
 def test_no_flag_means_no_generated_items(pytester: pytest.Pytester) -> None:
