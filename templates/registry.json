@@ -1,0 +1,80 @@
+{
+  "data-001": {
+    "built_at": "2026-11-07T19:39:08.025939+00:00",
+    "fingerprint": {
+      "packages_hash": "7df1ad5038020a49f2029a0fab8d856c11012a734d17841f6227961b4041660b",
+      "path": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "permissions": {
+        "home_writable": true,
+        "setuid_count": 0,
+        "sudo_present": false,
+        "workspace_writable": true
+      },
+      "toolchains": {
+        "bash": "GNU bash, version 5.2.37(1)-release (aarch64-unknown-linux-gnu)",
+        "patch": "GNU patch 2.8",
+        "python": "Python 3.12.16"
+      },
+      "user": {
+        "gid": 10001,
+        "id": "uid=10001(agent) gid=10001(agent) groups=10001(agent)",
+        "uid": 10001
+      }
+    },
+    "image_id": "sha256:83668792de3671151d0753eefbd543e9a994bc34b3a6a7ccc02767aa13de57f2",
+    "size_bytes": 422361139,
+    "tag": "llm-eval/data-001:local"
+  },
+  "debug-001": {
+    "built_at": "2026-11-07T19:39:08.025939+00:00",
+    "fingerprint": {
+      "packages_hash": "f8d766dd4ba85020b05663fc32e10e7f6438dc7752f7b532e7dc92ec490a93e8",
+      "path": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "permissions": {
+        "home_writable": true,
+        "setuid_count": 0,
+        "sudo_present": false,
+        "workspace_writable": true
+      },
+      "toolchains": {
+        "bash": "GNU bash, version 5.2.37(1)-release (aarch64-unknown-linux-gnu)",
+        "patch": "GNU patch 2.8",
+        "python": "Python 3.12.16"
+      },
+      "user": {
+        "gid": 10001,
+        "id": "uid=10001(agent) gid=10001(agent) groups=10001(agent)",
+        "uid": 10001
+      }
+    },
+    "image_id": "sha256:2d473129d373283025ae86d31782bba6c116868b941934cb67be7d5ffe18781d",
+    "size_bytes": 205082246,
+    "tag": "llm-eval/debug-001:local"
+  },
+  "logic-001": {
+    "built_at": "2026-11-07T19:39:08.025939+00:00",
+    "fingerprint": {
+      "packages_hash": "f8d766dd4ba85020b05663fc32e10e7f6438dc7752f7b532e7dc92ec490a93e8",
+      "path": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "permissions": {
+        "home_writable": true,
+        "setuid_count": 0,
+        "sudo_present": false,
+        "workspace_writable": true
+      },
+      "toolchains": {
+        "bash": "GNU bash, version 5.2.37(1)-release (aarch64-unknown-linux-gnu)",
+        "patch": "GNU patch 2.8",
+        "python": "Python 3.12.16"
+      },
+      "user": {
+        "gid": 10001,
+        "id": "uid=10001(agent) gid=10001(agent) groups=10001(agent)",
+        "uid": 10001
+      }
+    },
+    "image_id": "sha256:34a707efd91695a95d6183b482251b7c57af56fd827f43106684e4b2ceeb8640",
+    "size_bytes": 205082246,
+    "tag": "llm-eval/logic-001:local"
+  }
+}
