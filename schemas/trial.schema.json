@@ -1,0 +1,1829 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-eval.local/schemas/trial.schema.json",
+  "title": "trial 记录（状态机快照 + 隔离证据 + 成绩）",
+  "description": "一个 trial 的完整持久化记录：标识与版本（task/model/shell/epoch/index）、状态机快照（state/validity/terminal_condition）、轮次（rounds[]）、隔离证据（isolation：sandbox/device/canary/checks/leaks/network/secrets）、结果（result：hard_gates/defects/grades/cost/versions）与时间戳。状态与合法转移见 docs/02-eval-flow.md 第 4 节；隔离不变量 I1–I16 与证据包格式见 docs/04-isolation.md 第 5、7 节；grade 不在此重复定义，整文件 $ref grade.schema.json，重判通过新增 grade 版本表达（00-conventions §4.1）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "trial_id",
+    "batch_id",
+    "cell_id",
+    "task",
+    "model",
+    "shell",
+    "epoch",
+    "index",
+    "state",
+    "validity",
+    "budget",
+    "rounds",
+    "isolation",
+    "result",
+    "timestamps",
+    "audit"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "description": "本 Schema 的主版本号。"
+    },
+    "trial_id": {
+      "$ref": "defect.schema.json#/$defs/trial_id",
+      "description": "{task_id}.{model}.{shell}.e{epoch}.t{index}（00-conventions §2）；重试产生新 trial，index 递增，旧记录保留为 invalid。"
+    },
+    "batch_id": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-b[0-9]+$",
+      "description": "批次 ID，如 2026-11-b1（00-conventions §2）。"
+    },
+    "cell_id": {
+      "type": "string",
+      "pattern": "^[a-z]+-[0-9]{3}\\.[a-z0-9]+(?:[.-][a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "description": "单元格 ID：{task_id}.{model}.{shell}，同一 cell 跨 epoch。"
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "track",
+        "platform"
+      ],
+      "description": "题目快照：批次冻结时锁定，trial 期间不可变。",
+      "properties": {
+        "id": {
+          "$ref": "rubric.schema.json#/$defs/task_id",
+          "description": "题目 ID（{track}-{3位序号}）。"
+        },
+        "version": {
+          "$ref": "rubric.schema.json#/$defs/semver",
+          "description": "题目语义化版本；MAJOR/MINOR/PATCH 的重跑语义见 docs/02 §8。"
+        },
+        "track": {
+          "$ref": "task.schema.json#/properties/track",
+          "description": "12 个赛道之一，与 00-conventions §2 一致。"
+        },
+        "platform": {
+          "$ref": "task.schema.json#/properties/platform",
+          "description": "运行平台规范名；与题目包 task.yaml.platform 逐字一致。"
+        },
+        "instruction_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "instruction.md 的 sha256，用于发现题目文案中途被改。"
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slug",
+        "provider",
+        "version"
+      ],
+      "description": "被测模型快照：slug 去厂商前缀，provider 记录官方供应商，version 记录实际服务端版本号或响应头指纹。",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$",
+          "maxLength": 64,
+          "description": "模型 slug（00-conventions §2），如 claude-sonnet-5。"
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "maxLength": 40,
+          "description": "官方供应商标识，如 anthropic、openai、google、moonshot。"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "服务端实际版本号/快照日期；网关校验响应头与本字段不一致即作废（docs/02 §8）。"
+        },
+        "family": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "模型家族，用于裁判避嫌校验（裁判不得与被测模型同家族，docs/03）。"
+        }
+      }
+    },
+    "shell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slug",
+        "version",
+        "mode"
+      ],
+      "description": "Agent 外壳快照；原生外壳与统一外壳分开记录（01-architecture ADR-7）。",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "enum": [
+            "claude-code",
+            "codex-cli",
+            "opencode",
+            "kimi-code",
+            "openhands",
+            "terminus"
+          ],
+          "description": "外壳 slug（00-conventions §2）。"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "外壳版本号或镜像 tag。"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "native",
+            "unified"
+          ],
+          "description": "native=模型厂商原生外壳；unified=所有模型共用同一开源外壳（榜单分栏展示）。"
+        }
+      }
+    },
+    "epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "description": "第几个 epoch（从 1 起）。"
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 99,
+      "description": "epoch 内 trial 序号（从 1 起；重试与重跑均产生新序号，两位补零进 trial_id）。"
+    },
+    "retry_of": {
+      "oneOf": [
+        {
+          "$ref": "defect.schema.json#/$defs/trial_id"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "若本 trial 是重试，指向前一个失败的 trial_id；首次尝试为 null。"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "leased",
+        "running",
+        "observing",
+        "awaiting_feedback",
+        "verifying",
+        "scored",
+        "invalid",
+        "paused_manual",
+        "failed_infra"
+      ],
+      "description": "trial 状态（00-conventions §4.1）；合法转移与守卫见 docs/02 §4.2。"
+    },
+    "validity": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "invalid",
+        "pending",
+        "manual"
+      ],
+      "description": "成绩有效性（00-conventions §4.7）。只有 valid 才有正式 grade；pending=未定；manual=人工仲裁中。"
+    },
+    "terminal_condition": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "P0",
+            "P1",
+            "P2",
+            "P3",
+            "P4",
+            "P5"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "终态判定优先级（docs/02 §6）：P0 隔离失效→invalid；P1 作弊→valid 记 0；P2 硬门槛全过且无未修复 functional/fatal；P3 预算耗尽→Failed；P4 不可继续；P5 人工中断超时→invalid。未到终态为 null。"
+    },
+    "stop_reason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "completed",
+            "idle",
+            "timeout",
+            "cost_cap",
+            "token_cap",
+            "loop_detected",
+            "crash",
+            "cancelled",
+            "need_clarification"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "最近一轮 Agent 停止原因（docs/02 §5.3 枚举）；未跑过 Agent 为 null。"
+    },
+    "budget": {
+      "$ref": "task.schema.json#/properties/budget",
+      "description": "预算快照（字段名冻结，00-conventions §4.8）：trial 启动时从 task.yaml 复制，之后不得改动。"
+    },
+    "rounds": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/round"
+      },
+      "description": "轮次记录，按 round_no 升序；轮 1 为 Agent 首次交付后的观察。"
+    },
+    "isolation": {
+      "$ref": "#/$defs/isolation",
+      "description": "隔离证据：预检 I1–I9 + 运行期/产后期检查，见 docs/04 §5。"
+    },
+    "result": {
+      "$ref": "#/$defs/result",
+      "description": "判分结果：硬门槛终判、缺陷、grade 版本、费用与版本矩阵。"
+    },
+    "errors": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/error"
+      },
+      "description": "trial 级错误（00-conventions §4.6）；可为空数组。"
+    },
+    "timestamps": {
+      "$ref": "#/$defs/timestamps",
+      "description": "关键时间戳（ISO-8601 UTC），用于 SLA、隔离窗口与审计。"
+    },
+    "audit": {
+      "$ref": "#/$defs/audit",
+      "description": "审计指针：事件流、隔离证据包、金丝雀报告、看板快照。"
+    },
+    "extensions": {
+      "type": "object",
+      "description": "扩展字段统一放这里（顶层 additionalProperties=false）。",
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "scored"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "validity": {
+            "const": "valid"
+          },
+          "terminal_condition": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "terminal_condition"
+        ]
+      },
+      "description": "scored 必须是 valid 且已确定终态条件（docs/02 §4.2、§6）。"
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "invalid"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "validity": {
+            "const": "invalid"
+          }
+        },
+        "description": "invalid 态必须 validity=invalid。"
+      },
+      "description": "invalid 态与有效性一致。"
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "paused_manual"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "validity": {
+            "const": "manual"
+          }
+        },
+        "description": "人工介入中 validity=manual（docs/02 §8：裁判不可用不静默记 0）。"
+      },
+      "description": "人工态与有效性一致。"
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "pending",
+              "leased",
+              "running",
+              "observing",
+              "awaiting_feedback",
+              "verifying"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "validity": {
+            "enum": [
+              "pending",
+              "manual"
+            ]
+          }
+        },
+        "description": "未到终态时不得提前给出 valid/invalid。"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "validity": {
+            "const": "invalid"
+          }
+        },
+        "required": [
+          "validity"
+        ]
+      },
+      "then": {
+        "properties": {
+          "result": {
+            "properties": {
+              "grades": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        "description": "invalid 记录不含正式 grade（grades 必须为空数组，Lead 契约同步第 2 条）。"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "scored"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "result": {
+            "properties": {
+              "grades": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        "description": "scored 至少有一个 grade 版本。"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "running",
+              "observing",
+              "awaiting_feedback",
+              "verifying",
+              "scored"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "isolation": {
+            "properties": {
+              "checks": {
+                "contains": {
+                  "properties": {
+                    "id": {
+                      "const": "I1"
+                    },
+                    "result": {
+                      "const": "pass"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "result"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "进入运行态前 I1 预检必须通过（docs/02 §5.2 S5）。"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "isolation": {
+            "properties": {
+              "canary": {
+                "properties": {
+                  "scan_status": {
+                    "const": "critical_violation"
+                  }
+                },
+                "required": [
+                  "scan_status"
+                ]
+              }
+            },
+            "required": [
+              "canary"
+            ]
+          }
+        },
+        "required": [
+          "isolation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "validity": {
+            "const": "invalid"
+          }
+        },
+        "description": "金丝雀跨 trial 命中 → 作废（docs/02 §6 P0、§8）。"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "isolation": {
+            "properties": {
+              "secrets": {
+                "properties": {
+                  "api_key_in_sandbox": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "api_key_in_sandbox"
+                ]
+              }
+            },
+            "required": [
+              "secrets"
+            ]
+          }
+        },
+        "required": [
+          "isolation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "validity": {
+            "const": "invalid"
+          }
+        },
+        "description": "任何长期凭证进入沙箱即事故，trial 作废（01-architecture §7、docs/04 §9）。"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "properties": {
+              "grades": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "grades"
+            ]
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "then": {
+        "properties": {
+          "result": {
+            "properties": {
+              "versions": {
+                "required": [
+                  "task_version",
+                  "model_version",
+                  "shell_version",
+                  "image_digest",
+                  "rubric_version",
+                  "grader_version",
+                  "freeze_hash"
+                ]
+              }
+            }
+          }
+        },
+        "description": "有 grade 的记录必须能追溯到全部版本（01-architecture §4 不变量、docs/02 §5.1）。"
+      },
+      "description": "有成绩即需版本可追溯。"
+    }
+  ],
+  "$defs": {
+    "round": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "round_no",
+        "started_at",
+        "stop_reason",
+        "usage",
+        "hard_gates",
+        "defects",
+        "feedback"
+      ],
+      "description": "一个轮次：Agent 干活 → 观察 → （可选）反馈。",
+      "properties": {
+        "round_no": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "description": "轮次序号，从 1 起。"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "本轮 Agent 开始时间。"
+        },
+        "ended_at": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "本轮结束时间；进行中为 null。"
+        },
+        "stop_reason": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "completed",
+                "idle",
+                "timeout",
+                "cost_cap",
+                "token_cap",
+                "loop_detected",
+                "crash",
+                "cancelled",
+                "need_clarification"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "本轮 Agent 停止原因（docs/02 §5.3）。"
+        },
+        "usage": {
+          "$ref": "#/$defs/usage",
+          "description": "本轮 token 与费用用量。"
+        },
+        "hard_gates": {
+          "type": "array",
+          "maxItems": 40,
+          "items": {
+            "$ref": "#/$defs/hard_gate_result"
+          },
+          "description": "本轮 L1 可见验收结果（观察器执行；隐藏测试只在验证侧跑）。"
+        },
+        "defects": {
+          "type": "array",
+          "maxItems": 60,
+          "items": {
+            "$ref": "defect.schema.json#/$defs/defect_summary_item"
+          },
+          "description": "本轮观察后的缺陷跟踪快照（含历史已修复项）。"
+        },
+        "feedback": {
+          "oneOf": [
+            {
+              "$ref": "feedback.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "本轮发出的反馈决策文档（整文件 $ref feedback.schema.json）；未发反馈为 null。"
+        },
+        "defect_ids_introduced": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 20,
+          "items": {
+            "$ref": "defect.schema.json#/$defs/defect_id"
+          },
+          "description": "本轮新登记的缺陷 ID 列表，便于按轮次追溯。"
+        },
+        "observation_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "完整观察文档（defect.schema.json document_type=observation）的归档位置。"
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cost_usd"
+      ],
+      "description": "单轮用量；由网关与外壳双校验。",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "输入 token（含缓存命中）。"
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "输出 token。"
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "缓存读取 token（若供应商支持）。"
+        },
+        "cost_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "本轮被测 Agent 费用（美元）。"
+        },
+        "wall_clock_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "本轮墙钟耗时（秒）。"
+        }
+      }
+    },
+    "hard_gate_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check_id",
+        "result"
+      ],
+      "description": "一条硬门槛检查结果（可见验收，验证侧隐藏测试另有证据）。",
+      "properties": {
+        "check_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "检查项 ID（与 task.yaml hard_gates 中声明一致）。"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "script",
+            "llm_judge",
+            "agent_judge",
+            "human"
+          ],
+          "description": "检查类型（00-conventions §4.5）。"
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "skipped",
+            "error"
+          ],
+          "description": "结论；error 表示检查自身失败（按环境错误处理，不当作模型失败）。"
+        },
+        "evidence_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "证据归档位置（截图/日志/测试输出）。"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "一句话结论或失败原因摘要。"
+        }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sandbox",
+        "canary",
+        "checks",
+        "leaks",
+        "network",
+        "secrets"
+      ],
+      "description": "隔离证据包（docs/04 §5、§7）：每条不变量 I1–I16 至少一条 check 记录。",
+      "properties": {
+        "sandbox": {
+          "$ref": "#/$defs/sandbox",
+          "description": "沙箱实例与租约快照。"
+        },
+        "device": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/device"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "设备池租约（鸿蒙真机/性能机）；容器类 trial 为 null。"
+        },
+        "canary": {
+          "$ref": "#/$defs/canary",
+          "description": "金丝雀令牌埋点与扫描结果。"
+        },
+        "checks": {
+          "type": "array",
+          "maxItems": 40,
+          "items": {
+            "$ref": "#/$defs/isolation_check"
+          },
+          "description": "不变量检查记录；进入 running 前 I1–I9 必须全部 pass。"
+        },
+        "leaks": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/leak"
+          },
+          "description": "本 trial 检出或涉入的泄露事件（跨 trial 扫描命中时，双方都登记）。"
+        },
+        "network": {
+          "$ref": "#/$defs/network",
+          "description": "网络策略与留痕。"
+        },
+        "secrets": {
+          "$ref": "#/$defs/secrets",
+          "description": "密钥与脑手分离证据。"
+        },
+        "evidence_bundle_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "隔离证据包（isolation/*.json + 网络日志）归档位置。"
+        }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "host",
+        "image_digest",
+        "isolation_mode",
+        "network_mode",
+        "root_readonly",
+        "non_root_user",
+        "quota",
+        "lease_id"
+      ],
+      "description": "沙箱实例快照（docs/04 §3）。",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "docker",
+            "podman",
+            "apple-container",
+            "daytona",
+            "modal",
+            "e2b",
+            "gke",
+            "ec2",
+            "firecracker-local",
+            "tart-macos",
+            "harmony-device-pool",
+            "bare-metal-perf"
+          ],
+          "description": "沙箱 provider；前 8 个与 Harbor 内置 provider 同名，其余为自研 provider（Harbor custom sandbox，BaseEnvironment 子类）。"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "宿主标识（去标识后的宿主 ID，不写 IP/主机名明文）。"
+        },
+        "image_digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "镜像 digest（00-conventions §3、01-architecture §7）；未固定 digest 的镜像不得运行 trial。"
+        },
+        "isolation_mode": {
+          "type": "string",
+          "enum": [
+            "container",
+            "gvisor",
+            "microvm",
+            "tart-vm",
+            "physical-device",
+            "bare-metal",
+            "hosted-sandbox"
+          ],
+          "description": "隔离强度档（docs/04 §3 的 L1–L4）：container=L1、gvisor=L2、microvm/hosted-sandbox/tart-vm=L3、physical-device/bare-metal=L4。"
+        },
+        "network_mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "docs_whitelist",
+            "package_mirror",
+            "full"
+          ],
+          "description": "沙箱网络模式，与 task.yaml network.mode 逐字一致（off=默认断网；docs_whitelist=仅官方文档白名单；package_mirror=只读包镜像+文档白名单；full=全联网，需 Lead 批准）。"
+        },
+        "root_readonly": {
+          "type": "boolean",
+          "description": "根文件系统是否只读（I2）；必须为 true。"
+        },
+        "non_root_user": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+          "description": "Agent 运行的非 root 用户名（I6）；禁止 root 与 sudo。"
+        },
+        "workspace_path": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "随机化工作区路径（I8）；不得含题目 ID、模型名或批次号。"
+        },
+        "quota": {
+          "$ref": "#/$defs/quota",
+          "description": "资源配额（I7）。"
+        },
+        "lease_id": {
+          "type": "string",
+          "pattern": "^lease-[a-z0-9-]{8,48}$",
+          "description": "沙箱租约 ID；同一时刻一个沙箱只属于一个 trial（I1）。"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "沙箱创建时间。"
+        },
+        "destroyed_at": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "沙箱销毁时间；未销毁为 null（teardown 完成前必须写入）。"
+        },
+        "from_warm_pool": {
+          "type": "boolean",
+          "description": "是否来自预热池；来自预热池的实例必须从未跑过 trial（I13）。"
+        }
+      }
+    },
+    "quota": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu",
+        "memory_mb",
+        "disk_mb",
+        "pids",
+        "wall_clock_s"
+      ],
+      "description": "资源配额（docs/02 §7、docs/04 §5 I7）。",
+      "properties": {
+        "cpu": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 128,
+          "description": "vCPU 上限。"
+        },
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 524288,
+          "description": "内存上限 MiB。"
+        },
+        "disk_mb": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 1048576,
+          "description": "磁盘上限 MiB。"
+        },
+        "pids": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 65536,
+          "description": "进程数上限（防 fork bomb）。"
+        },
+        "wall_clock_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 172800,
+          "description": "墙钟上限（秒），与 budget.max_wall_clock_s 一致。"
+        },
+        "gpu": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "GPU 配额声明（如 1×A100-40G）；无 GPU 省略。"
+        }
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "pool",
+        "lease_id",
+        "os_version",
+        "handover_check"
+      ],
+      "description": "设备池租约与归还检查（docs/04 §10）。",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{2,47}$",
+          "description": "设备 ID（如 harmony-phone-03、mac-perf-01）。"
+        },
+        "pool": {
+          "type": "string",
+          "enum": [
+            "harmony-device",
+            "harmony-simulator",
+            "macos-perf",
+            "gpu-node"
+          ],
+          "description": "设备池类别。"
+        },
+        "lease_id": {
+          "type": "string",
+          "pattern": "^devlease-[a-z0-9-]{8,48}$",
+          "description": "设备租约 ID。"
+        },
+        "os_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "设备系统版本（验收要求固定版本，docs/04 §10）。"
+        },
+        "handover_check": {
+          "$ref": "#/$defs/handover_check",
+          "description": "归还卫生检查结果。"
+        },
+        "agent_direct_shell": {
+          "type": "boolean",
+          "description": "Agent 是否直接拿到设备 shell；必须为 false（docs/04 §10）。"
+        }
+      }
+    },
+    "handover_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "checked_at"
+      ],
+      "description": "设备归还卫生检查（docs/04 §10 清单）。",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "skipped"
+          ],
+          "description": "结论；fail 时设备摘除并开 incident。"
+        },
+        "checked_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "检查时间。"
+        },
+        "package_diff": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "归还前后包列表差异（hdc/installed 或 brew/Applications）。",
+          "properties": {
+            "added": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "description": "归还时仍存在、基线中没有的包。"
+            },
+            "removed": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "description": "基线中有、归还时缺失的包。"
+            }
+          }
+        },
+        "baseline_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "归还后设备基线快照（包列表+关键配置）的 sha256；与基线指纹不一致即 fail。"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "异常说明与处置。"
+        }
+      }
+    },
+    "canary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "token",
+        "placements",
+        "hits",
+        "scan_status"
+      ],
+      "description": "金丝雀协议（docs/04 §8）：令牌生成、埋点、跨 trial 扫描结果。",
+      "properties": {
+        "token": {
+          "type": "string",
+          "pattern": "^CNRY-[a-f0-9]{8}-[a-f0-9]{8}$",
+          "description": "金丝雀令牌（00-conventions §2 格式）；每个 trial 唯一。"
+        },
+        "placements": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/canary_placement"
+          },
+          "description": "埋点位置清单；必须覆盖 canary.md 声明的位置。"
+        },
+        "hits": {
+          "type": "array",
+          "maxItems": 40,
+          "items": {
+            "$ref": "#/$defs/canary_violation"
+          },
+          "description": "扫描违规记录；不得包含本 trial 自身的正常出现（只记跨 trial、外泄、未知令牌、埋点缺失）。"
+        },
+        "scan_status": {
+          "type": "string",
+          "enum": [
+            "not_scanned",
+            "clean",
+            "critical_violation"
+          ],
+          "description": "跨 trial 扫描状态：not_scanned=批次未完成扫描；clean=零 critical 违规；critical_violation=存在 critical 违规（cross_trial/egress）→ trial invalid。"
+        },
+        "scanned_at": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "扫描时间。"
+        },
+        "scan_report_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "扫描报告归档位置。"
+        }
+      }
+    },
+    "canary_placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "kind"
+      ],
+      "description": "单个埋点。",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "埋点位置（沙箱内绝对路径或逻辑位置名）。"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "comment",
+            "sample_data",
+            "env",
+            "workspace"
+          ],
+          "description": "埋点类别，与 reference/evalkit/canary.py 的 CanaryPlacement.kind 一致。"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "含令牌文件的哈希（埋点后计算，用于确认未被 Agent 改写后嫁祸）。"
+        }
+      }
+    },
+    "canary_violation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "severity",
+        "location",
+        "detected_at"
+      ],
+      "description": "一条金丝雀扫描违规，字段与 reference/evalkit/canary.py 的 CanaryViolation 对齐。",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cross_trial",
+            "egress",
+            "unknown_token",
+            "missing_placement"
+          ],
+          "description": "cross_trial=本 trial 内容出现别的 trial 令牌（隔离失效）；egress=自己的令牌出现在白名单外主机（外泄）；unknown_token=出现未登记令牌；missing_placement=声明埋点缺失。critical 违规使 trial invalid。"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "warning"
+          ],
+          "description": "cross_trial/egress 为 critical；unknown_token/missing_placement 为 warning（告警并人工确认）。"
+        },
+        "token": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^CNRY-[0-9a-f]{8}-[0-9a-f]{8}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "命中的令牌值；未知令牌或缺失埋点可为 null。"
+        },
+        "token_owner": {
+          "oneOf": [
+            {
+              "$ref": "defect.schema.json#/$defs/trial_id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "令牌所属 trial（cross_trial 时必填）。"
+        },
+        "location": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "命中位置（产物路径、轨迹事件号、网络日志行号、主机名）。"
+        },
+        "detected_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "检出时间。"
+        },
+        "evidence_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "证据归档位置。"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "违规说明（脱敏）。"
+        },
+        "scan_id": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "扫描任务 ID，便于批次级汇总。"
+        }
+      }
+    },
+    "isolation_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "result"
+      ],
+      "description": "一条不变量检查记录（docs/04 §5 表；验收断言见 §15）。",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^I[0-9]{1,2}$",
+          "description": "不变量编号 I1–I16。"
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "skipped",
+            "waived"
+          ],
+          "description": "pass/fail/skipped/waived；waived 需人工批准并写 note。"
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "preflight",
+            "runtime",
+            "postrun",
+            "verify"
+          ],
+          "description": "检查阶段：preflight=启动前 I1–I9；runtime=运行中；postrun=销毁/扫描后；verify=验证沙箱侧。"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "检查命令与关键输出摘要（单行，可含命令名）。"
+        },
+        "evidence_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "证据归档位置（命令输出、截图、哈希清单）。"
+        },
+        "checked_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "检查时间。"
+        },
+        "waiver_approver": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 80,
+          "description": "waived 时的批准人（人工角色 ID）。"
+        }
+      }
+    },
+    "leak": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "channel",
+        "detected_at",
+        "handling",
+        "description"
+      ],
+      "description": "泄露事件记录，通道枚举与 docs/04 §7 表逐字一致。",
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": [
+            "filesystem",
+            "build_cache",
+            "agent_memory",
+            "host_services",
+            "public_web",
+            "model_server",
+            "shared_device",
+            "judge_context",
+            "warm_pool",
+            "log_archive",
+            "control_plane",
+            "human_feedback",
+            "side_channel"
+          ],
+          "description": "13 类泄露通道（docs/04 §7）：C1–C13 的机器名。"
+        },
+        "detected_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "检出时间。"
+        },
+        "evidence_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "证据归档位置。"
+        },
+        "handling": {
+          "type": "string",
+          "enum": [
+            "none",
+            "retry",
+            "discard",
+            "zero",
+            "manual"
+          ],
+          "description": "处置动作（语义对齐 00-conventions §4.6 的 disposition，但独立命名以避免与错误处置枚举混淆）：none=未影响成绩；retry=重跑；discard=作废；zero=判 0；manual=转人工。"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 500,
+          "description": "一句话描述：谁在什么位置读到了什么不该读的东西。"
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "allowlist",
+        "blocked_requests",
+        "bypass_attempts"
+      ],
+      "description": "网络策略与留痕（docs/04 §6）。",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "docs_whitelist",
+            "package_mirror",
+            "full"
+          ],
+          "description": "实际生效的网络模式；与 sandbox.network_mode 一致（枚举与 task.schema.json network.mode 相同）。"
+        },
+        "allowlist": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "format": "hostname",
+            "maxLength": 200
+          },
+          "description": "实际生效的出口白名单（host）。"
+        },
+        "blocked_requests": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "被代理/DNS 拦截的请求数。"
+        },
+        "bypass_attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "疑似绕过尝试数（IP 直连、DNS 隧道、非代理端口、TLS SNI 与 Host 不符等）；>0 进人工确认。"
+        },
+        "dns_log_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "DNS 查询日志归档位置（含时间、查询名、结果、是否被拦截）。"
+        },
+        "url_log_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "HTTP(S) 出口代理访问日志归档位置（含方法、URL、状态、字节数）。"
+        },
+        "policy_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "生效网络策略文件的 sha256，用于批次间对比。"
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_key_in_sandbox",
+        "ssh_control_plane_only",
+        "per_trial_key",
+        "log_redaction"
+      ],
+      "description": "密钥与脑手分离证据（docs/04 §9）。",
+      "properties": {
+        "api_key_in_sandbox": {
+          "type": "boolean",
+          "description": "沙箱内是否出现模型 API key；必须为 false（true 即事故，trial 作废）。"
+        },
+        "ssh_control_plane_only": {
+          "type": "boolean",
+          "description": "SSH/ACP 是否只由控制面发起、单向进入沙箱；必须为 true。"
+        },
+        "per_trial_key": {
+          "type": "boolean",
+          "description": "本 trial 的模型调用是否使用专属短期凭证（per-trial key 或网关租约）；必须为 true。"
+        },
+        "key_lease_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 80,
+          "description": "短期凭证/网关租约 ID；首轮前为 null 视为异常。"
+        },
+        "log_redaction": {
+          "type": "boolean",
+          "description": "轨迹/日志/产物是否经过密钥与 PII 脱敏；必须为 true。"
+        },
+        "scanned_paths": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": "密钥扫描覆盖的路径（env、shell history、config、workspace）。"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hard_gates",
+        "defects",
+        "grades",
+        "cost",
+        "versions"
+      ],
+      "description": "判分结果（docs/02 §5.6、§6）。",
+      "properties": {
+        "hard_gates": {
+          "type": "array",
+          "maxItems": 40,
+          "items": {
+            "$ref": "#/$defs/hard_gate_result"
+          },
+          "description": "终判硬门槛结果（验证侧隐藏测试与观察器结论合并）。"
+        },
+        "defects": {
+          "type": "array",
+          "maxItems": 60,
+          "items": {
+            "$ref": "defect.schema.json#/$defs/defect_summary_item"
+          },
+          "description": "终判缺陷摘要（去重后）。"
+        },
+        "grades": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "grade.schema.json"
+          },
+          "description": "grade 版本数组：重判/人工覆盖追加新版本（整文件 $ref grade.schema.json）；invalid 记录必须为空数组。"
+        },
+        "cost": {
+          "$ref": "grade.schema.json#/$defs/cost",
+          "description": "费用口径与 grade.cost 一致（agent/judge/user/total）。"
+        },
+        "versions": {
+          "$ref": "#/$defs/versions",
+          "description": "版本矩阵（批次冻结时锁定）。"
+        },
+        "cheat_flag": {
+          "type": "boolean",
+          "description": "是否作弊（派生字段：最新 grade.flags 含 cheat 即 true；权威判定仍以 grade.flags/decision 为准）。"
+        }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_version",
+        "model_version",
+        "shell_version",
+        "image_digest",
+        "rubric_version",
+        "grader_version",
+        "freeze_hash"
+      ],
+      "description": "版本矩阵：任何一项变化都不允许与旧 trial 直接比较（docs/02 §5.1）。",
+      "properties": {
+        "task_version": {
+          "$ref": "rubric.schema.json#/$defs/semver",
+          "description": "题目版本。"
+        },
+        "model_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "模型服务端版本指纹。"
+        },
+        "shell_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "外壳版本。"
+        },
+        "image_digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "Agent 镜像 digest。"
+        },
+        "verifier_image_digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "验证沙箱镜像 digest（独立验证侧）。"
+        },
+        "rubric_version": {
+          "$ref": "rubric.schema.json#/$defs/semver",
+          "description": "rubric 版本。"
+        },
+        "grader_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "判分代码版本（reference/evalkit 版本）。"
+        },
+        "harbor_version": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Harbor 版本（适配层锁版本，01-architecture §8）。"
+        },
+        "evalkit_version": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "evalkit 版本。"
+        },
+        "judge_prompt_version": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "裁判 prompt 版本。"
+        },
+        "freeze_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "批次冻结矩阵哈希（docs/02 §5.1）。"
+        }
+      }
+    },
+    "timestamps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "created_at"
+      ],
+      "description": "trial 关键时间戳（ISO-8601 UTC）。",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "记录创建时间。"
+        },
+        "leased_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "租约获取时间。"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "Agent 开始时间（running 起点，墙钟计时起点）。"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "Agent 阶段结束时间。"
+        },
+        "scored_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "首个 grade 生成时间。"
+        },
+        "destroyed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "沙箱/设备租约释放时间（teardown 完成）。"
+        },
+        "canary_scanned_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "金丝雀交叉扫描完成时间。"
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "events_uri"
+      ],
+      "description": "审计指针（01-architecture §5）。",
+      "properties": {
+        "events_uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "只追加事件流（JSONL）归档位置；事件类型见 docs/02 §11。"
+        },
+        "isolation_bundle_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "隔离证据包归档位置（isolation/ 目录）。"
+        },
+        "canary_report_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "金丝雀扫描报告（批次级）中本 trial 部分的归档位置。"
+        },
+        "similarity_report_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "产物相似度报告（winnowing/MOSS）归档位置。"
+        },
+        "trajectory_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "完整轨迹归档位置（harbor view 可读）。"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error_class",
+        "disposition",
+        "occurred_at",
+        "message"
+      ],
+      "description": "trial 级错误（00-conventions §4.6）。",
+      "properties": {
+        "error_class": {
+          "type": "string",
+          "enum": [
+            "provider",
+            "model",
+            "cheat",
+            "isolation",
+            "environment",
+            "verification",
+            "judge",
+            "version"
+          ],
+          "description": "错误类别枚举（00-conventions §4.6）。"
+        },
+        "disposition": {
+          "type": "string",
+          "enum": [
+            "retry",
+            "score",
+            "zero",
+            "manual",
+            "discard"
+          ],
+          "description": "处置枚举（00-conventions §4.6）。"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "错误摘要（脱敏后）。"
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "发生时间。"
+        },
+        "source": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "来源组件或异常类型（如 gateway、observer、SandboxBuildFailedError）。"
+        },
+        "evidence_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "证据归档位置。"
+        }
+      }
+    }
+  }
+}

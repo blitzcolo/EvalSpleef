@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-eval.local/schemas/rubric.schema.json",
+  "title": "rubric 集合（原子化二元 rubric）",
+  "description": "题目包 rubric.yaml 的机器可读契约：一组原子化、可独立判定的二元 rubric 条目。规则与正反例见 docs/03-grading.md 第 5 节。约束要点：每条只问一件事（judge_question 禁止合取/析取）、必须带普通用户口吻的 f1_symptom（供 F1 反馈使用，禁止含文件名/函数名/日志原文/修复建议）、严重度只能是 minor/functional/fatal。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "rubric_version",
+    "items"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "description": "本 Schema 的主版本号；不兼容变更才升。"
+    },
+    "task_id": {
+      "$ref": "#/$defs/task_id"
+    },
+    "rubric_version": {
+      "$ref": "#/$defs/semver",
+      "description": "rubric 语义化版本；MINOR 变更需重判，MAJOR 变更需重跑（00-conventions §2）。"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "题目或 rubric 集合的短标题。"
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 40,
+      "description": "rubric 条目；建议 8-20 条，覆盖题目的全部软性验收目标。blocking 条目（functional/fatal）数量建议 ≤ max_feedback_rounds，否则预算不足以逐条反馈。",
+      "items": {
+        "$ref": "#/$defs/rubric_item"
+      }
+    },
+    "extensions": {
+      "$ref": "#/$defs/extensions"
+    }
+  },
+  "$defs": {
+    "extensions": {
+      "type": "object",
+      "description": "扩展字段统一放这里；Schema 顶层 additionalProperties=false，未定义字段必须放 extensions。",
+      "additionalProperties": true
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[a-z]+-[0-9]{3}$",
+      "description": "题目 ID：<track>-<3 位序号>（00-conventions §2）。"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "description": "语义化版本 MAJOR.MINOR.PATCH（00-conventions §2）。"
+    },
+    "rubric_item_id": {
+      "type": "string",
+      "pattern": "^R[0-9]{1,3}$",
+      "description": "rubric 条目 ID，形如 R1、R12。缺陷 ID 由它派生：{rubric_item_id}#{轮次}（00-conventions §2）。"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "minor",
+        "functional",
+        "fatal"
+      ],
+      "description": "缺陷严重度（00-conventions §4.4）：minor=1 分、functional=3 分、fatal=5 分。minor 不阻断验收；functional/fatal 阻断。"
+    },
+    "check_kind": {
+      "type": "string",
+      "enum": [
+        "script",
+        "llm_judge",
+        "agent_judge",
+        "human"
+      ],
+      "description": "检查类型（00-conventions §4.5）：script=L1 硬门槛；llm_judge/agent_judge=L2 裁判；human=L3 人工。rubric 软条目通常用 llm_judge 或 agent_judge。"
+    },
+    "applies_to": {
+      "type": "string",
+      "enum": [
+        "source",
+        "diff",
+        "screenshot",
+        "video",
+        "log",
+        "stdout",
+        "answer_text",
+        "derivation",
+        "api_response",
+        "device_state",
+        "frame_trace",
+        "doc"
+      ],
+      "description": "该条目判分时查看的产物类型。裁判只能基于这些产物取证，禁止凭想象补全。"
+    },
+    "evidence_kind": {
+      "type": "string",
+      "enum": [
+        "screenshot",
+        "log_excerpt",
+        "file_path",
+        "command_output",
+        "video_frame",
+        "diff_hunk",
+        "none"
+      ],
+      "description": "可接受的证据类型；none 仅用于纯文本问答。"
+    },
+    "rubric_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "一条原子化二元 rubric 条目。判分只输出 pass/fail 二值；程度、审美偏好、多目标合取必须拆成多条。",
+      "required": [
+        "id",
+        "kind",
+        "severity",
+        "description",
+        "f1_symptom"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/rubric_item_id"
+        },
+        "kind": {
+          "$ref": "#/$defs/check_kind"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 200,
+          "description": "条目的一句话说明（面向出题人）。若未提供 judge_question，裁判把本字段当作判分问句，因此同样必须单命题。"
+        },
+        "judge_question": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 300,
+          "description": "交给裁判的精确判分问句，只问一个可观察事实，期望回答 pass/fail。禁止合取（并且/同时/以及/甚至）与析取（或者/或）。",
+          "not": {
+            "pattern": "(并且|同时|以及|或者|而且|且|\\band\\b|\\bor\\b)"
+          }
+        },
+        "pass_criteria": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "什么算 pass 的可观察标准（越具体越好，例如“三张截图均显示深色背景且文字对比度≥4.5:1”）。"
+        },
+        "fail_examples": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": "典型 fail 现象举例（0-5 条），帮助裁判校准。"
+        },
+        "applies_to": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/applies_to"
+          },
+          "description": "适用的产物类型；取证时只允许看这些产物。"
+        },
+        "evidence_required": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/evidence_kind"
+          },
+          "description": "判 fail 时必须附带的证据类型；裁判缺证据不得直接判 fail，应输出 inconclusive 并转人工。"
+        },
+        "f1_symptom": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 300,
+          "description": "F1 现象描述模板：普通用户视角、只说看得见的现象与操作路径，禁止出现文件名/函数名/API 名/日志原文/根因/修复建议（这是档位系统的硬约束，见 docs/03-grading.md 第 8 节）。",
+          "not": {
+            "pattern": "`|(?:Traceback|Segmentation fault|Exception|Error:|exit code [0-9]+)|[\\w-]+\\.(?:py|js|mjs|ts|tsx|jsx|json|ya?ml|md|rs|swift|ets|cpp|hpp|h|sh|html|css|toml|lock)\\b"
+          }
+        },
+        "f2_evidence": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "F2 允许粘贴的日志/报错原文（已脱敏、来自预写目录），仅 F2/F3 可用。"
+        },
+        "f3_visual": {
+          "type": "string",
+          "maxLength": 1500,
+          "description": "F3 允许的视觉差异描述（截图区域、颜色、错位等），不得解释实现原因。"
+        },
+        "f3_assist": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "F3 允许的协助操作说明（如“我来帮你点一下签名按钮”），不得给代码或补丁。"
+        },
+        "hidden": {
+          "type": "boolean",
+          "default": false,
+          "description": "true 表示条目对应隐藏验收（隐藏测试/隐藏数据），反馈时只允许使用 f1_symptom，禁止使用 f2_evidence/f3_visual/f3_assist。"
+        },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{1,23}$"
+          },
+          "description": "检索标签，如 a11y、performance、science、error_state。"
+        },
+        "author": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "条目作者。"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "出题人备注（不进反馈文本，裁判可选读）。"
+        },
+        "detect": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "条目 ↔ 验证实现/检查 ID 的映射，例如 {source: script|llm_judge|agent_judge, check_ids: [\"verify_submission.HG1\"]}。用于把 rubric 条目对到 L1/L2 检查；不参与判分，缺省允许。",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "script",
+                "llm_judge",
+                "agent_judge",
+                "human"
+              ],
+              "description": "该条目对应的检查来源（00-conventions §4.5）。"
+            },
+            "check_ids": {
+              "type": "array",
+              "uniqueItems": true,
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "description": "验证实现/隐藏测试/检查项 ID 列表。"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "llm_judge",
+                  "agent_judge"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "judge_question"
+            ]
+          },
+          "description": "裁判类条目必须给出精确判分问句。"
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "script"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "pass_criteria"
+            ]
+          },
+          "description": "脚本类条目必须给出 pass_criteria（可执行判定标准）。"
+        }
+      ]
+    }
+  }
+}

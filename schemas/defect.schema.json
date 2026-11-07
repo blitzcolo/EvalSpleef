@@ -1,0 +1,792 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-eval.local/schemas/defect.schema.json",
+  "title": "缺陷目录与跨轮观察结果",
+  "description": "两类文档共用本 Schema：document_type=catalog 为题包 defects.yaml（缺陷现象目录，供 F1/F2/F3 生成反馈）；document_type=observation 为一轮观察产生的结构化缺陷报告（发现→去重→跨轮跟踪）。规则见 docs/03-grading.md 第 6 节。缺陷 ID 规则：{rubric_item_id}#{首次发现轮次}（00-conventions §2），同一 rubric 条目同一时刻最多一个未修复缺陷，修复后复发按新缺陷重新计扣分。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "document_type",
+    "schema_version",
+    "items"
+  ],
+  "properties": {
+    "document_type": {
+      "type": "string",
+      "enum": [
+        "catalog",
+        "observation"
+      ],
+      "description": "文档类型判别字段：catalog=题包 defects.yaml；observation=一轮观察报告。"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "description": "本 Schema 的主版本号。"
+    },
+    "task_id": {
+      "$ref": "rubric.schema.json#/$defs/task_id",
+      "description": "catalog 专用：题目 ID。"
+    },
+    "catalog_version": {
+      "$ref": "rubric.schema.json#/$defs/semver",
+      "description": "catalog 专用：缺陷目录版本。"
+    },
+    "trial_id": {
+      "$ref": "#/$defs/trial_id",
+      "description": "observation 专用：trial ID。"
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 99,
+      "description": "observation 专用：观察轮次，从 1 开始；轮 1 为 Agent 首次交付后的观察。"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "observation 专用：观察完成时间（ISO-8601 UTC）。"
+    },
+    "source": {
+      "$ref": "#/$defs/observation_source",
+      "description": "observation 专用：观察结论来源。"
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 60,
+      "description": "条目数组；具体元素形状由 document_type 分支的 allOf 条件约束：catalog→catalog_item，observation→observation_item。"
+    },
+    "summary": {
+      "$ref": "#/$defs/summary",
+      "description": "observation 专用：本轮缺陷汇总。"
+    },
+    "extensions": {
+      "$ref": "#/$defs/extensions"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "document_type": {
+            "const": "catalog"
+          }
+        },
+        "required": [
+          "document_type"
+        ]
+      },
+      "then": {
+        "required": [
+          "task_id",
+          "catalog_version"
+        ],
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/catalog_item"
+            }
+          }
+        },
+        "not": {
+          "required": [
+            "trial_id",
+            "round",
+            "observed_at",
+            "source",
+            "summary"
+          ]
+        },
+        "description": "catalog 文档：必须有 task_id/catalog_version，items 为缺陷目录条目，不得带观察字段。"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "document_type": {
+            "const": "observation"
+          }
+        },
+        "required": [
+          "document_type"
+        ]
+      },
+      "then": {
+        "required": [
+          "trial_id",
+          "round",
+          "observed_at",
+          "source",
+          "summary"
+        ],
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/observation_item"
+            }
+          }
+        },
+        "not": {
+          "required": [
+            "task_id",
+            "catalog_version"
+          ]
+        },
+        "description": "observation 文档：必须带 trial_id/round/observed_at/source/summary，items 为观察条目。"
+      }
+    }
+  ],
+  "$defs": {
+    "extensions": {
+      "type": "object",
+      "description": "扩展字段统一放这里。",
+      "additionalProperties": true
+    },
+    "trial_id": {
+      "type": "string",
+      "pattern": "^[a-z]+-[0-9]{3}\\.[a-z0-9]+(?:[.-][a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.e[0-9]+\\.t[0-9]{2}$",
+      "description": "trial ID：{task_id}.{model}.{shell}.e{epoch}.t{index}（00-conventions §2）。"
+    },
+    "defect_id": {
+      "type": "string",
+      "pattern": "^R[0-9]{1,3}#[0-9]{1,2}$",
+      "description": "缺陷 ID：{rubric_item_id}#{首次发现轮次}，如 R3#2（00-conventions §2）。"
+    },
+    "defect_status": {
+      "type": "string",
+      "enum": [
+        "new",
+        "open",
+        "persisting",
+        "fixed"
+      ],
+      "description": "缺陷跨轮状态：new=本轮首次发现；open=已登记、等待下一轮复测；persisting=复测仍失败；fixed=复测通过并确认修复。"
+    },
+    "observation_source": {
+      "type": "string",
+      "enum": [
+        "script",
+        "llm_judge",
+        "agent_judge",
+        "human",
+        "mixed"
+      ],
+      "description": "本轮观察结论的来源：script=L1 硬门槛脚本；llm_judge/agent_judge=L2 裁判；human=L3 人工；mixed=多来源合并。"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "uri"
+      ],
+      "description": "一条可复核证据。裁判判 fail 必须能指向至少一条证据。",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "screenshot",
+            "log_excerpt",
+            "file_path",
+            "command_output",
+            "video_frame",
+            "diff_hunk",
+            "other"
+          ],
+          "description": "证据类型。"
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "证据定位（对象存储 URI、验证沙箱内路径、日志偏移等）。"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "证据内容哈希，用于防篡改与重判复核。"
+        },
+        "excerpt": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "证据摘录（来自预写目录或观察器原文）。"
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "给人工复核看的一句话说明。"
+        }
+      }
+    },
+    "judge_verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "models",
+        "samples",
+        "votes",
+        "agreement",
+        "median"
+      ],
+      "description": "L2 裁判对单条 rubric 的裁决记录：评审团名单、采样数、逐次投票、一致率与中位结论。",
+      "properties": {
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "description": "参与裁判的模型（含厂商前缀），顺序固定。"
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9,
+          "description": "每条 rubric 的采样次数 k，默认 5。"
+        },
+        "votes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 54,
+          "items": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "inconclusive"
+            ]
+          },
+          "description": "逐次采样结论（按模型顺序展开）。"
+        },
+        "agreement": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "与中位结论一致的采样比例；低于 0.6 进人工仲裁。"
+        },
+        "median": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "inconclusive"
+          ],
+          "description": "中位结论（二元条目即多数票；平票且无多数 → inconclusive）。"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "分歧说明或裁判理由摘要。"
+        }
+      }
+    },
+    "catalog_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rubric_item_id"
+      ],
+      "description": "缺陷现象目录条目：把 rubric 条目翻译成三级反馈可用的预写素材，保证模拟用户话术可复现、可审计。",
+      "properties": {
+        "rubric_item_id": {
+          "$ref": "rubric.schema.json#/$defs/rubric_item_id"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "缺陷短名（内部用，不进反馈文本）。"
+        },
+        "severity": {
+          "$ref": "rubric.schema.json#/$defs/severity"
+        },
+        "f1_symptom": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 300,
+          "description": "F1 现象描述（普通用户口吻）；必须与 rubric 的 f1_symptom 语义一致，可更具体。"
+        },
+        "f2_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "text"
+          ],
+          "description": "F2 可粘贴的日志/报错原文片段（已脱敏，固定文本，不允许控制器自由发挥）。",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "compile_error",
+                "runtime_trace",
+                "console_log",
+                "test_failure",
+                "stderr"
+              ],
+              "description": "证据类别。"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000,
+              "description": "原文片段；保留原始格式，禁止改写成提示。"
+            },
+            "source_command": {
+              "type": "string",
+              "maxLength": 200,
+              "description": "产生该日志的命令（可对用户展示，如 cargo build）。"
+            },
+            "redactions": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "description": "已脱敏的替换标记说明，如 <PATH>、<USER>。"
+            }
+          }
+        },
+        "f3_visual": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "description"
+          ],
+          "description": "F3 视觉差异描述：颜色/位置/尺寸/可见元素差异，不得解释实现原因。",
+          "properties": {
+            "description": {
+              "type": "string",
+              "minLength": 6,
+              "maxLength": 1500,
+              "description": "视觉差异描述。"
+            },
+            "regions": {
+              "type": "array",
+              "maxItems": 6,
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "description": "差异区域的定位与说明（如“右上角按钮，x≈1200,y≈40”）。"
+            }
+          }
+        },
+        "f3_assist": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action",
+            "instruction"
+          ],
+          "description": "F3 协助操作：模拟用户代替 Agent 执行的、Agent 自己做不到的操作（签名、装机、点击等）。",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "sign",
+                "install",
+                "click",
+                "type",
+                "configure",
+                "launch",
+                "other"
+              ],
+              "description": "协助动作类型。"
+            },
+            "instruction": {
+              "type": "string",
+              "minLength": 4,
+              "maxLength": 500,
+              "description": "对用户说的操作说明；禁止给代码/补丁/根因。"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 300,
+              "description": "为什么该操作 Agent 无法自行完成（内部记录）。"
+            }
+          }
+        },
+        "detect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source"
+          ],
+          "description": "该缺陷由哪类检查发现。",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/observation_source"
+            },
+            "check_ids": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "description": "对应的检查项/隐藏测试 ID。"
+            }
+          }
+        },
+        "evidence_required": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "rubric.schema.json#/$defs/evidence_kind"
+          },
+          "description": "判 fail 时必须附带的证据类型。"
+        },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "description": "检索标签。"
+        }
+      }
+    },
+    "observation_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "defect_id",
+        "rubric_item_id",
+        "severity",
+        "status",
+        "first_round",
+        "last_round",
+        "rounds_failed"
+      ],
+      "description": "一轮观察中的单条缺陷记录；由观察器与缺陷跟踪器共同生成，跨轮更新。",
+      "properties": {
+        "defect_id": {
+          "$ref": "#/$defs/defect_id"
+        },
+        "rubric_item_id": {
+          "$ref": "rubric.schema.json#/$defs/rubric_item_id"
+        },
+        "severity": {
+          "$ref": "rubric.schema.json#/$defs/severity"
+        },
+        "status": {
+          "$ref": "#/$defs/defect_status"
+        },
+        "first_round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "首次发现轮次（与 defect_id 后缀一致）。"
+        },
+        "last_round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "最近一次观察到该缺陷的轮次。"
+        },
+        "fixed_round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "确认修复的轮次；未修复为 null。"
+        },
+        "rounds_failed": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "观察到失败的轮次列表（升序）。"
+        },
+        "feedback_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20,
+          "description": "该缺陷未修复期间收到的反馈轮数；0 表示没有为它发过反馈。"
+        },
+        "max_level_during_open": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "F1",
+            "F2",
+            "F3",
+            null
+          ],
+          "description": "该缺陷未修复期间用到的最高反馈级别；未发过反馈为 null。"
+        },
+        "progress": {
+          "type": "string",
+          "enum": [
+            "none",
+            "partial",
+            "fixed"
+          ],
+          "description": "相对上一轮观察的进展：none=现象未变；partial=有改善但未通过；fixed=已通过。控制器的“连续无进展”计数只累计 none。"
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "description": "本轮证据。"
+        },
+        "judge": {
+          "$ref": "#/$defs/judge_verdict",
+          "description": "L2 裁判裁决（脚本类条目可省略）。"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "观察器备注。"
+        }
+      }
+    },
+    "defect_summary_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "defect_id",
+        "rubric_item_id",
+        "severity",
+        "status",
+        "first_round",
+        "feedback_rounds",
+        "counted"
+      ],
+      "description": "判分用的缺陷摘要（grade.defects 的元素），不重复完整证据。",
+      "properties": {
+        "defect_id": {
+          "$ref": "#/$defs/defect_id"
+        },
+        "rubric_item_id": {
+          "$ref": "rubric.schema.json#/$defs/rubric_item_id"
+        },
+        "severity": {
+          "$ref": "rubric.schema.json#/$defs/severity"
+        },
+        "status": {
+          "$ref": "#/$defs/defect_status"
+        },
+        "first_round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "首次发现轮次。"
+        },
+        "fixed_round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "修复轮次；未修复为 null。"
+        },
+        "feedback_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "为它发过的反馈轮数。"
+        },
+        "max_level_during_open": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "F1",
+            "F2",
+            "F3",
+            null
+          ],
+          "description": "未修复期间的最高反馈级别。"
+        },
+        "counted": {
+          "type": "boolean",
+          "description": "是否计入扣分（首次发现计一次；persisting 不重复计；回归按新缺陷计）。"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "new",
+        "persisting",
+        "fixed",
+        "open",
+        "blocking_open",
+        "total_discovered",
+        "defects_requiring_feedback"
+      ],
+      "description": "本轮观察结束时的缺陷汇总，供控制器与判分器直接读取。",
+      "properties": {
+        "new": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "本轮新发现缺陷数。"
+        },
+        "persisting": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "本轮复测仍失败的已登记缺陷数。"
+        },
+        "fixed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "本轮确认修复的缺陷数。"
+        },
+        "open": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "本轮结束时仍未修复的缺陷数（含新发现）。"
+        },
+        "blocking_open": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "未修复且 severity∈{functional,fatal} 的缺陷数；为 0 且硬门槛全过时可终判。"
+        },
+        "total_discovered": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "截至本轮的累计去重缺陷数（含历史已修复）。"
+        },
+        "defects_requiring_feedback": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "截至本轮，为修复发过至少一轮反馈的缺陷数。"
+        },
+        "by_severity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "minor",
+            "functional",
+            "fatal"
+          ],
+          "properties": {
+            "minor": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "minor 缺陷数。"
+            },
+            "functional": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "functional 缺陷数。"
+            },
+            "fatal": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "fatal 缺陷数。"
+            }
+          },
+          "description": "按严重度统计的累计缺陷数。"
+        }
+      }
+    },
+    "catalog_document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_type",
+        "schema_version",
+        "task_id",
+        "catalog_version",
+        "items"
+      ],
+      "description": "题包 defects.yaml 的契约。",
+      "properties": {
+        "document_type": {
+          "const": "catalog",
+          "description": "固定为 catalog。"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "description": "本 Schema 的主版本号。"
+        },
+        "task_id": {
+          "$ref": "rubric.schema.json#/$defs/task_id"
+        },
+        "catalog_version": {
+          "$ref": "rubric.schema.json#/$defs/semver"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/catalog_item"
+          },
+          "description": "目录条目。每个 rubric 的 functional/fatal 条目至少应有一条对应现象素材。"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        }
+      }
+    },
+    "observation_document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_type",
+        "schema_version",
+        "trial_id",
+        "round",
+        "observed_at",
+        "source",
+        "items",
+        "summary"
+      ],
+      "description": "一轮观察的缺陷报告契约。",
+      "properties": {
+        "document_type": {
+          "const": "observation",
+          "description": "固定为 observation。"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "description": "本 Schema 的主版本号。"
+        },
+        "trial_id": {
+          "$ref": "#/$defs/trial_id"
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99,
+          "description": "观察轮次，从 1 开始；轮 1 为 Agent 首次交付后的观察。"
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "观察完成时间（ISO-8601 UTC）。"
+        },
+        "source": {
+          "$ref": "#/$defs/observation_source"
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 60,
+          "items": {
+            "$ref": "#/$defs/observation_item"
+          },
+          "description": "本轮全部缺陷记录（含已修复的跨轮记录）。"
+        },
+        "summary": {
+          "$ref": "#/$defs/summary"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        }
+      }
+    }
+  }
+}

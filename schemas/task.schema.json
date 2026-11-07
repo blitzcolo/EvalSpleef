@@ -1,0 +1,869 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-eval.local/schemas/task.schema.json",
+  "title": "题目元数据（task.yaml）",
+  "description": "题目包根目录 task.yaml 的机器可读契约。一个题目 = 指令 + 模拟用户 + 资源与网络策略 + 预算 + 硬门槛 + 原子 rubric + 参考解 + 金丝雀埋点 + 产物声明 + 生命周期状态。字段与 docs/05-task-library.md 第 4 节逐条对应；枚举拼写以 00-conventions 第 4 节为准。约束：题目元数据不得包含隐藏测试内容或期望答案（隐藏验收只在验证侧的 hidden-tests/ 中出现，见 docs/06-answer-and-acceptance.md）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "version",
+    "track",
+    "title",
+    "platform",
+    "difficulty",
+    "instruction",
+    "persona",
+    "rubric_ref",
+    "resources",
+    "isolation",
+    "budget",
+    "hard_gates",
+    "canary",
+    "status"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^(logic|web|data|backend|debug|macos|ios|harmony|rust|vulkan|video|game)-[0-9]{3}$",
+      "description": "题目 ID：<track>-<3 位序号>（00-conventions §2），如 web-001。"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "description": "题目语义化版本 MAJOR.MINOR.PATCH（00-conventions §2）：MAJOR=验收语义变化需重跑；MINOR=验收变化需重判；PATCH=文案/资源修正可复用旧 trial。"
+    },
+    "track": {
+      "type": "string",
+      "enum": [
+        "logic",
+        "web",
+        "data",
+        "backend",
+        "debug",
+        "macos",
+        "ios",
+        "harmony",
+        "rust",
+        "vulkan",
+        "video",
+        "game"
+      ],
+      "description": "12 个赛道之一（00-conventions §2）。"
+    },
+    "layer": {
+      "type": "string",
+      "enum": [
+        "logic",
+        "engineering",
+        "platform"
+      ],
+      "description": "三层分类：logic=逻辑问答（测推理），engineering=常见工程（测手艺），platform=冷门平台（测查文档与试错）。分类学见 docs/05-task-library.md 第 2 节。"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 120,
+      "description": "题目短标题（中文，面向榜单展示）。"
+    },
+    "subtitle": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "一句话补充说明（可选，如核心难点）。"
+    },
+    "platform": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64,
+      "description": "运行平台/沙箱类别的规范名。推荐取值：linux-container、linux-container-xvfb、gpu-node、tart-macos、bare-metal-macos、bare-metal-perf、harmony-device-pool、ios-simulator、tart-macos-ios。与 docs/05-task-library.md 第 5 节平台矩阵对应。"
+    },
+    "difficulty": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "标定后难度：1=easy、2=medium-easy、3=medium、4=hard、5=expert。新题先填预估难度并在 difficulty_calibration 标记 pending，标定后回填（docs/05-task-library.md 第 7 节）。"
+    },
+    "difficulty_calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "难度标定记录；状态 pending 表示尚未用 2-3 个前代模型实测。",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "calibrated",
+            "failed"
+          ],
+          "description": "标定状态。"
+        },
+        "target_tier_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "string",
+            "enum": [
+              "P",
+              "A",
+              "B+",
+              "B",
+              "C+",
+              "C",
+              "D",
+              "F"
+            ]
+          },
+          "description": "期望最强前代模型落入的档位区间（含端点），如 [\"A\",\"B\"]。"
+        },
+        "models_tried": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "description": "参与标定的模型 slug 列表。"
+        },
+        "calibrated_at": {
+          "type": "string",
+          "format": "date",
+          "description": "标定日期（YYYY-MM-DD）。"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "标定结论与调整记录。"
+        }
+      }
+    },
+    "instruction": {
+      "type": "string",
+      "pattern": "^instruction\\.md$",
+      "description": "交给被测 Agent/模拟用户的指令文件名（固定 instruction.md，见 00-conventions §3）。指令用真实用户口吻，不写实现提示。"
+    },
+    "persona": {
+      "type": "string",
+      "pattern": "^persona\\.md$",
+      "description": "模拟用户设定文件名（固定 persona.md）：F0-F3 逐级话术、常见澄清问答、禁止泄露清单。"
+    },
+    "rubric_ref": {
+      "type": "string",
+      "pattern": "^rubric\\.ya?ml$",
+      "description": "原子 rubric 文件名，内容须符合 schemas/rubric.schema.json。"
+    },
+    "defects_ref": {
+      "type": "string",
+      "pattern": "^defects\\.ya?ml$",
+      "description": "缺陷现象目录文件名，内容须符合 schemas/defect.schema.json 的 catalog 文档（document_type=catalog）。"
+    },
+    "rubric": {
+      "$ref": "rubric.schema.json",
+      "description": "内嵌 rubric（可选）。题包默认用 rubric_ref 指向外部 rubric.yaml；需要单文件下发时才内嵌，内容必须符合 rubric.schema.json。"
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "资源策略（只声明，不写测试内容）。隐藏测试与期望答案不得在此出现（00-conventions §3）。",
+      "properties": {
+        "image": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "镜像名（不含 digest）。"
+        },
+        "image_digest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "镜像 digest（sha256:...）；上线前必须按 digest 固定，未固定时填 TODO(pin-on-host)。"
+        },
+        "cpu": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 128,
+          "description": "vCPU 配额。"
+        },
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 524288,
+          "description": "内存配额 MiB。"
+        },
+        "disk_mb": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 1048576,
+          "description": "磁盘配额 MiB。"
+        },
+        "gpu": {
+          "type": "boolean",
+          "description": "是否需要独显（Vulkan/Metal 性能题）。"
+        },
+        "os": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "操作系统与版本声明。"
+        },
+        "network": {
+          "type": "boolean",
+          "description": "Agent 工作环境是否允许联网（默认 false；等价写法见顶层 network 字段）。"
+        },
+        "docs_whitelist": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": "只读文档站白名单（域名/URL），联网模式下生效。"
+        },
+        "tools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "description": "Agent 可用工具声明（等价写法见顶层 tools 字段）。"
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "description": "同 trial 网络内的依赖服务（如 postgres、redis）。"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "资源特殊说明。"
+        }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "隔离声明（必填）：不依赖评测框架默认值，题目必须显式声明 Agent 身份、环境模式与网络模式（research 核实 Harbor 的 non-root、独立环境、断网均为 opt-in）。含义与检查口径见 docs/04-isolation.md 与 docs/05-task-library.md 第 6 节。",
+      "required": [
+        "agent_user",
+        "environment_mode",
+        "network_mode"
+      ],
+      "properties": {
+        "agent_user": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+          "description": "Agent 在沙箱内的运行用户；必须显式声明且不得为 root。默认值 \"agent\" 仅为文档默认，题目要写出来。"
+        },
+        "environment_mode": {
+          "type": "string",
+          "enum": [
+            "separate",
+            "shared"
+          ],
+          "description": "Agent 环境与验证环境是否隔离：评测题一律 separate（独立沙箱/独立文件系统）；shared 仅用于历史遗留，不得用于新题。"
+        },
+        "network_mode": {
+          "type": "string",
+          "enum": [
+            "no-network",
+            "allowlist",
+            "public"
+          ],
+          "description": "Agent 侧网络模式：no-network（默认，完全断网）/ allowlist（仅代理白名单）/ public（全联网，需 Lead 批准，题包内需写明理由）。与 network.mode 的对应关系在 docs/05 第 6 节给出。"
+        },
+        "lint_extend_select": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "unpinned-image",
+              "root-agent"
+            ]
+          },
+          "description": "显式启用的 lint 扩展检查：unpinned-image（镜像未按 digest 固定时主动失败）、root-agent（发现 Agent 以 root 运行即失败）。"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "隔离特殊说明（如设备池独占、性能机裸机隔离）。"
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "网络策略（题级）。默认断网；联网走出口代理白名单，见 docs/04-isolation.md。",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "docs_whitelist",
+            "package_mirror",
+            "full"
+          ],
+          "description": "off=默认断网；docs_whitelist=仅官方文档白名单；package_mirror=只读包镜像 + 文档白名单；full=全联网（仅特殊题，需 Lead 批准）。"
+        },
+        "allowlist": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": "允许访问的 URL/域名白名单（精确到路径前缀）。"
+        },
+        "blocklist": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": "额外屏蔽的 URL/域名（自家仓库、榜单、题库站点默认已在代理侧全局屏蔽）。"
+        },
+        "search_proxy": {
+          "type": "boolean",
+          "description": "是否允许搜索代理（黑名单过滤后返回）。"
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": [
+          "bash",
+          "read",
+          "write",
+          "edit",
+          "browser",
+          "screenshot",
+          "shell",
+          "web_search",
+          "docs_whitelist",
+          "gpu_profile",
+          "device_control",
+          "ffmpeg"
+        ]
+      },
+      "description": "Agent 可用工具（统一 MCP 注入；04-isolation.md 的「给 Agent 一样的眼睛」原则）。"
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Agent 可见工作区种子（由 hidden-tests 之外的 starter/ 或 workspace/ 目录拷入沙箱）。此处只声明文件路径与保护项，不含任何验收内容。",
+      "properties": {
+        "mount": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "挂载点，默认 /workspace。"
+        },
+        "starter": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "题包内种子目录（如 workspace/、starter/）。"
+        },
+        "entry_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": "Agent 应首先阅读的文件/目录。"
+        },
+        "protected_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": "受保护路径（哈希锁）：被修改即硬门槛失败并按作弊处理。"
+        },
+        "writable_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": "允许 Agent 写入的路径。"
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "预算字段（字段名冻结，见 00-conventions §4.8）。题目自定义值不得超过批次硬上限。内部计费以 USD 为主：max_cost_usd 单位为美元（模型官方 API 价），currency 默认 USD；与参考项目（人民币口径）对照时只在报表层按固定汇率折算。",
+      "required": [
+        "max_rounds",
+        "max_feedback_rounds",
+        "max_nudges",
+        "max_total_tokens",
+        "max_wall_clock_s",
+        "max_cost_usd",
+        "max_observe_s",
+        "escalation"
+      ],
+      "properties": {
+        "max_rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "description": "含首轮的总轮数上限（反馈轮数 = max_rounds-1）。默认 6。"
+        },
+        "max_feedback_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 19,
+          "description": "实际发出反馈的轮数上限（F0 无信息量催促不计入）。默认 3。"
+        },
+        "max_nudges": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "无信息量催促次数上限，计 F0、不降档。默认 2。"
+        },
+        "max_total_tokens": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 100000000,
+          "description": "被测 Agent 模型输入+输出总量（token）上限。默认 2,000,000。"
+        },
+        "max_wall_clock_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 172800,
+          "description": "从 running 开始计时的墙钟上限（秒）。默认 3600。"
+        },
+        "max_cost_usd": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "被测 Agent 侧费用上限（美元）；裁判/模拟用户费用单列。默认 15。"
+        },
+        "max_observe_s": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 7200,
+          "description": "单轮观察阶段超时（秒）。默认 600。"
+        },
+        "currency": {
+          "type": "string",
+          "enum": [
+            "USD",
+            "CNY"
+          ],
+          "default": "USD",
+          "description": "max_cost_usd 的计价币种；默认 USD（字段名保持不变，历史题包不填即视为 USD）。"
+        },
+        "pricing_table_version": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "费用计算所用的模型价格表版本（如 2026-11-a），用于跨期结果可比性审计；缺省表示沿用批次默认价格表。"
+        },
+        "escalation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "f1_no_progress_rounds",
+            "f2_no_progress_rounds"
+          ],
+          "description": "反馈阶梯升级参数：同一缺陷连续无进展多少轮升一级。",
+          "properties": {
+            "f1_no_progress_rounds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "description": "同一缺陷 F1 连续无进展多少轮升 F2。默认 2。"
+            },
+            "f2_no_progress_rounds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "description": "同一缺陷 F2 连续无进展多少轮升 F3。默认 2。"
+            }
+          }
+        }
+      }
+    },
+    "hard_gates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "description": "L1 脚本硬门槛：全部通过才进入软评分；任一失败直接判 Failed。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "script",
+          "required",
+          "pass_condition",
+          "description"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^HG[0-9]{1,2}$",
+            "description": "硬门槛 ID，形如 HG1。"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 120,
+            "description": "硬门槛短标题。"
+          },
+          "kind": {
+            "const": "script",
+            "description": "硬门槛只允许 script（00-conventions §4.5）。"
+          },
+          "script": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 300,
+            "description": "验证侧执行路径（如 hidden-tests/run.sh）或 command:<命令>。"
+          },
+          "required": {
+            "type": "boolean",
+            "description": "true=失败即判 Failed；false=仅记录（不推荐用于硬门槛）。"
+          },
+          "pass_condition": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 300,
+            "description": "可执行判定条件，如 exit_code == 0、p95 <= 16600。"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 500,
+            "description": "该门槛验什么、为什么是硬性的。"
+          },
+          "timeout_s": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 7200,
+            "description": "该脚本超时（秒）。"
+          }
+        }
+      }
+    },
+    "reference_solutions": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4,
+      "description": "参考解清单（至少 2 份、思路不同、独立实现）。文件本体在 answers/reference-a.* 与 answers/reference-b.*。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "path",
+          "approach"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ],
+            "description": "参考解编号（a/b 必需，c/d 可选）。"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 200,
+            "description": "题包内相对路径，如 answers/reference-a.py。"
+          },
+          "approach": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 200,
+            "description": "思路标签（必须与另一份不同），如「穷举搜索」「约束传播」「原生 JS」「React」。"
+          },
+          "runnable": {
+            "type": "boolean",
+            "description": "是否可本地直接运行（仅标准库）。"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "运行方式与依赖说明。"
+          }
+        }
+      }
+    },
+    "references": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "参考解/空 Agent 的简写清单（与 reference_solutions 二选一；为兼容早期题包保留）。",
+      "properties": {
+        "a": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "参考解 A 路径。"
+        },
+        "b": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "参考解 B 路径。"
+        },
+        "empty_agent": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "空 Agent 预期结果说明路径。"
+        },
+        "patch_apply": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "补丁应用命令（patch 格式参考解用）。"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "description": "产物声明：验证侧只接收这些路径的产物（软链接/FIFO/setuid 丢弃，见 docs/04-isolation.md）。隐藏测试与期望答案不得声明为产物。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "kind"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "产物路径（相对工作区）。"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "answer",
+              "source",
+              "build_output",
+              "screenshot",
+              "video",
+              "log",
+              "dataset",
+              "patch",
+              "api_response"
+            ],
+            "description": "产物类型。"
+          },
+          "required": {
+            "type": "boolean",
+            "description": "缺失是否算硬门槛失败。"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "大小上限（字节）。"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "产物说明。"
+          }
+        }
+      }
+    },
+    "canary": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "金丝雀令牌埋点声明（令牌值由 harness 在 trial 启动时生成并替换占位符，见 docs/04-isolation.md）。",
+      "required": [
+        "manifest"
+      ],
+      "properties": {
+        "manifest": {
+          "type": "string",
+          "pattern": "^canary\\.md$",
+          "description": "埋点清单文件名（固定 canary.md）。"
+        },
+        "locations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "description": "令牌写入位置（文件/字段/注释/示例数据）。"
+        },
+        "expected_trace": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "description": "正常 trial 中令牌应出现的轨迹位置；用于事后交叉扫描。"
+        },
+        "exclude_from_hash_lock": {
+          "type": "boolean",
+          "description": "true=含令牌的文件不纳入测试哈希锁。"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "验证侧入口与自检声明（路径指向 hidden-tests/，不得出现在 Agent 可见指令里）。",
+      "properties": {
+        "entry": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "隐藏验收入口，如 hidden-tests/run.sh。"
+        },
+        "selftest": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "自检命令（验证装置自身是否有效），如 bash hidden-tests/run.sh --selftest。"
+        },
+        "expected_runtime_s": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "验收脚本预期运行时长（秒）。"
+        },
+        "timeouts_s": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "suite": {
+              "type": "integer",
+              "minimum": 10,
+              "description": "整体超时（秒）。"
+            },
+            "single_case": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "单条用例超时（秒）。"
+            }
+          }
+        },
+        "mutation_harness": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "变异测试脚本路径（可选）。"
+        }
+      }
+    },
+    "stop_conditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "本题的停止条件（终判规则）。与 docs/03-grading.md 的成功判定一致：硬门槛全过且无未修复 functional/fatal 缺陷才算成功；minor 只影响 P/A 区分。",
+      "properties": {
+        "success": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "成功条件，如「所有 hard_gates 通过 且 无未修复的 functional/fatal 缺陷」。"
+        },
+        "failed": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "失败条件，如「预算耗尽或硬门槛失败」。"
+        },
+        "failure_budget": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "预算耗尽时的判定口径。"
+        },
+        "minor_affects": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "minor 缺陷的影响范围（默认仅 P/A 区分）。"
+        }
+      }
+    },
+    "author": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "出题人/负责人。"
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "创建日期（YYYY-MM-DD）。"
+    },
+    "updated": {
+      "type": "string",
+      "format": "date",
+      "description": "最后更新日期（YYYY-MM-DD）。"
+    },
+    "language": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 32
+      },
+      "description": "题目涉及的语言/工具链，如 python、javascript、swift。"
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 12,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_-]{1,23}$"
+      },
+      "description": "检索标签。"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "review",
+        "active",
+        "deprecated",
+        "retired"
+      ],
+      "description": "生命周期状态：draft=草稿；review=评审中；active=现役；deprecated=标记退役但保留成绩；retired=已下线（版本冻结、不再跑）。见 docs/05-task-library.md 第 8 节。"
+    },
+    "retired_at": {
+      "type": "string",
+      "format": "date",
+      "description": "退役日期（status=deprecated/retired 时填）。"
+    },
+    "replaces": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(logic|web|data|backend|debug|macos|ios|harmony|rust|vulkan|video|game)-[0-9]{3}@[0-9]+\\.[0-9]+\\.[0-9]+$"
+      },
+      "description": "本版本替代的旧题/旧版本（题目生命周期审计用）。"
+    },
+    "extensions": {
+      "type": "object",
+      "description": "扩展字段统一放这里；顶层 additionalProperties=false。",
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "required": [
+            "reference_solutions"
+          ]
+        },
+        {
+          "required": [
+            "references"
+          ]
+        }
+      ],
+      "description": "至少给出一种参考解清单写法（推荐 reference_solutions，含思路标签）。"
+    }
+  ]
+}

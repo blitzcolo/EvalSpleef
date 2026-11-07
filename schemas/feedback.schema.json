@@ -1,0 +1,500 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-eval.local/schemas/feedback.schema.json",
+  "title": "反馈决策与文本（F0-F3 反馈阶梯）",
+  "description": "反馈控制器的单次决策记录：级别、目标缺陷、允许字段、最终文本、泄露检查结果与预算快照。一个 trial 每一轮最多一条反馈记录；F0 无信息量催促（kind=nudge）单独记录且不占反馈轮数。规则见 docs/03-grading.md 第 7、8 节。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "trial_id",
+    "feedback_index",
+    "kind",
+    "level",
+    "target_defect_id",
+    "allowed_fields",
+    "text",
+    "text_hash",
+    "template_id",
+    "leak_check",
+    "decided_at",
+    "delivery",
+    "budget"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "description": "本 Schema 的主版本号。"
+    },
+    "trial_id": {
+      "$ref": "defect.schema.json#/$defs/trial_id"
+    },
+    "feedback_index": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 99,
+      "description": "trial 内第几条反馈决策（含 F0 催促；从 1 开始）。"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "feedback",
+        "nudge"
+      ],
+      "description": "feedback=F1-F3 实质反馈；nudge=F0 无信息量催促（“请按你的判断做完”）。"
+    },
+    "level": {
+      "$ref": "#/$defs/feedback_level"
+    },
+    "target_defect_id": {
+      "oneOf": [
+        {
+          "$ref": "defect.schema.json#/$defs/defect_id"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "这条反馈针对的缺陷 ID；nudge 必须为 null，feedback 必须恰好一个。每轮只讲一个缺陷。"
+    },
+    "allowed_fields": {
+      "type": "array",
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/allowed_field"
+      },
+      "description": "生成文本时实际提供给模拟用户的字段白名单；必须等于该级别允许的字段集或其子集。"
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 1200,
+      "description": "最终发送给被测 Agent 的消息正文（已过泄露检查）。"
+    },
+    "text_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "text 的 sha256，用于事后审计与重放。"
+    },
+    "template_id": {
+      "type": "string",
+      "pattern": "^F[0-3]-[A-Z0-9-]{2,32}$",
+      "description": "使用的话术模板 ID（附录 appendix/personas/ladder-scripts.md 定义），如 F1-ROTATE-MODEL-GONE。"
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user_model",
+        "prompt_version"
+      ],
+      "description": "模拟用户生成信息，用于漂移追溯。",
+      "properties": {
+        "user_model": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "模拟用户模型 slug（固定版本）。"
+        },
+        "prompt_version": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "用户 prompt 版本。"
+        },
+        "persona_id": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "persona 设定 ID。"
+        }
+      }
+    },
+    "leak_check": {
+      "$ref": "#/$defs/leak_check"
+    },
+    "escalation": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "$ref": "#/$defs/escalation_state"
+      },
+      "description": "本轮决策时各未修复缺陷的升级计数快照。"
+    },
+    "budget": {
+      "$ref": "#/$defs/budget_snapshot"
+    },
+    "decided_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "控制器做出决策的时间（ISO-8601 UTC）。"
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "description": "发送结果。",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "sent",
+            "blocked"
+          ],
+          "description": "sent=已发送；blocked=泄露重写 3 次仍失败或人工阻断，未发送。"
+        },
+        "sent_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "发送时间；blocked 时为 null。"
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "description": "扩展字段统一放这里。",
+      "additionalProperties": true
+    },
+    "made_progress": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "下一轮观察回填：true=目标缺陷已修复/有进展；false=仍存在；null=尚未观察。控制器的连续无进展计数只累计 false。"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "feedback"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "target_defect_id",
+          "allowed_fields"
+        ],
+        "properties": {
+          "level": {
+            "enum": [
+              "F1",
+              "F2",
+              "F3"
+            ]
+          },
+          "target_defect_id": {
+            "$ref": "defect.schema.json#/$defs/defect_id"
+          },
+          "allowed_fields": {
+            "minItems": 1
+          }
+        },
+        "description": "实质反馈必须是 F1-F3、恰好指向一个缺陷、至少提供一个字段。"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "nudge"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "level": {
+            "const": "F0"
+          },
+          "target_defect_id": {
+            "type": "null"
+          },
+          "allowed_fields": {
+            "maxItems": 0
+          },
+          "text": {
+            "maxLength": 60
+          }
+        },
+        "description": "无信息量催促固定 F0、不含任何缺陷、只允许一句短话。"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "leak_check": {
+            "properties": {
+              "final_action": {
+                "const": "blocked"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "delivery": {
+            "properties": {
+              "status": {
+                "const": "blocked"
+              }
+            }
+          }
+        }
+      },
+      "description": "泄露检查阻断时不得发送。"
+    }
+  ],
+  "$defs": {
+    "feedback_level": {
+      "type": "string",
+      "enum": [
+        "F0",
+        "F1",
+        "F2",
+        "F3"
+      ],
+      "description": "反馈级别（00-conventions §4.2）：F0 无反馈；F1 现象描述；F2 日志/报错原文；F3 视觉描述/协助操作。"
+    },
+    "allowed_field": {
+      "type": "string",
+      "enum": [
+        "f1_symptom",
+        "f2_evidence",
+        "f3_visual",
+        "f3_assist"
+      ],
+      "description": "可披露的缺陷字段：f1_symptom 现象；f2_evidence 日志/报错原文；f3_visual 视觉差异；f3_assist 协助操作。"
+    },
+    "leak_category": {
+      "type": "string",
+      "enum": [
+        "file_name",
+        "function_name",
+        "api_name",
+        "log_text",
+        "fix_suggestion",
+        "code",
+        "answer",
+        "hidden_test",
+        "internal_term",
+        "canary",
+        "prompt_injection",
+        "other"
+      ],
+      "description": "泄露类别，与 appendix/personas/leak-rules.md 的 LR-01..LR-14 规则映射。"
+    },
+    "leak_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "passed",
+        "rule_ids_hit",
+        "categories_hit",
+        "model_check",
+        "rewrite_count",
+        "fallback_used",
+        "final_action"
+      ],
+      "description": "泄露检查结果：正则集 + 小模型复核 + 重写策略。",
+      "properties": {
+        "passed": {
+          "type": "boolean",
+          "description": "最终文本是否通过检查。"
+        },
+        "rule_ids_hit": {
+          "type": "array",
+          "maxItems": 30,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^LR-[0-9]{2}$"
+          },
+          "description": "命中的正则规则 ID。"
+        },
+        "categories_hit": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/leak_category"
+          },
+          "description": "命中的泄露类别。"
+        },
+        "model_check": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "model",
+            "verdict",
+            "reasons"
+          ],
+          "description": "小模型复核结果。",
+          "properties": {
+            "model": {
+              "type": "string",
+              "maxLength": 100,
+              "description": "复核模型 slug。"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "clean",
+                "suspect",
+                "leak"
+              ],
+              "description": "复核结论；suspect 按泄露处理并触发重写。"
+            },
+            "reasons": {
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "description": "判定理由（中文短句）。"
+            }
+          }
+        },
+        "rewrite_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "重写次数；3 次仍失败即阻止发送并记 feedback_blocked。"
+        },
+        "fallback_used": {
+          "type": "boolean",
+          "description": "是否退回到预写模板原文。"
+        },
+        "final_action": {
+          "type": "string",
+          "enum": [
+            "send",
+            "blocked"
+          ],
+          "description": "最终动作。"
+        }
+      }
+    },
+    "escalation_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rubric_item_id",
+        "level",
+        "no_progress_rounds"
+      ],
+      "description": "单个缺陷的升级状态快照。",
+      "properties": {
+        "rubric_item_id": {
+          "$ref": "rubric.schema.json#/$defs/rubric_item_id"
+        },
+        "level": {
+          "$ref": "#/$defs/feedback_level"
+        },
+        "no_progress_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "在该级别上连续无进展的轮数。"
+        },
+        "next_level": {
+          "$ref": "#/$defs/feedback_level",
+          "description": "达到阈值后将升级到的级别。"
+        }
+      }
+    },
+    "budget_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "feedback_rounds_used",
+        "max_feedback_rounds",
+        "nudges_used",
+        "max_nudges",
+        "exhausted"
+      ],
+      "description": "决策时的预算快照，字段名与 00-conventions §4.8 一致。",
+      "properties": {
+        "feedback_rounds_used": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "已发出的反馈轮数（F1-F3，不含 F0 催促）。"
+        },
+        "max_feedback_rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "反馈轮数上限。"
+        },
+        "nudges_used": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "已用的无信息量催促次数。"
+        },
+        "max_nudges": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "无信息量催促次数上限。"
+        },
+        "tokens_used": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "被测 Agent 已用 token。"
+        },
+        "max_total_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "被测 Agent token 上限。"
+        },
+        "wall_clock_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "已用墙钟秒数。"
+        },
+        "max_wall_clock_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "墙钟上限秒数。"
+        },
+        "cost_usd_used": {
+          "type": "number",
+          "minimum": 0,
+          "description": "被测 Agent 已用费用（美元）。"
+        },
+        "max_cost_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "被测 Agent 费用上限（美元）。"
+        },
+        "exhausted": {
+          "type": "boolean",
+          "description": "是否已触底（任一预算用尽）。"
+        },
+        "exhausted_by": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "rounds",
+            "tokens",
+            "wall_clock",
+            "cost",
+            null
+          ],
+          "description": "触底的预算项；未触底为 null。"
+        }
+      }
+    }
+  }
+}

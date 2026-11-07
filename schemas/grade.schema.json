@@ -1,0 +1,1307 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-eval.local/schemas/grade.schema.json",
+  "title": "单次判分结果（档位/扣分/费用/一致性）",
+  "description": "一个 trial 的一个 grade 版本：由确定性聚合器按 docs/03-grading.md 第 9 节的优先级规则计算 tier、penalty、cost，并记录判定规则 ID、证据摘要与裁判一致性。重判追加新版本（grade_version 递增、supersedes 指向旧版本），不覆盖旧记录（00-conventions §4.1）。只有 validity=valid 的 trial 才生成正式 grade；invalid/manual 不自动出档。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "trial_id",
+    "grade_version",
+    "tier",
+    "tier_numeric",
+    "status",
+    "validity",
+    "counted_in_leaderboard",
+    "flags",
+    "decided_by",
+    "decided_at",
+    "hard_gate_summary",
+    "defect_summary",
+    "feedback_summary",
+    "penalty",
+    "penalty_breakdown",
+    "cost",
+    "consistency",
+    "decision",
+    "rubric_version",
+    "task_version",
+    "judge_panel"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "description": "本 Schema 的主版本号。"
+    },
+    "trial_id": {
+      "$ref": "defect.schema.json#/$defs/trial_id"
+    },
+    "grade_version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 999,
+      "description": "grade 版本号，从 1 递增；重判不新建 trial。"
+    },
+    "supersedes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "被本版本替代的 grade_version；首个版本为 null。"
+    },
+    "tier": {
+      "$ref": "#/$defs/tier"
+    },
+    "tier_numeric": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 7,
+      "description": "档位数值映射（00-conventions §4.3）：P=7,A=6,B+=5,B=4,C+=3,C=2,D=1,F=0。与 tier 的对应关系由本 Schema 强制校验。"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "final",
+        "provisional",
+        "superseded"
+      ],
+      "description": "final=正式成绩；provisional=待人工确认（可被覆盖）；superseded=已被新版本替代。"
+    },
+    "validity": {
+      "$ref": "#/$defs/validity"
+    },
+    "counted_in_leaderboard": {
+      "type": "boolean",
+      "description": "是否计入榜单：valid 且 final 才为 true；作弊记录仍计入（记 0），invalid/manual 不计入。"
+    },
+    "flags": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/flag"
+      },
+      "description": "判定标记，供榜单与审计使用。"
+    },
+    "decided_by": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "human",
+        "arbiter"
+      ],
+      "description": "判定者：auto=确定性聚合器；human=人工复核；arbiter=仲裁委员会。"
+    },
+    "decided_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "判定时间（ISO-8601 UTC）。"
+    },
+    "hard_gate_summary": {
+      "$ref": "#/$defs/hard_gate_summary"
+    },
+    "defect_summary": {
+      "$ref": "#/$defs/defect_summary"
+    },
+    "feedback_summary": {
+      "$ref": "#/$defs/feedback_summary"
+    },
+    "defects": {
+      "type": "array",
+      "maxItems": 60,
+      "items": {
+        "$ref": "defect.schema.json#/$defs/defect_summary_item"
+      },
+      "description": "缺陷明细摘要（可选；与 penalty_breakdown 冗余，供查询）。"
+    },
+    "penalty": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 300,
+      "description": "扣分：按每个缺陷首次发现计一次权重（minor=1/functional=3/fatal=5），persisting 不重复计。"
+    },
+    "penalty_breakdown": {
+      "type": "array",
+      "maxItems": 60,
+      "items": {
+        "$ref": "#/$defs/penalty_item"
+      },
+      "description": "扣分明细，逐缺陷记录权重与是否计入。"
+    },
+    "cost": {
+      "$ref": "#/$defs/cost"
+    },
+    "consistency": {
+      "$ref": "#/$defs/consistency"
+    },
+    "decision": {
+      "$ref": "#/$defs/decision"
+    },
+    "manual_notes": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 2000,
+      "description": "人工/仲裁备注；decided_by 非 auto 时必填。"
+    },
+    "human_override": {
+      "$ref": "#/$defs/human_override"
+    },
+    "rubric_version": {
+      "$ref": "rubric.schema.json#/$defs/semver",
+      "description": "本次判分使用的 rubric 版本。"
+    },
+    "task_version": {
+      "$ref": "rubric.schema.json#/$defs/semver",
+      "description": "题目版本（PATCH 复用、MINOR 重判、MAJOR 重跑）。"
+    },
+    "judge_panel": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/judge_member"
+      },
+      "description": "参与 L2 判分的评审团名单与采样数；纯 L1 判分可为空数组。"
+    },
+    "extensions": {
+      "type": "object",
+      "description": "扩展字段统一放这里。",
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "tier": {
+            "const": "P"
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tier_numeric": {
+            "const": 7
+          }
+        }
+      },
+      "description": "P=7。"
+    },
+    {
+      "if": {
+        "properties": {
+          "tier": {
+            "const": "A"
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tier_numeric": {
+            "const": 6
+          }
+        }
+      },
+      "description": "A=6。"
+    },
+    {
+      "if": {
+        "properties": {
+          "tier": {
+            "const": "B+"
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tier_numeric": {
+            "const": 5
+          }
+        }
+      },
+      "description": "B+=5。"
+    },
+    {
+      "if": {
+        "properties": {
+          "tier": {
+            "const": "B"
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tier_numeric": {
+            "const": 4
+          }
+        }
+      },
+      "description": "B=4。"
+    },
+    {
+      "if": {
+        "properties": {
+          "tier": {
+            "const": "C+"
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tier_numeric": {
+            "const": 3
+          }
+        }
+      },
+      "description": "C+=3。"
+    },
+    {
+      "if": {
+        "properties": {
+          "tier": {
+            "const": "C"
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tier_numeric": {
+            "const": 2
+          }
+        }
+      },
+      "description": "C=2。"
+    },
+    {
+      "if": {
+        "properties": {
+          "tier": {
+            "const": "D"
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tier_numeric": {
+            "const": 1
+          }
+        }
+      },
+      "description": "D=1。"
+    },
+    {
+      "if": {
+        "properties": {
+          "tier": {
+            "const": "F"
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tier_numeric": {
+            "const": 0
+          }
+        }
+      },
+      "description": "F=0。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-CHEAT-01"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "F"
+          },
+          "penalty": {
+            "const": 0
+          },
+          "flags": {
+            "contains": {
+              "const": "cheat"
+            }
+          },
+          "counted_in_leaderboard": {
+            "const": true
+          }
+        },
+        "description": "作弊：判 F、扣分记 0、标记 cheat；成绩有效（记 0）并计入榜单。"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-F0-PERFECT"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "P"
+          },
+          "penalty": {
+            "const": 0
+          }
+        }
+      },
+      "description": "无缺陷一次过：P 且扣分 0。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-F0-MINOR"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "A"
+          },
+          "feedback_summary": {
+            "properties": {
+              "max_level": {
+                "const": "F0"
+              }
+            }
+          }
+        }
+      },
+      "description": "只有 minor：A 且未发实质反馈。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-F1-B"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "B"
+          },
+          "feedback_summary": {
+            "properties": {
+              "max_level": {
+                "const": "F1"
+              },
+              "half_step_applied": {
+                "const": false
+              },
+              "multi_round_f1": {
+                "const": 0
+              }
+            }
+          }
+        }
+      },
+      "description": "单轮 F1 修复：B。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-F1-BPLUS"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "B+"
+          },
+          "feedback_summary": {
+            "properties": {
+              "max_level": {
+                "const": "F1"
+              },
+              "half_step_applied": {
+                "const": true
+              },
+              "multi_round_f1": {
+                "const": 0
+              }
+            }
+          }
+        }
+      },
+      "description": "单轮 F1 且满足半档条件：B+。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-F1-C"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "C"
+          },
+          "feedback_summary": {
+            "properties": {
+              "max_level": {
+                "const": "F1"
+              },
+              "half_step_applied": {
+                "const": false
+              }
+            }
+          }
+        }
+      },
+      "description": "多轮 F1 修复：C。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-F1-CPLUS"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "C+"
+          },
+          "feedback_summary": {
+            "properties": {
+              "max_level": {
+                "const": "F1"
+              },
+              "half_step_applied": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "description": "多轮 F1 且满足半档条件：C+。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-F2-D"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "D"
+          },
+          "feedback_summary": {
+            "properties": {
+              "max_level": {
+                "const": "F2"
+              }
+            }
+          }
+        }
+      },
+      "description": "用到 F2：最高 D。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-F3-D"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "D"
+          },
+          "feedback_summary": {
+            "properties": {
+              "max_level": {
+                "const": "F3"
+              }
+            }
+          }
+        }
+      },
+      "description": "用到 F3：D。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-BUDGET-F"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "F"
+          },
+          "flags": {
+            "contains": {
+              "const": "budget_exhausted"
+            }
+          }
+        }
+      },
+      "description": "预算耗尽仍未通过：Failed。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decided_by": {
+            "enum": [
+              "human",
+              "arbiter"
+            ]
+          }
+        },
+        "required": [
+          "decided_by"
+        ]
+      },
+      "then": {
+        "required": [
+          "manual_notes"
+        ],
+        "properties": {
+          "manual_notes": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "description": "人工/仲裁判定必须写备注。"
+      },
+      "description": "人工判定需要理由。"
+    },
+    {
+      "if": {
+        "properties": {
+          "validity": {
+            "enum": [
+              "invalid",
+              "pending",
+              "manual"
+            ]
+          }
+        },
+        "required": [
+          "validity"
+        ]
+      },
+      "then": {
+        "properties": {
+          "counted_in_leaderboard": {
+            "const": false
+          }
+        },
+        "description": "无效/待定/转人工的成绩不计入榜单。"
+      },
+      "description": "非 valid 不计榜。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-ABORT-04"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "F"
+          },
+          "flags": {
+            "contains": {
+              "const": "terminated_early"
+            }
+          }
+        }
+      },
+      "description": "不可继续（反馈无法生成/连续崩溃非环境问题）：Failed。"
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "rule_id": {
+                "const": "G-FORMAT-05"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tier": {
+            "const": "F"
+          },
+          "penalty": {
+            "const": 0
+          },
+          "flags": {
+            "contains": {
+              "const": "format_violation"
+            }
+          }
+        }
+      },
+      "description": "逻辑题格式违规（要求不解释却写解释/要求不写代码却给代码）：判 0，F + format_violation，不带 cheat 标记。"
+    }
+  ],
+  "$defs": {
+    "tier": {
+      "type": "string",
+      "enum": [
+        "P",
+        "A",
+        "B+",
+        "B",
+        "C+",
+        "C",
+        "D",
+        "F"
+      ],
+      "description": "档位枚举（00-conventions §4.3），按 P > A > B+ > B > C+ > C > D > F 排序；榜单展示为 Perfect/A/B+/B/C+/C/D/Failed。"
+    },
+    "validity": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "invalid",
+        "pending",
+        "manual"
+      ],
+      "description": "成绩有效性（00-conventions §4.7）。"
+    },
+    "flag": {
+      "type": "string",
+      "enum": [
+        "cheat",
+        "zeroed",
+        "budget_exhausted",
+        "hard_gate_failed",
+        "feedback_blocked",
+        "terminated_early",
+        "invalid",
+        "minor_only",
+        "f1_multiround",
+        "half_step",
+        "nudge_capped",
+        "low_judge_agreement",
+        "manual_arbitration",
+        "leak_incident",
+        "format_violation",
+        "guess_suspect",
+        "human_override"
+      ],
+      "description": "判定标记。cheat/zeroed=作弊判 0；budget_exhausted=预算耗尽；hard_gate_failed=硬门槛未过；feedback_blocked=反馈无法生成；terminated_early=数据异常提前终止；minor_only=仅剩 minor；f1_multiround=存在多轮 F1 缺陷；half_step=应用了半档；nudge_capped=催促次数用尽；low_judge_agreement=裁判一致性低；manual_arbitration=人工仲裁；leak_incident=泄露事故；format_violation=格式违规判 0；guess_suspect=疑似枚举/猜测；human_override=人工覆盖机器结论。"
+    },
+    "rule_id": {
+      "type": "string",
+      "enum": [
+        "G-CHEAT-01",
+        "G-FORMAT-05",
+        "G-HUMAN-99",
+        "G-F0-PERFECT",
+        "G-F0-MINOR",
+        "G-F1-B",
+        "G-F1-BPLUS",
+        "G-F1-C",
+        "G-F1-CPLUS",
+        "G-F2-D",
+        "G-F3-D",
+        "G-BUDGET-F",
+        "G-ABORT-04"
+      ],
+      "description": "判定规则 ID，与 docs/03-grading.md §9.2 的优先级表逐字一致。G-INVALID-00（validity=invalid）与 G-ANOMALY-98（数据异常转人工）不产生 grade 记录。"
+    },
+    "hard_gate_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "passed",
+        "total",
+        "failed"
+      ],
+      "description": "L1 硬门槛结果摘要。",
+      "properties": {
+        "passed": {
+          "type": "boolean",
+          "description": "是否全部通过。"
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "硬门槛检查项总数。"
+        },
+        "failed": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 40,
+          "items": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "description": "未通过的检查项 ID。"
+        },
+        "evidence_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500,
+          "description": "隐藏测试/验证结果归档位置。"
+        }
+      }
+    },
+    "defect_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "by_severity",
+        "open_blocking",
+        "fixed",
+        "requiring_feedback",
+        "multi_round_f1",
+        "regressed"
+      ],
+      "description": "判分时的缺陷汇总。",
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "累计去重缺陷数（含回归后新登记的缺陷）。"
+        },
+        "by_severity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "minor",
+            "functional",
+            "fatal"
+          ],
+          "properties": {
+            "minor": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "minor 数。"
+            },
+            "functional": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "functional 数。"
+            },
+            "fatal": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "fatal 数。"
+            }
+          },
+          "description": "按严重度统计。"
+        },
+        "open_blocking": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "终判时仍未修复的 functional/fatal 缺陷数；>0 即不能成功。"
+        },
+        "fixed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "已修复缺陷数。"
+        },
+        "requiring_feedback": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "需要至少一轮反馈才修复的缺陷数（半档分子）。"
+        },
+        "multi_round_f1": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "需要 ≥2 轮 F1 才修复的缺陷数（>0 则 C 档族）。"
+        },
+        "regressed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "修复后复发的缺陷数（按新缺陷计扣分）。"
+        }
+      }
+    },
+    "feedback_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_level",
+        "feedback_rounds",
+        "level_counts",
+        "nudges_used",
+        "total_defects",
+        "need_feedback",
+        "half_step_applied",
+        "multi_round_f1"
+      ],
+      "description": "反馈阶梯使用汇总，是档位算法的直接输入。",
+      "properties": {
+        "max_level": {
+          "$ref": "feedback.schema.json#/$defs/feedback_level",
+          "description": "整个 trial 用到的最高反馈级别；未发实质反馈为 F0。"
+        },
+        "feedback_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "实质反馈轮数（F1-F3），不含 F0 催促。"
+        },
+        "level_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "F0",
+            "F1",
+            "F2",
+            "F3"
+          ],
+          "properties": {
+            "F0": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "F0 次数（含催促）。"
+            },
+            "F1": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "F1 轮数。"
+            },
+            "F2": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "F2 轮数。"
+            },
+            "F3": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "F3 轮数。"
+            }
+          },
+          "description": "各级别发生次数。"
+        },
+        "nudges_used": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "无信息量催促次数。"
+        },
+        "total_defects": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "半档分母：累计去重缺陷数。"
+        },
+        "need_feedback": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "半档分子：需要反馈才修复的缺陷数。"
+        },
+        "half_step_applied": {
+          "type": "boolean",
+          "description": "是否满足半档条件（3×need_feedback ≤ total_defects）。"
+        },
+        "multi_round_f1": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "多轮 F1 缺陷数（>0 则 C 档族）。"
+        }
+      }
+    },
+    "penalty_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "defect_id",
+        "rubric_item_id",
+        "severity",
+        "weight",
+        "first_round",
+        "counted"
+      ],
+      "description": "单条扣分明细。",
+      "properties": {
+        "defect_id": {
+          "$ref": "defect.schema.json#/$defs/defect_id"
+        },
+        "rubric_item_id": {
+          "$ref": "rubric.schema.json#/$defs/rubric_item_id"
+        },
+        "severity": {
+          "$ref": "rubric.schema.json#/$defs/severity"
+        },
+        "weight": {
+          "type": "integer",
+          "enum": [
+            1,
+            3,
+            5
+          ],
+          "description": "权重：minor=1/functional=3/fatal=5（00-conventions §4.4）。"
+        },
+        "first_round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "首次发现轮次。"
+        },
+        "counted": {
+          "type": "boolean",
+          "description": "是否计入总分（首次发现 true；persisting 不重复计）。"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "severity": {
+                "const": "minor"
+              }
+            },
+            "required": [
+              "severity"
+            ]
+          },
+          "then": {
+            "properties": {
+              "weight": {
+                "const": 1
+              }
+            }
+          },
+          "description": "minor=1。"
+        },
+        {
+          "if": {
+            "properties": {
+              "severity": {
+                "const": "functional"
+              }
+            },
+            "required": [
+              "severity"
+            ]
+          },
+          "then": {
+            "properties": {
+              "weight": {
+                "const": 3
+              }
+            }
+          },
+          "description": "functional=3。"
+        },
+        {
+          "if": {
+            "properties": {
+              "severity": {
+                "const": "fatal"
+              }
+            },
+            "required": [
+              "severity"
+            ]
+          },
+          "then": {
+            "properties": {
+              "weight": {
+                "const": 5
+              }
+            }
+          },
+          "description": "fatal=5。"
+        }
+      ]
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent",
+        "judge",
+        "user",
+        "total",
+        "currency"
+      ],
+      "description": "费用口径（docs/03-grading.md §10.3）：agent=被测 Agent 模型费用（榜单单元格展示口径）；judge=裁判费用；user=模拟用户费用；total=三者之和（用于预算与成本核算）。",
+      "properties": {
+        "agent": {
+          "type": "number",
+          "minimum": 0,
+          "description": "被测 Agent token 费用（美元），含各轮与重试的网关计费。"
+        },
+        "judge": {
+          "type": "number",
+          "minimum": 0,
+          "description": "L2 裁判模型费用（美元），含 k 次采样。"
+        },
+        "user": {
+          "type": "number",
+          "minimum": 0,
+          "description": "模拟用户模型费用（美元）。"
+        },
+        "total": {
+          "type": "number",
+          "minimum": 0,
+          "description": "agent+judge+user。"
+        },
+        "currency": {
+          "const": "USD",
+          "description": "计价货币固定美元。"
+        },
+        "pricing_table_version": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "价格表版本（批次冻结时写入）。"
+        }
+      }
+    },
+    "consistency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "value",
+        "samples"
+      ],
+      "description": "裁判一致性指标，用于触发仲裁与漂移监控。",
+      "properties": {
+        "metric": {
+          "type": "string",
+          "enum": [
+            "cohen_kappa",
+            "krippendorff_alpha",
+            "percent_agreement"
+          ],
+          "description": "一致性指标：两裁判/两标签用 Cohen's kappa；多裁判或缺失值用 Krippendorff's alpha；快速查看用一致率。"
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": -1,
+          "maximum": 1,
+          "description": "指标值；无法计算为 null。"
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "参与计算的样本数。"
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "本次使用的阈值（便于历史追溯）。"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "备注。"
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "priority",
+        "rationale"
+      ],
+      "description": "判定规则命中记录。",
+      "properties": {
+        "rule_id": {
+          "$ref": "#/$defs/rule_id"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 99,
+          "description": "规则在 §9.2 优先级表中的序号；越小越先命中。"
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 800,
+          "description": "命中理由（中文，含关键输入量，如 max_level=F1, multi_round_f1=1, half_step=false）。"
+        }
+      }
+    },
+    "judge_member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "provider",
+        "family",
+        "role"
+      ],
+      "description": "评审团成员。裁判必须与被测模型不同家族。",
+      "properties": {
+        "model": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "裁判模型 slug。"
+        },
+        "provider": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "厂商。"
+        },
+        "family": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "模型家族；用于校验与被测模型不同家族。"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "llm_judge",
+            "agent_judge",
+            "arbiter"
+          ],
+          "description": "裁判角色。"
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9,
+          "description": "每条 rubric 的采样次数（默认 5）。"
+        }
+      }
+    },
+    "human_override": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewer",
+        "reason",
+        "at"
+      ],
+      "description": "人工覆盖记录，仅在 decided_by=human/arbiter 时出现。",
+      "properties": {
+        "reviewer": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "复核人 ID。"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 1000,
+          "description": "覆盖理由。"
+        },
+        "previous_tier": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/tier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "被覆盖的机器档位；无机器档位为 null。"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "覆盖时间（ISO-8601 UTC）。"
+        }
+      }
+    }
+  }
+}
