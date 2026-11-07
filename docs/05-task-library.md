@@ -87,7 +87,7 @@ track 配额：logic 6、web 5、data 3、backend 3、debug 3、rust 2、video 1
 
 ## 4. 题目元数据设计（对齐 task.schema.json）
 
-一个题目 = 一个目录 [appendix/examples/](../appendix/examples/)，必需文件见 [00-conventions](00-conventions.md) §3；元数据写在 [task.yaml](../appendix/examples/logic-001/task.yaml)，由 [task.schema.json](../schemas/task.schema.json) 校验（draft 2020-12，顶层 additionalProperties:false，未定义字段放 extensions）。
+一个题目 = 一个目录 [appendix/examples/](../tasks/)，必需文件见 [00-conventions](00-conventions.md) §3；元数据写在 [task.yaml](../tasks/logic-001/task.yaml)，由 [task.schema.json](../schemas/task.schema.json) 校验（draft 2020-12，顶层 additionalProperties:false，未定义字段放 extensions）。
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
@@ -281,4 +281,4 @@ budget:
 - [Harbor 文档索引](https://docs.harborframework.com/llms.txt)
 - [Harbor：防奖励作弊公告](https://docs.harborframework.com/news/reward-hacking.md)
 - [Apple 开发者论坛：虚拟化讨论](https://developer.apple.com/forums/activities/1586080)
-- 内部： [00-conventions](00-conventions.md)、[03-grading](03-grading.md)、[04-isolation](04-isolation.md)、[06-answer-and-acceptance](06-answer-and-acceptance.md)、[task.schema.json](../schemas/task.schema.json)、[示例题包](../appendix/examples/)
+- 内部： [00-conventions](00-conventions.md)、[03-grading](03-grading.md)、[04-isolation](04-isolation.md)、[06-answer-and-acceptance](06-answer-and-acceptance.md)、[task.schema.json](../schemas/task.schema.json)、[示例题包](../tasks/)

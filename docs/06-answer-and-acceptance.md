@@ -2,7 +2,7 @@
 
 > 状态：v1 · 维护：tasks-a · 最后更新：2026-11-06
 > 上游：[00-conventions](00-conventions.md) · 相关：[03-grading](03-grading.md) · [04-isolation](04-isolation.md) · [05-task-library](05-task-library.md) · Schema：[task.schema.json](../schemas/task.schema.json)
-> 示例题包：[logic-001](../appendix/examples/logic-001/notes.md)、[logic-002](../appendix/examples/logic-002/notes.md)、[data-001](../appendix/examples/data-001/notes.md)、[web-001](../appendix/examples/web-001/notes.md)
+> 示例题包：[logic-001](../tasks/logic-001/notes.md)、[logic-002](../tasks/logic-002/notes.md)、[data-001](../tasks/data-001/notes.md)、[web-001](../tasks/web-001/notes.md)
 
 ## 1. 目标与非目标
 

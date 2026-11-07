@@ -1,9 +1,9 @@
 # Playbook · 视频 / 动画生成（ffmpeg）
 
 > 状态：v1 · 维护：tasks-b · 最后更新：2026-11-06
-> 上游：[00-conventions](../../docs/00-conventions.md) · 相关：[02-eval-flow](../../docs/02-eval-flow.md)、[04-isolation](../../docs/04-isolation.md)、[06-answer-and-acceptance](../../docs/06-answer-and-acceptance.md)
+> 上游：[00-conventions](../../00-conventions.md) · 相关：[02-eval-flow](../../02-eval-flow.md)、[04-isolation](../../04-isolation.md)、[06-answer-and-acceptance](../../06-answer-and-acceptance.md)
 
-面向赛道：video（代码生成动画、导出 MP4、时长/分辨率/编码硬门槛）。示例题包：[video-001](../examples/video-001/task.yaml)。
+面向赛道：video（代码生成动画、导出 MP4、时长/分辨率/编码硬门槛）。示例题包：[video-001](../../../tasks/video-001/task.yaml)。
 
 ## 1. 环境镜像要点
 

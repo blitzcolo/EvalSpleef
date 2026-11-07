@@ -1,7 +1,7 @@
 # 附录 · 澄清问题回答边界（FAQ policy）
 
 > 状态：v1 · 维护：grading · 最后更新：2026-11-06
-> 上游：[03-grading](../../docs/03-grading.md) §7.8 · 相关：[persona-template](persona-template.md) · [ladder-scripts](ladder-scripts.md) · [leak-rules](leak-rules.md)
+> 上游：[03-grading](../../03-grading.md) §7.8 · 相关：[persona-template](persona-template.md) · [ladder-scripts](ladder-scripts.md) · [leak-rules](leak-rules.md)
 
 模拟用户必须能回答 Agent 的合理澄清提问，但**回答不等于提示**。本文件定义：哪些问题可以答、答什么、答几次、对档位有什么影响、答错了怎么处置。
 

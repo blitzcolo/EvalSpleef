@@ -1,9 +1,9 @@
 # Playbook · 无提示修复（Debug）
 
 > 状态：v1 · 维护：tasks-b · 最后更新：2026-11-06
-> 上游：[00-conventions](../../docs/00-conventions.md) · 相关：[02-eval-flow](../../docs/02-eval-flow.md)、[04-isolation](../../docs/04-isolation.md)、[05-task-library](../../docs/05-task-library.md)
+> 上游：[00-conventions](../../00-conventions.md) · 相关：[02-eval-flow](../../02-eval-flow.md)、[04-isolation](../../04-isolation.md)、[05-task-library](../../05-task-library.md)
 
-面向赛道：debug（注入缺陷的真实小工程、无提示修复）。示例题包：[debug-001](../examples/debug-001/task.yaml)。
+面向赛道：debug（注入缺陷的真实小工程、无提示修复）。示例题包：[debug-001](../../../tasks/debug-001/task.yaml)。
 
 ## 1. 环境镜像要点
 
@@ -48,7 +48,7 @@ Agent 可见命令与验证侧命令必须一致（同一入口、同一 Python 
      cp -R starter /tmp/ref && (cd /tmp/ref && patch -p1 < answers/reference-b.patch)
      bash hidden-tests/run.sh /tmp/ref
 
-硬门槛建议：隐藏回归测试全过 + 测试文件哈希未变 + 原有可见测试仍通过。参考 [06-answer-and-acceptance](../../docs/06-answer-and-acceptance.md)。
+硬门槛建议：隐藏回归测试全过 + 测试文件哈希未变 + 原有可见测试仍通过。参考 [06-answer-and-acceptance](../../06-answer-and-acceptance.md)。
 
 ## 5. 隔离要点
 

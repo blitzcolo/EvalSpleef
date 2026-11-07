@@ -1,7 +1,7 @@
 # 事故响应清单（隔离类）
 
 > 状态：v1 · 维护：isolation · 最后更新：2026-11-06
-> 上游：[04-isolation](../../docs/04-isolation.md) §14 · 相关：[trial-hygiene](trial-hygiene.md) · [isolation-audit-report-template](isolation-audit-report-template.md)
+> 上游：[04-isolation](../../04-isolation.md) §14 · 相关：[trial-hygiene](trial-hygiene.md) · [isolation-audit-report-template](isolation-audit-report-template.md)
 
 ## 用途
 

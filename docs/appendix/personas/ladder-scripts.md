@@ -1,7 +1,7 @@
 # 附录 · F0-F3 反馈话术模板库
 
 > 状态：v1 · 维护：grading · 最后更新：2026-11-06
-> 上游：[03-grading](../../docs/03-grading.md) §7-§8 · 相关：[persona-template](persona-template.md) · [leak-rules](leak-rules.md) · [faq-policy](faq-policy.md)
+> 上游：[03-grading](../../03-grading.md) §7-§8 · 相关：[persona-template](persona-template.md) · [leak-rules](leak-rules.md) · [faq-policy](faq-policy.md)
 
 话术模板是反馈阶梯的「可复现文本层」：控制器决定**级别与目标缺陷**，模板决定**怎么说**。所有模板都必须过 [leak-rules](leak-rules.md) 检查；模板 ID 写入 feedback.template_id。
 

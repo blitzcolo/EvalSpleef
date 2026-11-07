@@ -1,10 +1,10 @@
 # 附录 · 泄露检查规则集（LR-01..LR-14）
 
 > 状态：v1 · 维护：grading · 最后更新：2026-11-06
-> 上游：[03-grading](../../docs/03-grading.md) §8 · 相关：[ladder-scripts](ladder-scripts.md) · [faq-policy](faq-policy.md) · [persona-template](persona-template.md)
+> 上游：[03-grading](../../03-grading.md) §8 · 相关：[ladder-scripts](ladder-scripts.md) · [faq-policy](faq-policy.md) · [persona-template](persona-template.md)
 > 可执行基准：[leak_rules_test.py](leak_rules_test.py)（33 个用例，标准库，退出码 0 = 全部通过）
 
-本文件是 [docs/03-grading.md](../../docs/03-grading.md) §8 的规则明细：正则、命中级别、正反例、误报处理与重写策略。**规则与测试脚本必须同步修改**；测试脚本是唯一可执行基准，文档解释为什么。
+本文件是 [docs/03-grading.md](../../03-grading.md) §8 的规则明细：正则、命中级别、正反例、误报处理与重写策略。**规则与测试脚本必须同步修改**；测试脚本是唯一可执行基准，文档解释为什么。
 
 ---
 
@@ -28,7 +28,7 @@
 
 ## 2. 规则清单
 
-字段说明：类别对应 [feedback.schema.json](../../schemas/feedback.schema.json) 的 leak_category；动作 block=命中即重写，refuse=固定拒绝（不重写），warn=记录不阻断。
+字段说明：类别对应 [feedback.schema.json](../../../schemas/feedback.schema.json) 的 leak_category；动作 block=命中即重写，refuse=固定拒绝（不重写），warn=记录不阻断。
 
 ### LR-01 文件名/路径
 
@@ -163,7 +163,7 @@ CNRY-[0-9a-fA-F]{8}-[0-9a-fA-F]{8}
 ```
 
 - 命中例：CNRY-9f3a1c02-7d4e0b11、web-001.claude-sonnet-5...
-- 处置：金丝雀泄漏意味着隔离失效（[04-isolation](../../docs/04-isolation.md)），trial 作废并排查；不能只当文本泄露处理。
+- 处置：金丝雀泄漏意味着隔离失效（[04-isolation](../../04-isolation.md)），trial 作废并排查；不能只当文本泄露处理。
 
 ### LR-10 日志来源/越级字段（F0/F1 专用）
 
@@ -213,7 +213,7 @@ https?://\S+|\bwww\.[\w.-]+
 ```
 
 - 命中例：还有暗色模式看不清
-- 处置：不阻断发送，但记录并向控制器告警；控制器应保证一条反馈只对应一个缺陷（[feedback.schema.json](../../schemas/feedback.schema.json) 的 target_defect_id 单值约束是硬校验）。
+- 处置：不阻断发送，但记录并向控制器告警；控制器应保证一条反馈只对应一个缺陷（[feedback.schema.json](../../../schemas/feedback.schema.json) 的 target_defect_id 单值约束是硬校验）。
 
 ### LR-14 代码围栏/补丁标记
 
@@ -316,5 +316,5 @@ python3 appendix/personas/leak_rules_test.py
 
 1. 提 issue：规则 ID、触发案例、影响级别、是否事故。
 2. 改 leak_rules_test.py 加用例（正例+反例），跑通。
-3. 改本文件与 [03-grading](../../docs/03-grading.md) §8.3 矩阵。
+3. 改本文件与 [03-grading](../../03-grading.md) §8.3 矩阵。
 4. 版本记录：规则集版本写入 feedback.generation.prompt_version 与批次冻结记录；规则变更后需用锚点集重判 30-50 条历史反馈做回归。

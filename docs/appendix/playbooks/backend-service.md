@@ -1,9 +1,9 @@
 # Playbook · 后端服务
 
 > 状态：v1 · 维护：tasks-b · 最后更新：2026-11-06
-> 上游：[00-conventions](../../docs/00-conventions.md) · 相关：[02-eval-flow](../../docs/02-eval-flow.md)、[04-isolation](../../docs/04-isolation.md)、[05-task-library](../../docs/05-task-library.md)
+> 上游：[00-conventions](../../00-conventions.md) · 相关：[02-eval-flow](../../02-eval-flow.md)、[04-isolation](../../04-isolation.md)、[05-task-library](../../05-task-library.md)
 
-面向赛道：backend（API 服务、鉴权、限流、幂等、依赖降级）。示例题包：[backend-001](../examples/backend-001/task.yaml)。
+面向赛道：backend（API 服务、鉴权、限流、幂等、依赖降级）。示例题包：[backend-001](../../../tasks/backend-001/task.yaml)。
 
 ## 1. 环境镜像要点
 
@@ -40,7 +40,7 @@
 | 数据库状态 | psql -c "select count(*) ..." | 只读查询 | 行数快照 |
 | 压测 | 内置脚本 100-500 并发 | python3 scripts/load.py --p95 | p95/p99 毫秒 |
 
-观察器必须区分「业务失败」（照常判分）与「基础设施失败」（无效重跑），口径见 [02-eval-flow](../../docs/02-eval-flow.md) 第 8 节与 [Harbor 错误分类](https://docs.harborframework.com/jobs/error-classification.md)。
+观察器必须区分「业务失败」（照常判分）与「基础设施失败」（无效重跑），口径见 [02-eval-flow](../../02-eval-flow.md) 第 8 节与 [Harbor 错误分类](https://docs.harborframework.com/jobs/error-classification.md)。
 
 ## 4. 验收命令
 

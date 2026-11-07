@@ -1,7 +1,7 @@
 # 隔离预检清单（开工前）
 
 > 状态：v1 · 维护：isolation · 最后更新：2026-11-06
-> 上游：[00-conventions](../../docs/00-conventions.md) · 相关：[04-isolation](../../docs/04-isolation.md) · [trial-hygiene](trial-hygiene.md) · [incident-response](incident-response.md)
+> 上游：[00-conventions](../../00-conventions.md) · 相关：[04-isolation](../../04-isolation.md) · [trial-hygiene](trial-hygiene.md) · [incident-response](incident-response.md)
 
 ## 用途
 
@@ -11,8 +11,8 @@
 
 ### A1. 题目包与镜像
 
-- [ ] 所有题目包必需文件齐全（`task.yaml`/`instruction.md`/`persona.md`/`rubric.yaml`/`defects.yaml`/`answers/*`/`hidden-tests/run.sh`/`canary.md`/`notes.md`），字段对齐 [task.schema.json](../../schemas/task.schema.json)
-- [ ] 每道题的 `platform` 与沙箱矩阵（[04-isolation](../../docs/04-isolation.md) §3.2）一致；macOS/鸿蒙/性能题没有落到 L1
+- [ ] 所有题目包必需文件齐全（`task.yaml`/`instruction.md`/`persona.md`/`rubric.yaml`/`defects.yaml`/`answers/*`/`hidden-tests/run.sh`/`canary.md`/`notes.md`），字段对齐 [task.schema.json](../../../schemas/task.schema.json)
+- [ ] 每道题的 `platform` 与沙箱矩阵（[04-isolation](../../04-isolation.md) §3.2）一致；macOS/鸿蒙/性能题没有落到 L1
 - [ ] 所有镜像按 digest 固定：`grep -L '@sha256:' tasks/*/task.toml` 输出为空
 - [ ] 题包**显式**写 `[verifier] environment_mode = "separate"`（新建任务默认 separate，老任务默认 shared，不能依赖默认）
 - [ ] 题包**显式**写 `[agent] user = "agent"`（Harbor 默认不创建 agent 用户，非 root 是 opt-in）
@@ -46,7 +46,7 @@ grep -E 'blocklist|allowlist' /etc/egress/policy.yaml | head -40
 
 ### A3. 资源与宿主/设备
 
-- [ ] Linux 宿主：CPU/内存/磁盘余量满足并发公式（[01-architecture](../../docs/01-architecture.md) §6）
+- [ ] Linux 宿主：CPU/内存/磁盘余量满足并发公式（[01-architecture](../../01-architecture.md) §6）
 - [ ] macOS 宿主：Tart 金镜像可克隆；**每台物理 Mac 最多 2 个并发 macOS VM**，槽位计数正确
 - [ ] GPU 节点：显存/算力配额可分配；每 GPU 并发 1–2 路
 - [ ] 鸿蒙设备池：`hdc list targets` 全部在线；设备系统版本、基线包列表、基线哈希已登记
@@ -65,7 +65,7 @@ grep -E 'blocklist|allowlist' /etc/egress/policy.yaml | head -40
 ### A5. 审计与证据
 
 - [ ] 证据包目录约定可用：`<trial-dir>/isolation/`（preflight/artifact/canary/net/device/judge）
-- [ ] 事件流必需事件类型齐全（[02-eval-flow](../../docs/02-eval-flow.md) §11），`canary.injected`/`preflight.result`/`canary.scanned` 可写入
+- [ ] 事件流必需事件类型齐全（[02-eval-flow](../../02-eval-flow.md) §11），`canary.injected`/`preflight.result`/`canary.scanned` 可写入
 - [ ] 金丝雀登记表可写、可按 token 反查 trial
 - [ ] 本期体检负责人（auditor）已指定；报告模板 [isolation-audit-report-template.md](isolation-audit-report-template.md) 已就绪
 

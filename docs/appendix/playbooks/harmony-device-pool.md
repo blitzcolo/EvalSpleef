@@ -1,7 +1,7 @@
 # 鸿蒙设备池执行 Playbook
 
 > 状态：v1 · 维护：research · 最后更新：2026-11-06
-> 上游：[04-isolation](../../docs/04-isolation.md) · 相关：[device-pool-handover](../checklists/device-pool-handover.md)、[05-platform-notes](../../research/05-platform-notes.md) §3、[harmony-001](../examples/harmony-001/task.yaml)
+> 上游：[04-isolation](../../04-isolation.md) · 相关：[device-pool-handover](../checklists/device-pool-handover.md)、05-platform-notes §3、[harmony-001](../../../tasks/harmony-001/task.yaml)
 
 适用：`platform: harmony-device-pool» 的题（构建在 Linux 容器，运行在鸿蒙真机/模拟器池）。
 目标：让执行者照着做就能把一个 HAP 从源码跑到设备上、采到证据、干净归还。
@@ -11,10 +11,10 @@
 | 项 | 要求 | 依据 |
 | --- | --- | --- |
 | 构建容器 | Linux + HarmonyOS commandline-tools（hvigorw / ohpm / hdc / node / sdk），SDK 固定 `6.0.2(22)» | [华为命令行构建文档](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-hmos-command-line-building-app)（JS 渲染页，抓取时仅得壳） |
-| 签名材料 | `/opt/harmony-signing/{default.cer,default.p12,default.p7b}» 只读挂载；密码用执行器环境变量注入 | [harmony-001 notes](../examples/harmony-001/notes.md) §7 |
+| 签名材料 | `/opt/harmony-signing/{default.cer,default.p12,default.p7b}» 只读挂载；密码用执行器环境变量注入 | [harmony-001 notes](../../../tasks/harmony-001/notes.md) §7 |
 | 依赖预装 | `ohpm install --all» 所需包必须烘进镜像；构建期默认断网 | 同 notes §8 |
 | 设备镜像 | 真机保持基线版本；模拟器受地域限制（中国大陆以外不提供手机/平板/手表下载，手表除外） | [SDL HarmonyOS 说明](https://wiki.libsdl.org/SDL3/README-harmonyos) |
-| 工具权限 | Agent 只经受限代理拿到 `hdc install/start/screenshot» 三个动作，不给全权 shell | [04-isolation](../../docs/04-isolation.md) §6 |
+| 工具权限 | Agent 只经受限代理拿到 `hdc install/start/screenshot» 三个动作，不给全权 shell | [04-isolation](../../04-isolation.md) §6 |
 | 账号 | Agent 不得注册华为开发者账号；证书更新由人做 | 同上 |
 
 ## 2. 构建 / 运行命令

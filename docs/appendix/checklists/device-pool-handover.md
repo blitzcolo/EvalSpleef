@@ -1,11 +1,11 @@
 # 设备/宿主归还清单（每租约）
 
 > 状态：v1 · 维护：isolation · 最后更新：2026-11-06
-> 上游：[04-isolation](../../docs/04-isolation.md) §11 · 相关：[trial-hygiene](trial-hygiene.md) · [incident-response](incident-response.md)
+> 上游：[04-isolation](../../04-isolation.md) §11 · 相关：[trial-hygiene](trial-hygiene.md) · [incident-response](incident-response.md)
 
 ## 用途
 
-鸿蒙真机、macOS 性能机、GPU 节点在**每个租约结束**后执行；不通过不得回到 `free`。结果写 `isolation/device/handover.json`（字段见 [trial.schema.json](../../schemas/trial.schema.json) `$defs.handover_check`）。
+鸿蒙真机、macOS 性能机、GPU 节点在**每个租约结束**后执行；不通过不得回到 `free`。结果写 `isolation/device/handover.json`（字段见 [trial.schema.json](../../../schemas/trial.schema.json) `$defs.handover_check`）。
 
 ## 1. 通用前置
 

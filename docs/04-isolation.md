@@ -118,7 +118,7 @@
 | --- | --- | --- | --- | --- | --- |
 | Linux 容器 `docker`/`podman`（Harbor 本地 runtime） | L1 | 秒级（镜像已预拉；[推断]） | 每宿主按 CPU/内存配额，8 核建议 4 路（[02-eval-flow](02-eval-flow.md) §9.2） | logic/web/data/backend/debug/video/game 默认环境 | `[environment] docker_image` 必须带 digest；`[agent] user="agent"`；`network_mode="no-network"`；只读根 + tmpfs 由题包/自研 wrapper 保证 |
 | gVisor（Harbor 无内置 gVisor provider；托管侧默认或自建 runsc） | L2 | 容器级 + 少量拦截开销（[推断]） | 同容器 | 需跑不可信构建产物、依赖内核行为的题 | 自建时用 docker runtime=runsc（宿主装 runsc）；或直接选 Modal（默认 gVisor） |
-| Firecracker microVM（**Harbor 无此 provider**，需自研 `BaseEnvironment`，见 [research/01](../research/01-harbor-verification.md) §5） | L3 | 官方站点：启动 <125 ms、每 VM 内存开销 <5 MiB、每宿主 150 VM/s（[文档明说](https://firecracker-microvm.github.io/)、[research/04](../research/04-isolation-and-cheating.md) §1）；design 文档另给最小配置稳态创建约 5 microVM/核/秒（[文档明说](https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md)） | 官方：仅受硬件资源限制 | 高风险题、不可信二进制、长时任务 | 生产必须经 `jailer` 启动（cgroup/namespace 隔离 + 降权 + seccomp，[jailer 文档](https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md)）；Firecracker 自身**不做网络过滤**，egress 必须在宿主/代理层做（design 文档明说） |
+| Firecracker microVM（**Harbor 无此 provider**，需自研 `BaseEnvironment`，见 research/01 §5） | L3 | 官方站点：启动 <125 ms、每 VM 内存开销 <5 MiB、每宿主 150 VM/s（[文档明说](https://firecracker-microvm.github.io/)、research/04 §1）；design 文档另给最小配置稳态创建约 5 microVM/核/秒（[文档明说](https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md)） | 官方：仅受硬件资源限制 | 高风险题、不可信二进制、长时任务 | 生产必须经 `jailer` 启动（cgroup/namespace 隔离 + 降权 + seccomp，[jailer 文档](https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md)）；Firecracker 自身**不做网络过滤**，egress 必须在宿主/代理层做（design 文档明说） |
 | Daytona（Harbor 预集成 `daytona`） | L3（官方：每个 sandbox 有独立 kernel/filesystem/network stack） | Snapshot 恢复，秒级（[推断]，官方未公布具体值） | 由 provider 配额与 `-n` 决定 | 可弹性扩容的 Linux 题、需要 SSH 的脑手分离 | `uv tool install "harbor[daytona]"`；`-e daytona`；`DAYTONA_API_KEY` 只留在 Harbor 进程（[env vars 文档](https://docs.harborframework.com/jobs/environment-variables.md)） |
 | Modal（Harbor 预集成 `modal`） | gVisor 默认 / VM runtime 可选（[文档明说](https://modal.com/docs/guide/sandbox)） | 未公布（[推断]冷启动秒级） | 由 provider 与 `-n` 决定 | 需要 GPU 的单容器题（GPU 只支持 gVisor runtime） | `-e modal`；Compose 任务无 GPU 默认 VM；GPU 保留 gVisor（[Harbor Modal 说明](https://docs.harborframework.com/tasks/network-policies.md)） |
 | Tart macOS VM（自研 provider，Harbor `BaseEnvironment` 子类） | L3 | 冷启动约 30 s、预热池约 2 s（[文档明说](https://pkg.go.dev/github.com/ysya/runscaler@v0.2.13)） | **每台物理 Mac 最多 2 个并发 macOS VM**（Apple Virtualization.framework 限制，同上） | macos/ios/Metal 题 | 每 trial 从金镜像写时复制克隆、用完删除；`--env` 传 `module:Class`；`options_model` 校验镜像/内存参数（[custom sandbox 文档](https://docs.harborframework.com/sandboxes/custom-sandboxes.md)） |
@@ -128,7 +128,7 @@
 
 ### 3.3 Harbor 集成与加固清单
 
-**题包必须显式声明（安全默认不能假设）**——以下四个默认值陷阱已逐条核实（[2026-10-28 公告](https://docs.harborframework.com/news/reward-hacking.md)、[research/01](../research/01-harbor-verification.md) §5–§7、[research/04](../research/04-isolation-and-cheating.md) §1）：
+**题包必须显式声明（安全默认不能假设）**——以下四个默认值陷阱已逐条核实（[2026-10-28 公告](https://docs.harborframework.com/news/reward-hacking.md)、research/01 §5–§7、research/04 §1）：
 
 1. **容器默认共享宿主内核**、网络基线默认 `public`——L1 加固项（只读根/非 root/私有 tmpfs/断网）必须显式声明并预检。
 2. **独立验证沙箱只对 `harbor init` 新建任务默认开启**，老任务默认 `shared`——必须显式 `environment_mode="separate"` 并断言。
@@ -275,7 +275,7 @@ PY
 | I10 | `isolation/verify_lease.json` | 控制面在验证前后记录 agent/verifier 两个租约与镜像 | `agent_lease != verifier_lease` 且 verifier 镜像 digest ≠ agent 镜像 digest（或验证侧仅多 `/tests`） |
 | I11 | `isolation/artifact_manifest.json` | Harbor `<trial-dir>/artifacts/manifest.json` + 本地扫描 | 无 symlink/FIFO/socket/device/setuid；`sum(bytes) ≤ caps`；每项 `sha256` 可复算 |
 | I12 | `isolation/verify_pre.json` | 验证沙箱启动后、跑测试前执行 | `/logs/verifier/reward.txt` 与 `reward.json` 均不存在；`tests.sha256` 与清单逐项一致 |
-| I13 | `isolation/canary/scan.json` | 批次结束后 `evalkit.canary.scan_trials`（[reference/evalkit/canary.py](../reference/evalkit/canary.py)） | `critical == []`；`trials_to_invalidate == []` |
+| I13 | `isolation/canary/scan.json` | 批次结束后 `evalkit.canary.scan_trials`（[reference/evalkit/canary.py](../packages/evalspleef-core/src/evalspleef/core/canary.py)） | `critical == []`；`trials_to_invalidate == []` |
 | I14 | `isolation/device/handover.json` | 设备归还流程（§11） | `status=pass`；`package_diff.added/removed` 为空；`baseline_hash` 等于登记基线 |
 | I15 | `isolation/judge/session.json` | 裁判/模拟用户调用前记录 | 每 trial 会话唯一；快照 sha256 与本次一致；快照中无其他 trial_id |
 | I16 | `isolation/net/dns.jsonl`、`net/url.jsonl` | 出口代理日志导出 | 行数 ≥ 请求计数；`bypass_attempts=0`；策略哈希与批次一致 |
@@ -387,13 +387,13 @@ PY
 
 ## 8. 金丝雀协议
 
-**先分清两种「canary」**（[research/04](../research/04-isolation-and-cheating.md) §4.1）：①**训练语料 canary GUID** 用于检测题目是否被爬进训练数据（出题侧埋、长期扫描）；②**跨 trial 泄露令牌** 用于证明 trial 之间没有共享通道（本节的 CNRY 令牌）。本节只规定第 ② 种；第 ① 种的生成与扫描归题库防污染流程（见题库文档 `docs/05-task-library.md`），两者不得混用同一令牌值。通用 honeytoken 概念参考 <https://canarytokens.org/>。
+**先分清两种「canary」**（research/04 §4.1）：①**训练语料 canary GUID** 用于检测题目是否被爬进训练数据（出题侧埋、长期扫描）；②**跨 trial 泄露令牌** 用于证明 trial 之间没有共享通道（本节的 CNRY 令牌）。本节只规定第 ② 种；第 ① 种的生成与扫描归题库防污染流程（见题库文档 `docs/05-task-library.md`），两者不得混用同一令牌值。通用 honeytoken 概念参考 <https://canarytokens.org/>。
 
 ### 8.1 令牌生成
 
 | 项 | 规定 |
 | --- | --- |
-| 格式 | `CNRY-{trial_id 短哈希 8 位}-{随机 8 位}`（[00-conventions](00-conventions.md) §2），实现见 [reference/evalkit/canary.py](../reference/evalkit/canary.py) `generate_token()` |
+| 格式 | `CNRY-{trial_id 短哈希 8 位}-{随机 8 位}`（[00-conventions](00-conventions.md) §2），实现见 [reference/evalkit/canary.py](../packages/evalspleef-core/src/evalspleef/core/canary.py) `generate_token()` |
 | 短哈希 | `sha256(trial_id)[:8]` 小写十六进制，把令牌与 trial 绑定，可反查 |
 | 随机部分 | `secrets.token_hex(4)`；禁止用时间/序号等可预测值 |
 | 登记 | 令牌、埋点位置、trial_id 写入控制面金丝雀登记表；登记表不进沙箱 |
@@ -413,7 +413,7 @@ PY
 
 **禁止埋点**：`hidden-tests/`、`answers/`、`tests/`（受哈希锁保护）、Agent 可见镜像层、反馈文本、任何会被当作答案一部分提交的文件。
 
-**期望轨迹**：正常 trial 中令牌会出现在 Agent 读取被埋点文件的工具输出、工作区快照、diff 上下文里——这些属于正常；**只在别的 trial 出现才是异常**（示例见 [debug-001/canary.md](../appendix/examples/debug-001/canary.md)）。
+**期望轨迹**：正常 trial 中令牌会出现在 Agent 读取被埋点文件的工具输出、工作区快照、diff 上下文里——这些属于正常；**只在别的 trial 出现才是异常**（示例见 [debug-001/canary.md](../tasks/debug-001/canary.md)）。
 
 ### 8.3 跨 trial 扫描算法（伪代码）
 
@@ -465,7 +465,7 @@ def scan_trials(trials, registry, policy):
     return dict(violations=violations, trials_to_invalidate=sorted(invalid))
 ```
 
-实现对应 [reference/evalkit/canary.py](../reference/evalkit/canary.py) 的 `scan_trials()` / `CanaryReport.trials_to_invalidate`；违规 kind 与严重度：`cross_trial`/`egress` = critical，`unknown_token`/`missing_placement` = warning。
+实现对应 [reference/evalkit/canary.py](../packages/evalspleef-core/src/evalspleef/core/canary.py) 的 `scan_trials()` / `CanaryReport.trials_to_invalidate`；违规 kind 与严重度：`cross_trial`/`egress` = critical，`unknown_token`/`missing_placement` = warning。
 
 ### 8.4 阈值、证据与作废流程
 
@@ -515,7 +515,7 @@ def scan_trials(trials, registry, policy):
 8. 归档证据与输入快照 → 销毁验证实例
 ```
 
-**为什么必须独立**：共享沙箱模式下 Agent 能碰测试与 reward 文件；`harbor lint` 的 `shared-verifier` 规则会直接报错。**新建任务默认 separate，老任务默认 shared**，因此题包模板必须显式写 `[verifier] environment_mode="separate"` 并在预检中断言（[separate verifier](https://docs.harborframework.com/tasks/separate-verifier.md)、[research/01](../research/01-harbor-verification.md) §7）。
+**为什么必须独立**：共享沙箱模式下 Agent 能碰测试与 reward 文件；`harbor lint` 的 `shared-verifier` 规则会直接报错。**新建任务默认 separate，老任务默认 shared**，因此题包模板必须显式写 `[verifier] environment_mode="separate"` 并在预检中断言（[separate verifier](https://docs.harborframework.com/tasks/separate-verifier.md)、research/01 §7）。
 
 **可重判的前提**：`harbor job regrade` / `harbor trial regrade` 要求源 trial 有可读的 `result.json` 与 `artifacts/manifest.json`，并且更新后的 verifier 需要的每个产物在源 trial 中都已收集且仍存在（[regrade 文档](https://docs.harborframework.com/jobs/regrade.md)）。**没有产物就没有重判**——题包不声明 artifacts 视为不合格。
 
@@ -555,7 +555,7 @@ Agent 外壳（控制面，沙箱外）── SSH/ACP 单向进入 ──▶ 沙
 | 密钥事故门槛 | 任何长期凭证进入沙箱 = 事故；trial 立即 invalid + 轮换凭证 + incident | `api_key_in_sandbox=true` 触发 schema 条件 → invalid |
 | 脑手分离 | 外壳与 LLM 调用在沙箱外，工具执行经 SSH/ACP；沙箱可完全断网 | `ssh_control_plane_only=true` |
 
-**关于 ASP**：Agent Sandbox Protocol 目前是 **RFC 草案**（PR #3023，`asp.schema.json` v0，SSH 是首个 transport，已验证 provider 只有 Docker / Apple Container / Daytona），**P1 不依赖 ASP**；脑手分离先走 provider 原生的 exec/upload 接口，ASP 只作为后续可选路径（[ASP 文档](https://docs.harborframework.com/sandboxes/asp.md)、[research/01](../research/01-harbor-verification.md)）。
+**关于 ASP**：Agent Sandbox Protocol 目前是 **RFC 草案**（PR #3023，`asp.schema.json` v0，SSH 是首个 transport，已验证 provider 只有 Docker / Apple Container / Daytona），**P1 不依赖 ASP**；脑手分离先走 provider 原生的 exec/upload 接口，ASP 只作为后续可选路径（[ASP 文档](https://docs.harborframework.com/sandboxes/asp.md)、research/01）。
 
 ## 11. 设备池与性能机
 
@@ -663,7 +663,7 @@ harbor lint --extend-select unpinned-image --extend-select root-agent ./tasks/we
 | 跑后 | 密钥与日志脱敏抽检 | 扫描沙箱归档 + 网关日志 | 命中 0 |
 | 跑后 | 预热池审计 | 池内实例列表 × trial 历史 | 无跑过 trial 的实例 |
 
-### 13.2 体检报告字段（模板见 [isolation-audit-report-template.md](../appendix/checklists/isolation-audit-report-template.md)）
+### 13.2 体检报告字段（模板见 [isolation-audit-report-template.md](appendix/checklists/isolation-audit-report-template.md)）
 
 `batch_id`、`report_version`、`period`、`auditor`、`scope{trials,models,tasks,platforms}`、`preflight{items[],result}`、`postrun{invariants[]}`、`canary{scanned,hit_critical,hit_warning}`、`artifacts{checked,violations}`、`devices{checked,handover_fail}`、`cheat{analyzed,confirmed,suspect}`、`secrets{scanned_hits}`、`incidents[]`、`verdict(PASS/CONDITIONAL/FAIL)`、`actions[]`、`evidence_uri`。
 
@@ -736,7 +736,7 @@ harbor lint --extend-select unpinned-image --extend-select root-agent ./tasks/we
 
 - **Schema 结构自检**：6 个 schema 的 31 个 `$ref` 全部可解析（文件 + JSON Pointer），`$id` 均为 `https://llm-eval.local/schemas/<name>.schema.json`，顶层 `additionalProperties:false`；`result.grades[]` 整文件引用 [grade.schema.json](../schemas/grade.schema.json)，`rounds[].feedback` 整文件引用 [feedback.schema.json](../schemas/feedback.schema.json)，`defects[]` 引用 [defect.schema.json](../schemas/defect.schema.json)。检查脚本退出码 0，错误数 0。
 - **样例记录校验**：用最小 JSON Schema 子集校验器（支持 $ref/oneOf/allOf/if-then/contains/pattern 等）跑正例（完整 trial 记录）0 错误；8 个反例（invalid 带 grade、缺 I1 pass、金丝雀 critical 仍 valid、密钥入沙箱仍 valid、scored 无 grade、多余字段、错误 trial_id、缺 budget 字段）全部被拦截（8/8）；另验证 invalid（无 grade）、paused_manual（validity=manual）、running（validity=pending）三种状态正例均合法，而 invalid+valid 组合被拦截。
-- **金丝雀协议自测**：用 [reference/evalkit/canary.py](../reference/evalkit/canary.py) 构造 A/B 两个 trial——clean 数据 `passed=True`、critical=0；把 A 的令牌写进 B 的产物后 `passed=False`、critical=1（kind=`cross_trial`）、`trials_to_invalidate` 同时含 A 与 B，与本协议一致。
+- **金丝雀协议自测**：用 [reference/evalkit/canary.py](../packages/evalspleef-core/src/evalspleef/core/canary.py) 构造 A/B 两个 trial——clean 数据 `passed=True`、critical=0；把 A 的令牌写进 B 的产物后 `passed=False`、critical=1（kind=`cross_trial`）、`trials_to_invalidate` 同时含 A 与 B，与本协议一致。
 - **文档内代码块**：docs/04 与 5 份检查清单共 8 个 bash 块、7 个 Python 断言块通过语法检查（`bash -n` / `compile()`），0 错误；trial 卫生断言在样例记录上实跑通过。
 
 ## 17. 与其他文档的接口
@@ -749,14 +749,14 @@ harbor lint --extend-select unpinned-image --extend-select root-agent ./tasks/we
 | [03-grading](03-grading.md) | 作弊与泄露事故对档位/有效性的影响（`G-CHEAT-01`/`G-INVALID-00`）、裁判隔离要求 |
 | 题库/答案规范（`docs/05-task-library.md`、`docs/06-answer-and-acceptance.md`，待落盘） | 题目包 canary/artifacts/network/hard_gates 声明、隐藏测试与哈希锁 |
 | [07-harness-mapping](07-harness-mapping.md) | Harbor provider 映射、自研 provider 接口、能力矩阵 |
-| 实现说明（`docs/08-implementation-notes.md`，待落盘） / [reference/evalkit](../reference/evalkit) | 金丝雀扫描、状态机、产物校验的可运行实现 |
-| [research/04](../research/04-isolation-and-cheating.md) | 隔离原语与量级核实、公开基准隔离做法、作弊事件 → 控制项映射、两种 canary 区分、轨迹审计与体检清单 |
+| 实现说明（`docs/08-implementation-notes.md`，待落盘） / [reference/evalkit](../packages/evalspleef-core/src/evalspleef/core) | 金丝雀扫描、状态机、产物校验的可运行实现 |
+| research/04 | 隔离原语与量级核实、公开基准隔离做法、作弊事件 → 控制项映射、两种 canary 区分、轨迹审计与体检清单 |
 | [trial.schema.json](../schemas/trial.schema.json) | 隔离证据字段的机器可读契约 |
-| [isolation-preflight](../appendix/checklists/isolation-preflight.md) | 开工前/批次冻结前检查清单（含 I1–I9 快速版） |
-| [trial-hygiene](../appendix/checklists/trial-hygiene.md) | 每 trial 全阶段卫生清单 |
-| [device-pool-handover](../appendix/checklists/device-pool-handover.md) | 设备/宿主归还清单 |
-| [incident-response](../appendix/checklists/incident-response.md) | 隔离类事故响应清单 |
-| [isolation-audit-report-template](../appendix/checklists/isolation-audit-report-template.md) | 每期隔离体检报告模板 |
+| [isolation-preflight](appendix/checklists/isolation-preflight.md) | 开工前/批次冻结前检查清单（含 I1–I9 快速版） |
+| [trial-hygiene](appendix/checklists/trial-hygiene.md) | 每 trial 全阶段卫生清单 |
+| [device-pool-handover](appendix/checklists/device-pool-handover.md) | 设备/宿主归还清单 |
+| [incident-response](appendix/checklists/incident-response.md) | 隔离类事故响应清单 |
+| [isolation-audit-report-template](appendix/checklists/isolation-audit-report-template.md) | 每期隔离体检报告模板 |
 
 ## 18. 参考资料
 
@@ -798,6 +798,6 @@ harbor lint --extend-select unpinned-image --extend-select root-agent ./tasks/we
 
 **内部调研**
 
-- [research/01 · Harbor 能力核实](../research/01-harbor-verification.md)（非 root 为 opt-in、separate verifier 仅新建默认、lint 规则默认值、regrade 命令名等修正）
-- [research/04 · 隔离与防作弊调研](../research/04-isolation-and-cheating.md)（隔离原语量级、公开基准隔离做法、作弊事件映射、两种 canary、时间侧信道、体检清单）
-- [research/99 · plan-v1 逐条事实核查](../research/99-factcheck-plan-v1.md)（含「Harbor 不支持 Firecracker」等需修正项）
+- research/01 · Harbor 能力核实（非 root 为 opt-in、separate verifier 仅新建默认、lint 规则默认值、regrade 命令名等修正）
+- research/04 · 隔离与防作弊调研（隔离原语量级、公开基准隔离做法、作弊事件映射、两种 canary、时间侧信道、体检清单）
+- research/99 · plan-v1 逐条事实核查（含「Harbor 不支持 Firecracker」等需修正项）

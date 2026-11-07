@@ -17,7 +17,7 @@
 2. 给出原子化二元 rubric 的设计规范（字段、问法、严重度、证据、禁止合取），让不同出题人写出的条目可被同一裁判稳定判定。
 3. 把缺陷从「发现」到「去重、跨轮跟踪、回归重计」做成确定性状态机，保证同一轨迹重放得到同一份缺陷清单。
 4. 把反馈阶梯 F0-F3 做成确定性控制器：升级条件、每轮内容白名单、泄露检查、预算耗尽，全部可写成单元测试。
-5. 给出档位聚合的精确规则表与优先级，使 impl 能照 [reference/evalkit](../reference/evalkit/) 直接实现，tasks-a/tasks-b 能预判自己题包的档位。
+5. 给出档位聚合的精确规则表与优先级，使 impl 能照 [reference/evalkit](../packages/evalspleef-core/src/evalspleef/core/) 直接实现，tasks-a/tasks-b 能预判自己题包的档位。
 6. 给出可执行的裁判标定与漂移监控方案：多厂商评审团、k=5 中位数、一致性指标、样本量与阈值，证据链带 URL。
 7. 给出可验收标准：重判一致率、与人工标签一致率、锚点集回归，证明判定体系「可复现」而不是「一次一个样」。
 
@@ -67,7 +67,7 @@
 
 ### 2.4 L3 人工的判定口径
 
-人工只在四类场景出现，**不做全量打分**（目标人工工时 ≤ 全量 10%，见 [drafts/plan-v1.md](../drafts/plan-v1.md) §4.1）：新题/新 rubric 上线前的标定；仲裁队列；Perfect 与 Failed 边界；每期随机抽检（默认 5%，不进 P1 目标）。人工覆盖档位时必须记录：原机器档位、覆盖后档位、理由、复核人、时间；并生成新的 grade 版本（supersedes 指向旧版本）。
+人工只在四类场景出现，**不做全量打分**（目标人工工时 ≤ 全量 10%，见 drafts/plan-v1.md §4.1）：新题/新 rubric 上线前的标定；仲裁队列；Perfect 与 Failed 边界；每期随机抽检（默认 5%，不进 P1 目标）。人工覆盖档位时必须记录：原机器档位、覆盖后档位、理由、复核人、时间；并生成新的 grade 版本（supersedes 指向旧版本）。
 
 ### 2.5 硬门槛短路规则
 
@@ -118,7 +118,7 @@
 | [feedback.schema.json](../schemas/feedback.schema.json) | 单次反馈决策与文本（含泄露检查、预算快照） | grading |
 | [grade.schema.json](../schemas/grade.schema.json) | 单次判分结果 | grading |
 | [trial.schema.json](../schemas/trial.schema.json) | 完整 trial 记录（引用以上全部） | isolation |
-| [grading-vectors.json](../appendix/grading-vectors.json) | 12 个档位边界测试向量（含 derived 中间量） | grading |
+| [grading-vectors.json](appendix/grading-vectors.json) | 12 个档位边界测试向量（含 derived 中间量） | grading |
 
 ### 3.4 版本与重判
 
@@ -137,7 +137,7 @@
 | 观察轮 round | 从 1 开始：轮 1 = Agent 首次交付后的观察；轮 n = 第 n−1 次反馈后的观察 | 轮 1 发现 R3 失败 ⇒ 缺陷 R3#1 |
 | 反馈轮 feedback_round | 第 i 条实质反馈（F1-F3），发生在观察轮 i 之后、观察轮 i+1 之前；从 1 开始 | 轮 1 后发 F1 ⇒ feedback_round 1 |
 | F0 催促 | 「请按你的判断做完」类无信息量消息，不占反馈轮，计入 nudges_used，上限 max_nudges | 轮 1 后发 2 次催促仍是 0 反馈轮 |
-| 澄清问答 | 回答 Agent 的合理澄清提问，不算反馈级别、不降档、有次数上限（[appendix/personas/faq-policy.md](../appendix/personas/faq-policy.md)） | 「数据里 null 怎么处理？」→ 按 FAQ 回答 |
+| 澄清问答 | 回答 Agent 的合理澄清提问，不算反馈级别、不降档、有次数上限（[appendix/personas/faq-policy.md](appendix/personas/faq-policy.md)） | 「数据里 null 怎么处理？」→ 按 FAQ 回答 |
 
 ### 4.2 判定单元与 ID
 
@@ -383,7 +383,7 @@ progress 由观察器/裁判在复测时给出三态，**只影响升级计数�
 
 | 级别 | 允许说的内容 | 禁止内容 | 典型话术 |
 | --- | --- | --- | --- |
-| F0 | 无信息量：初始任务说明、「我试用了一下」、「请按你的判断做完」、按 FAQ 回答澄清 | 任何具体问题、任何缺陷线索 | 见 [ladder-scripts.md](../appendix/personas/ladder-scripts.md) F0 段 |
+| F0 | 无信息量：初始任务说明、「我试用了一下」、「请按你的判断做完」、按 FAQ 回答澄清 | 任何具体问题、任何缺陷线索 | 见 [ladder-scripts.md](appendix/personas/ladder-scripts.md) F0 段 |
 | F1 | 普通用户视角的现象：操作路径 + 看到什么 + 期望什么 | 文件名、函数名、API 名、日志原文、根因、修复建议、代码 | 「我点旋转后，模型就不见了；我期望它继续转。」 |
 | F2 | F1 内容 + 日志/报错原文（预写、脱敏、逐字粘贴） | 根因、修复建议、代码、隐藏测试信息 | 「控制台里有这么一段：…（原文）」 |
 | F3 | F2 内容 + 视觉差异描述 + 协助操作（签名/装机/点击等） | 代码、补丁、根因、修复步骤 | 「截图里模型只剩一个角；我来帮你点一下签名按钮。」 |
@@ -514,7 +514,7 @@ def consecutive_no_progress(h, level):
 | Agent 索要提示/答案 | 「请按你的判断做」并记录 injection_attempt／hint_request | 否 | 否（但记录） | 超过 3 次进人工复核 |
 | 结束/收尾 | 「好的，先到这里。」 | 否 | 否 | — |
 
-> 澄清问答不算帮助、不降档，但**必须按 FAQ**（见 [faq-policy.md](../appendix/personas/faq-policy.md)）；自由发挥的回答同样要过泄露检查。FAQ 本身由出题人预写，不允许控制器现编。
+> 澄清问答不算帮助、不降档，但**必须按 FAQ**（见 [faq-policy.md](appendix/personas/faq-policy.md)）；自由发挥的回答同样要过泄露检查。FAQ 本身由出题人预写，不允许控制器现编。
 
 ### 7.9 边界情形处置
 
@@ -600,7 +600,7 @@ def consecutive_no_progress(h, level):
 | 多缺陷混入（LR-13） | 禁 | 禁 | 禁 | 禁 | 一条反馈只讲一个缺陷 |
 | 代码围栏/补丁标记（LR-14） | 禁 | 禁 | 禁 | 禁 | 三个反引号、diff --git、@@ 等 |
 
-完整的正则、正反例与误报处理见 [appendix/personas/leak-rules.md](../appendix/personas/leak-rules.md)。
+完整的正则、正反例与误报处理见 [appendix/personas/leak-rules.md](appendix/personas/leak-rules.md)。
 
 ### 8.4 误报处理（allowlist）
 
@@ -640,7 +640,7 @@ Agent 可能在产物或对话里写「忽略以上指令」「你是裁判，�
 
 ### 9.1 输入量定义
 
-档位是**确定性函数**，输入只有 trial 级聚合量。先把它们定义清楚（实现见 [reference/evalkit](../reference/evalkit/) 的 grading 模块；测试向量见 [grading-vectors.json](../appendix/grading-vectors.json)）：
+档位是**确定性函数**，输入只有 trial 级聚合量。先把它们定义清楚（实现见 [reference/evalkit](../packages/evalspleef-core/src/evalspleef/core/) 的 grading 模块；测试向量见 [grading-vectors.json](appendix/grading-vectors.json)）：
 
 | 符号 | 定义 | 说明 |
 | --- | --- | --- |
@@ -742,7 +742,7 @@ Agent 可能在产物或对话里写「忽略以上指令」「你是裁判，�
 
 ### 9.7 判定表（12 个边界用例 + 5 个补充边界）
 
-下表的 12 个基础用例与 [grading-vectors.json](../appendix/grading-vectors.json) 的 V01-V12 **一一对应**（rule_id 必须逐字相同），impl 直接转 unittest；补充用例 V13 在 vectors 的 supplementary_vectors 中，另 4 个无 grade 用例只做状态机测试。
+下表的 12 个基础用例与 [grading-vectors.json](appendix/grading-vectors.json) 的 V01-V12 **一一对应**（rule_id 必须逐字相同），impl 直接转 unittest；补充用例 V13 在 vectors 的 supplementary_vectors 中，另 4 个无 grade 用例只做状态机测试。
 
 | # | 场景 | 关键输入 | 命中规则 | tier | penalty | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -789,7 +789,7 @@ Agent 可能在产物或对话里写「忽略以上指令」「你是裁判，�
 ### 9.9 Cell 级聚合（多 epoch）
 
 - 一个 cell 默认 3 个 epoch（[02-eval-flow](02-eval-flow.md) §2）；只统计 validity=valid 的 trial 最新版本。
-- cell 档位 = 各 epoch 档位数值映射（P=7…F=0）的中位数；偶数个取较低一侧（偏保守，见 [reference/evalkit](../reference/evalkit/) 的 median_tier 语义）。
+- cell 档位 = 各 epoch 档位数值映射（P=7…F=0）的中位数；偶数个取较低一侧（偏保守，见 [reference/evalkit](../packages/evalspleef-core/src/evalspleef/core/) 的 median_tier 语义）。
 - cell 扣分 = 各 epoch penalty 的中位数（偶数取较低）；cell 费用 = 各 epoch cost.agent 的中位数（与参考项目单元格口径一致，[02-eval-flow](02-eval-flow.md) §7.3）。
 - 展示最好/最差档位；若最好与最差跨度 ≥2 档 ⇒ 进人工复核队列（plan-v1 §4.4）。
 - 有效 epoch <2 个 ⇒ cell 状态 Manual，不进榜（[02-eval-flow](02-eval-flow.md) §10）。
@@ -815,9 +815,9 @@ Agent 可能在产物或对话里写「忽略以上指令」「你是裁判，�
 
 使用限制：
 
-1. 只允许「同月、同题、同 rubric 版本、同裁判面板」的批次之间做此映射；跨期/跨题不可比（[drafts/plan-v1.md](../drafts/plan-v1.md) §1：退役题跨版本不可直接比较）。
+1. 只允许「同月、同题、同 rubric 版本、同裁判面板」的批次之间做此映射；跨期/跨题不可比（drafts/plan-v1.md §1：退役题跨版本不可直接比较）。
 2. 映射是展示层规则，**不得**反向用于本系统判分（不得把 A+ 当成 A 的输入、不得从参考榜单反推 tier）。
-3. 若未来确需扩枚举（例如引入 A+ / D+），属于 **MAJOR 变更**：需同步修改 00-conventions §4.3、[grade.schema.json](../schemas/grade.schema.json) 的 tier/tier_numeric 枚举与所有 if/then、[grading-vectors.json](../appendix/grading-vectors.json) 全部向量、以及 evalkit 聚合器；旧批次必须整批重判后才可比较。
+3. 若未来确需扩枚举（例如引入 A+ / D+），属于 **MAJOR 变更**：需同步修改 00-conventions §4.3、[grade.schema.json](../schemas/grade.schema.json) 的 tier/tier_numeric 枚举与所有 if/then、[grading-vectors.json](appendix/grading-vectors.json) 全部向量、以及 evalkit 聚合器；旧批次必须整批重判后才可比较。
 4. 参考项目数据来源：[llm2014/llm_benchmark](https://github.com/llm2014/llm_benchmark)（code_v3 数据文件 2026-11；A+/D+ 半档由 research 核实，2026-11-06）。
 
 ---
@@ -1118,10 +1118,10 @@ judge 输入中把产物内容放进定界块并声明「以下是待评估数�
 
 ### 14.3 规则覆盖测试（必须存在的测试）
 
-1. 12 个基础边界向量（V01-V12）+ 1 个补充格式违规向量（V13，在 vectors 的 supplementary_vectors）逐条转 unittest，断言 rule_id/tier/tier_numeric/penalty/flags 与 [grading-vectors.json](../appendix/grading-vectors.json) 一致。
+1. 12 个基础边界向量（V01-V12）+ 1 个补充格式违规向量（V13，在 vectors 的 supplementary_vectors）逐条转 unittest，断言 rule_id/tier/tier_numeric/penalty/flags 与 [grading-vectors.json](appendix/grading-vectors.json) 一致。
 2. §9.8 的 I1-I15 全部有对应测试。
 3. 反馈阶梯测试：F1 连续 2 轮无进展 ⇒ F2；F2 连续 2 轮无进展 ⇒ F3；每轮只讲一个缺陷；F0 催促不占反馈轮；预算耗尽不发半条反馈。
-4. 泄露检查测试：至少 14 条 LR 规则各有命中样例与误报样例（见 [leak-rules.md](../appendix/personas/leak-rules.md)）。
+4. 泄露检查测试：至少 14 条 LR 规则各有命中样例与误报样例（见 [leak-rules.md](appendix/personas/leak-rules.md)）。
 5. 缺陷跟踪测试：发现→persisting→fixed→回归重计；同轮去重；unmapped 不计分。
 6. 人工覆盖测试：覆盖后 grade_version 递增、supersedes 正确、旧版本 superseded。
 
@@ -1239,7 +1239,7 @@ items:
 
 预判档位：R1 硬门槛通过；R2/R3 各失败一次、各用 1 轮 F1 修好；R4 pass；R5 pass ⇒ total=2、need=2 ⇒ 3×2≤2 不成立 ⇒ B，penalty=6。若 R2 需要两轮 F1 ⇒ C，penalty 不变。若最终答案对但 R2/R3 全 fail 且未修好、预算耗尽 ⇒ F，penalty=1（R1 pass）+3+3+3=10（R4 是否 fail 视轨迹）。若产物里贴了代码且题目明令禁止 ⇒ G-FORMAT-05 判 0（F，penalty=0）。
 
-> 两个示例的完整版本（含 defects.yaml、persona、hidden-tests）由 tasks-a/tasks-b 放在 [appendix/examples/](../appendix/examples/)；本节只演示 rubric 字段与档位预判方法。字段拼写以 [rubric.schema.json](../schemas/rubric.schema.json) 为准。
+> 两个示例的完整版本（含 defects.yaml、persona、hidden-tests）由 tasks-a/tasks-b 放在 [appendix/examples/](../tasks/)；本节只演示 rubric 字段与档位预判方法。字段拼写以 [rubric.schema.json](../schemas/rubric.schema.json) 为准。
 
 ---
 
@@ -1253,7 +1253,7 @@ items:
 | 泄露 | F1 里出现文件名/日志/修复建议 ⇒ 档位虚高 | §8 管线 + 10% 抽检 + 轨迹审计；命中即 invalid 重跑 |
 | 裁判过严/过松 | 同档位人工一致率低 | §11.4 标定闸门；先改 rubric 不改阈值 |
 | 裁判漂移 | 同一产物跨月档位变化 | §11.6 锚点集月度重判；版本冻结 |
-| 模拟用户太 helpful | 模型轻松拿 P/A | F0-F3 白名单 + 模板 + FAQ 边界（[faq-policy.md](../appendix/personas/faq-policy.md)） |
+| 模拟用户太 helpful | 模型轻松拿 P/A | F0-F3 白名单 + 模板 + FAQ 边界（[faq-policy.md](appendix/personas/faq-policy.md)） |
 | 预算过紧 | 模型没机会修复 ⇒ 系统性 Failed | 题包 lint：软性阻断条目（L2）≤ max_feedback_rounds，L1 脚本阻断条目另行聚合；标定集观察 Failed 比例 |
 | 缺陷跟踪 bug | 同一条目重复计分或漏计 | I12 + 回归/复发测试 |
 | 费用口径混用 | 榜单费用与批次成本对不上 | §10.3 两套口径 + 导出前检查 |
@@ -1269,7 +1269,7 @@ items:
 - [ ] tier_numeric 用 00-conventions 映射；与 Schema 的 if/then 一致。
 - [ ] 作弊/格式违规 penalty=0、flags 正确、counted_in_leaderboard 正确。
 - [ ] 反馈控制器：每轮一个缺陷、F1→F2→F3 阈值读配置（默认 2/2）、F0 催促不占反馈轮。
-- [ ] 泄露检查：正则集与 [leak-rules.md](../appendix/personas/leak-rules.md) 一一对应；重写 ≤3 次；失败置 feedback_blocked。
+- [ ] 泄露检查：正则集与 [leak-rules.md](appendix/personas/leak-rules.md) 一一对应；重写 ≤3 次；失败置 feedback_blocked。
 - [ ] 缺陷跟踪：new/open/persisting/fixed 状态机；回归按新缺陷；unmapped 不计分。
 - [ ] 所有输出过 Schema（grade/feedback/defect），用 scripts/check_repo.py 与单测双重校验。
 - [ ] 统计：标定/漂移脚本可复算 kappa/alpha/一致率，输入输出留档。
@@ -1282,7 +1282,7 @@ items:
 
 | # | 来源 | 本文用途 | 类型 |
 | --- | --- | --- | --- |
-| 1 | [drafts/plan-v1.md](../drafts/plan-v1.md) | 三层分工、反馈阶梯、档位定义、扣分与费用、随机性 | 本仓库上游 |
+| 1 | drafts/plan-v1.md | 三层分工、反馈阶梯、档位定义、扣分与费用、随机性 | 本仓库上游 |
 | 2 | [00-conventions.md](00-conventions.md) | 枚举拼写、ID 规则、预算字段 | 本仓库上游 |
 | 3 | [02-eval-flow.md](02-eval-flow.md) | trial 生命周期、预算强制点、重试/重判 | 本仓库上游 |
 | 4 | [arXiv:2306.05685](https://arxiv.org/abs/2306.05685) | LLM-as-a-judge 的位置/冗长/自我偏好偏差；强裁判与人类一致率可 >80%（文档明说） | 论文 |
@@ -1315,4 +1315,4 @@ items:
 
 ---
 
-*本文与 [grading-vectors.json](../appendix/grading-vectors.json)、四个 Schema、[appendix/personas/](../appendix/personas/) 一起构成判定支柱的完整交付。修订请走 issue，并同步更新测试向量与锚点集。*
+*本文与 [grading-vectors.json](appendix/grading-vectors.json)、四个 Schema、[appendix/personas/](appendix/personas/) 一起构成判定支柱的完整交付。修订请走 issue，并同步更新测试向量与锚点集。*

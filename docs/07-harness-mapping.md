@@ -1,8 +1,8 @@
 # 07 · Harbor / Inspect 落地映射与适配层
 
 > 状态：v1 · 维护：research · 最后更新：2026-11-06
-> 上游：[00-conventions](00-conventions.md) · 相关：[01-architecture](01-architecture.md)、[02-eval-flow](02-eval-flow.md)、[03-grading](03-grading.md)、[04-isolation](04-isolation.md)、`docs/05`（tasks-a 维护）、[调研 01 Harbor 核实](../research/01-harbor-verification.md)、[99 事实核查](../research/99-factcheck-plan-v1.md)
-> 版本基准：Harbor **v0.25.0**（2026-10-25 发布，PyPI 同日）、harbor-rewardkit **0.2.4**、Inspect AI **0.3.287**（2026-10-31）。本文件所有 Harbor 行为均核对到 2026-11-06 的文档/源码，证据见[调研 01](../research/01-harbor-verification.md)。
+> 上游：[00-conventions](00-conventions.md) · 相关：[01-architecture](01-architecture.md)、[02-eval-flow](02-eval-flow.md)、[03-grading](03-grading.md)、[04-isolation](04-isolation.md)、`docs/05`（tasks-a 维护）、调研 01 Harbor 核实、99 事实核查
+> 版本基准：Harbor **v0.25.0**（2026-10-25 发布，PyPI 同日）、harbor-rewardkit **0.2.4**、Inspect AI **0.3.287**（2026-10-31）。本文件所有 Harbor 行为均核对到 2026-11-06 的文档/源码，证据见调研 01。
 
 ## 1. 目标与非目标
 
@@ -403,7 +403,7 @@ Harbor 8 个 cause（源码 `src/harbor/models/trial/error_policy.py`，文档 <
 | 重判 | `harbor job regrade` | trial 有 `result.json` + `artifacts/manifest.json` |
 | 作弊审查 | `harbor analyze`（自定义 rubric） | 需要 LLM key；结论回写 `error.class=cheat` |
 | 静态 lint | `harbor lint --extend-select ...` | 规则集见 §7.3 |
-| 轨迹查看/分享 | `harbor view` / `harbor upload` | 公开与否是政策问题（[plan §9.3](../drafts/plan-v1.md)） |
+| 轨迹查看/分享 | `harbor view` / `harbor upload` | 公开与否是政策问题（plan §9.3） |
 | 逻辑题面与评分 | Inspect `Task/Dataset/Scorer` | 见 §8 |
 
 ### 7.2 必须自研（工作量大头）
@@ -493,7 +493,7 @@ inspect view --log-dir logs/inspect/2026-11-b1
 | Rewardkit | `harbor-rewardkit==0.2.4` | PyPI |
 | Inspect AI | `inspect-ai==0.3.287` | PyPI 2026-10-31 |
 | Agent 外壳 | 每个 `AgentShell` 固定版本（Claude Code / Codex CLI / OpenCode / Kimi Code） | 外壳自身发布页；版本号记进 `trial.versions` |
-| 模型 | 网关侧固定 provider+模型 slug；禁止中转路由漂移（网关记录实际厂商） | [plan §8](../drafts/plan-v1.md) 服务商行 |
+| 模型 | 网关侧固定 provider+模型 slug；禁止中转路由漂移（网关记录实际厂商） | plan §8 服务商行 |
 | 题目镜像 | `image@sha256:...`（双镜像：agent + verifier） | `task.yaml.resources.image_digest` |
 | 逻辑题 scorer 模板 | 与 `rubric_version` 一起版本化 | `grade.rubric_version` |
 
@@ -588,7 +588,7 @@ python3 -m evalkit leaderboard --batch 2026-11-b1 --format markdown
 ## 12. 对方案的影响
 
 1. **plan-v1 §3 的"trial 闭环"要拆成"Harbor 直线 + 控制器循环"两层**：Harbor 负责单次 agent→verify，反馈循环在 Harbor 之上；这样 regrade/analyze/lint 都能直接复用。
-2. **题包模板必须新增 3 个强制字段**（`[agent].user`、`[verifier] environment_mode`、`[agent] network_mode`），否则"默认安全"的假设不成立（见[调研 01](../research/01-harbor-verification.md) §7）。
+2. **题包模板必须新增 3 个强制字段**（`[agent].user`、`[verifier] environment_mode`、`[agent] network_mode`），否则"默认安全"的假设不成立（见调研 01 §7）。
 3. **多裁判面板与观察器是自研件，工期要按自研估**：Harbor 只给单裁判与 MCP 挂载点。
 4. **逻辑赛道用 Inspect 不代表双轨数据**：两条轨道的最终产物都进 `grade.schema.json`，榜单聚合器只认 grade，不认上游框架。
 5. **版本治理要落到 `constraints.txt` + 镜像 digest + `versions` 字段**：Harbor 约 3–4 周一个版本，regrade 与 `--diff` 是压低重跑成本的唯一杠杆。

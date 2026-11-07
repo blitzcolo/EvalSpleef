@@ -1,7 +1,7 @@
 # Godot 游戏题执行 Playbook
 
 > 状态：v1 · 维护：research · 最后更新：2026-11-06
-> 上游：[04-isolation](../../docs/04-isolation.md) · 相关：[05-platform-notes](../../research/05-platform-notes.md)、[07-harness-mapping](../../docs/07-harness-mapping.md) §2
+> 上游：[04-isolation](../../04-isolation.md) · 相关：05-platform-notes、[07-harness-mapping](../../07-harness-mapping.md) §2
 
 适用：Godot 引擎的 2D/3D 小游戏题（`track: game»）。目标：无头构建/运行、脚本化输入回放、状态快照与截帧比对、干净隔离。
 
@@ -10,11 +10,11 @@
 | 项 | 要求 | 依据 |
 | --- | --- | --- |
 | 引擎版本 | 固定 Godot 版本（如 4.x 具体 minor），镜像内同时装 headless 与带渲染的导出模板 | Godot 官方导出文档 |
-| 显示 | Linux 容器 + Xvfb 虚拟显示（需要真实渲染时）；纯逻辑题用 `--headless» | 本仓库 [05-platform-notes](../../research/05-platform-notes.md) §6 |
+| 显示 | Linux 容器 + Xvfb 虚拟显示（需要真实渲染时）；纯逻辑题用 `--headless» | 本仓库 05-platform-notes §6 |
 | 音频 | 容器无音频设备时用 dummy 驱动，避免启动失败 | 工程惯例[推断] |
 | 导出模板 | 预装 export templates，禁止运行时联网下载 | 同镜像要点 |
 | 输入注入 | `xdotool»/`evemu» 或引擎内脚本化输入回放（推荐后者，可复现） | [推断] 以引擎 API 为准 |
-| 版本记录 | 引擎版本、导出模板版本、Xvfb 分辨率写入 trial.versions | [07-harness-mapping](../../docs/07-harness-mapping.md) §9.3 |
+| 版本记录 | 引擎版本、导出模板版本、Xvfb 分辨率写入 trial.versions | [07-harness-mapping](../../07-harness-mapping.md) §9.3 |
 
 ## 2. 构建 / 运行命令
 

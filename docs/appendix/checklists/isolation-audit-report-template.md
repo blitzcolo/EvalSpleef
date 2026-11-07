@@ -1,7 +1,7 @@
 # 隔离体检报告模板（每期）
 
 > 状态：模板 v1 · 维护：isolation · 最后更新：2026-11-06
-> 上游：[04-isolation](../../docs/04-isolation.md) §13 · 相关：[isolation-preflight](isolation-preflight.md) · [trial-hygiene](trial-hygiene.md) · [incident-response](incident-response.md)
+> 上游：[04-isolation](../../04-isolation.md) §13 · 相关：[isolation-preflight](isolation-preflight.md) · [trial-hygiene](trial-hygiene.md) · [incident-response](incident-response.md)
 
 > 使用方式：复制本文件为 `reports/<batch_id>-isolation-audit.md`，逐项填写并附证据 URI；`verdict` 必须为 **PASS** 才能发布批次。整份报告随批次归档，保留期与判分证据一致。
 

@@ -377,4 +377,4 @@ while batch.active:
 - 隔离不变量、金丝雀、验证沙箱、设备池 → [04-isolation](04-isolation.md)
 - 题目包字段、预算默认值、验收脚本 → [05-task-library](05-task-library.md) / [06-answer-and-acceptance](06-answer-and-acceptance.md)
 - Harbor 落地映射与适配层接口 → [07-harness-mapping](07-harness-mapping.md)
-- 可运行参考实现 → [reference/README](../reference/README.md)、[08-implementation-notes](08-implementation-notes.md)
+- 可运行参考实现 → [reference/README](../packages/evalspleef-core/)、[08-implementation-notes](08-implementation-notes.md)

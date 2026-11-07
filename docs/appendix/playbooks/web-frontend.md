@@ -1,9 +1,9 @@
 # Playbook · Web 前端 / 3D 可视化
 
 > 状态：v1 · 维护：tasks-b · 最后更新：2026-11-06
-> 上游：[00-conventions](../../docs/00-conventions.md) · 相关：[02-eval-flow](../../docs/02-eval-flow.md)、[04-isolation](../../docs/04-isolation.md)、[05-task-library](../../docs/05-task-library.md)
+> 上游：[00-conventions](../../00-conventions.md) · 相关：[02-eval-flow](../../02-eval-flow.md)、[04-isolation](../../04-isolation.md)、[05-task-library](../../05-task-library.md)
 
-面向赛道：web（前端设计、交互、3D 建模、2D 动画、科学可视化）。示例题包：[web-001](../examples/web-001/task.yaml)（tasks-a 维护）。
+面向赛道：web（前端设计、交互、3D 建模、2D 动画、科学可视化）。示例题包：[web-001](../../../tasks/web-001/task.yaml)（tasks-a 维护）。
 
 ## 1. 环境镜像要点
 
@@ -59,7 +59,7 @@
 1. 每 trial 独立容器 + 独立 node_modules 层；浏览器 user-data-dir 放 /tmp 私有 tmpfs。
 2. dev server 只用 127.0.0.1 + 随机端口；不共享 host 网络，不暴露端口到宿主。
 3. 截图与基线只在验证侧产出；Agent 镜像内不得出现隐藏截图基线。
-4. WebGL 正确性在 CPU 渲染（SwiftShader）下验，性能类指标单独放 GPU 节点（见 [04-isolation](../../docs/04-isolation.md)）。
+4. WebGL 正确性在 CPU 渲染（SwiftShader）下验，性能类指标单独放 GPU 节点（见 [04-isolation](../../04-isolation.md)）。
 5. 前后两 trial 的浏览器缓存目录不得复用（用前清空或全新 $HOME）。
 
 ## 6. 常见故障与处置

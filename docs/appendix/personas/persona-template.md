@@ -1,7 +1,7 @@
 # 附录 · 模拟用户 persona 模板
 
 > 状态：v1 · 维护：grading · 最后更新：2026-11-06
-> 上游：[03-grading](../../docs/03-grading.md) §7 · 相关：[ladder-scripts](ladder-scripts.md) · [leak-rules](leak-rules.md) · [faq-policy](faq-policy.md)
+> 上游：[03-grading](../../03-grading.md) §7 · 相关：[ladder-scripts](ladder-scripts.md) · [leak-rules](leak-rules.md) · [faq-policy](faq-policy.md)
 > 用途：题包 persona.md 的填写模板；Harbor 通过 --user-persona-path 把 persona.md 注入模拟用户 Agent（[Harbor: simulate a user](https://docs.harborframework.com/jobs/simulate-a-user.md)）。
 
 ---

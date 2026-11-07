@@ -1,7 +1,7 @@
 # Trial 卫生清单（每个 trial）
 
 > 状态：v1 · 维护：isolation · 最后更新：2026-11-06
-> 上游：[04-isolation](../../docs/04-isolation.md) · 相关：[isolation-preflight](isolation-preflight.md) · [device-pool-handover](device-pool-handover.md) · [incident-response](incident-response.md)
+> 上游：[04-isolation](../../04-isolation.md) · 相关：[isolation-preflight](isolation-preflight.md) · [device-pool-handover](device-pool-handover.md) · [incident-response](incident-response.md)
 
 ## 用途
 

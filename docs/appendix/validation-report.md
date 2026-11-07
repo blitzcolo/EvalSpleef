@@ -1,7 +1,7 @@
 # 附录 · 全仓机器可读契约终验报告（task-8）
 
 > 状态：v1 · 维护：grading · 最后更新：2026-11-06
-> 上游：[00-conventions](../docs/00-conventions.md) §3/§4 · [03-grading](../docs/03-grading.md) · 相关：[schemas/](../schemas/) · [examples/](examples/)
+> 上游：[00-conventions](../00-conventions.md) §3/§4 · [03-grading](../03-grading.md) · 相关：[schemas/](../../schemas/) · [examples/](../../tasks/)
 > Schema 校验工具：`scripts/validate_schemas.py`（PyYAML + jsonschema Draft 2020-12，venv `/tmp/llmeval-venv`）。**本轮 Schema 结论以该脚本输出为准，本报告不重复实现。**
 
 ---
