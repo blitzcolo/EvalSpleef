@@ -58,7 +58,7 @@ node_modules/
 *.pfx
 *.kubeconfig
 kubeconfig
-secrets/
+/secrets/
 *.secret
 *.secrets
 .netrc
