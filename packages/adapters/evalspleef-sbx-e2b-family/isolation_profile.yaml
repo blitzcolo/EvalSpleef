@@ -1,0 +1,46 @@
+# Isolation profile for the novita-sandbox adapter (TECH-DESIGN section 7.7).
+# This file is the reviewed artifact; novita.py builds the same content as the
+# IsolationProfile object returned by the provider, and a unit test pins the two
+# together. verified_isolation stays null until a real-host run of the
+# conformance C-ISO-* subset; until then everything here is declared, not
+# measured, and the adapter must be reported as "not verified on a real host".
+provider: novita-sandbox
+declared_isolation: L3
+verified_isolation: null
+invariants:
+  I1:
+    how: >-
+      a fresh instance per trial from an immutable template; kill after the
+      trial; metadata carries lease/trial labels
+    probe: list(labels)==1 while alive, 0 after destroy
+  I2:
+    how: waived
+    reason: >-
+      single-use instance, the root disk is writable but the instance is
+      destroyed and never reused; instance-per-trial makes cross-trial disk
+      reuse impossible by construction
+    compensating: path hash comparison on key files + canary placement scan (C-ISO-06)
+    approved_by: eval-lead
+    expires: "2027-03-01"
+  I4:
+    how: >-
+      allow_internet_access=False for 'off'; allow_out restricted to the egress
+      proxy address for allowlists
+    probe: curl --max-time 3 https://example.com fails in 'off' mode
+  I6:
+    how: >-
+      task templates are built with set_user(agent) and sudo removed
+      (template_builder); commands default to the non-root run_as_user
+    probe: id -u != 0 && ! sudo -n true
+  I8:
+    how: >-
+      every exec runs through 'env -i' with a whitelist, so platform-injected
+      identifying variables never reach agent processes; the agent login
+      profile is cleaned in the template
+    probe: env | grep -Ei 'e2b|novita|task_id|trial_id|batch|model|eval' is empty
+  I16:
+    how: >-
+      allowlist modes route through the shared egress proxy (via_proxy): only
+      the proxy address is reachable from the sandbox and URL logs are
+      collected on the proxy
+    probe: proxy log lines >= sandbox request count
