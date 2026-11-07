@@ -18,5 +18,17 @@ windows-sandbox = "evalspleef_sbx_windows_sandbox.conformance:build_targets"
 [tool.hatch.build.targets.wheel]
 packages = ["src/evalspleef_sbx_windows_sandbox"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/evalspleef_sbx_windows_sandbox/isolation_profile.yaml" = "evalspleef_sbx_windows_sandbox/isolation_profile.yaml"
+"src/evalspleef_sbx_windows_sandbox/probes" = "evalspleef_sbx_windows_sandbox/probes"
+
 [tool.uv.sources]
 evalspleef-spi = { workspace = true }
+
+[tool.pytest.ini_options]
+# The documented command loads the conformance kit explicitly with
+# ``-p evalspleef.conformance.plugin``; the package also installs it as a
+# pytest11 entry point, and pytest 9 rejects the duplicate registration.
+addopts = "-p no:spleef-conformance --import-mode=importlib"
+asyncio_mode = "auto"
+testpaths = ["tests"]

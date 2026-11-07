@@ -1,0 +1,92 @@
+# Isolation profile for the Windows Sandbox provider (FR-SBX-11).
+# I1-I16 per PRD appendix D.2; generated from
+# evalspleef_sbx_windows_sandbox.isolation (the runtime source of truth) -
+# keep both in sync, the tests enforce it.
+provider: windows-sandbox
+declared_isolation: L3
+verified_isolation: null
+invariants:
+  I1:
+    how: 'every trial starts a fresh Windows Sandbox instance from the host image and stops it after the trial; the lease id is recorded in the instance metadata labels'
+    probe: 'list(labels) returns one instance per lease while live and none after destroy'
+    waived: false
+  I10:
+    how: 'verifier and judge roles are separate SandboxSpecs; one instance per host means roles can never share a guest'
+    probe: 'verifier_lease_id != agent_lease_id for a trial'
+    waived: false
+  I11:
+    how: 'download rejects paths and symlinks resolving outside the mapped workspace, rejects special files and honours max_bytes'
+    probe: 'downloading a symlink pointing at /etc/passwd raises TransferError'
+    waived: false
+  I12:
+    how: 'hidden tests never enter the mapped folder through the provider; hash locks live in the task pack, which the provider does not touch'
+    probe: 'tests.sha256 manifest matches the verifier-side files'
+    waived: false
+  I13:
+    how: 'a fresh instance per trial means no state can carry over; canary placement is a runner/control-plane concern'
+    probe: 'cross-trial canary scan reports zero critical hits'
+    waived: false
+  I14:
+    how: 'instances are stopped at trial end and never returned to a pool; orphans are reclaimed by label through reap() and spleef.expires_at bounds every instance lifetime'
+    probe: 'list(labels) is empty after destroy; spleef.expires_at bounds the instance lifetime'
+    waived: false
+  I15:
+    how: 'judge contexts run in their own trial-scoped instance like any other role'
+    probe: 'judge session is unique per trial'
+    waived: false
+  I16:
+    how: 'the provider offers no allowlist or egress proxy: networking is off or full, and full traffic is not logged'
+    probe: 'not applicable: no allowlist is offered'
+    waived: true
+    reason: 'wsb has no firewall or proxy hook inside the guest, so an allowlist cannot be enforced or audited'
+    compensating: 'dev_only=True keeps the adapter out of every formal batch route, and allowlist policies are rejected at create'
+    approved_by: evalspleef-platform
+    expires: '2027-06-30'
+  I2:
+    how: 'the guest system image is per-instance and discarded on stop; Windows Sandbox exposes no read-only root filesystem'
+    probe: 'not applicable: the guest image is discarded with the instance'
+    waived: true
+    reason: 'Windows Sandbox has no read-only system drive and no hardening knobs beyond the mapped folder and networking'
+    compensating: 'one fresh instance per trial, destroyed afterwards; no state is carried between trials'
+    approved_by: evalspleef-platform
+    expires: '2027-06-30'
+  I3:
+    how: 'the only host path visible in the guest is the per-trial mapped folder holding /workspace'
+    probe: 'paths outside the mapped desktop are absent (probes/windows.ps1)'
+    waived: true
+    reason: 'a mapped folder is a host directory by construction and there is no tmpfs or volume layer inside Windows Sandbox'
+    compensating: 'the mapped folder is created per trial under the provider state directory and removed on destroy; transfer paths are checked against /workspace'
+    approved_by: evalspleef-platform
+    expires: '2027-06-30'
+  I4:
+    how: 'NetMode.OFF writes <Networking>Disable</Networking> into the config XML; NetMode.FULL enables it and nothing in between'
+    probe: 'Test-NetConnection example.com:443 fails in an off-network sandbox and the firewall profiles block outbound by default'
+    waived: false
+  I5:
+    how: 'the provider maps exactly one host folder; no other mount or host socket is exposed'
+    probe: 'Get-SmbShare lists no non-default shares (probes/windows.ps1)'
+    waived: true
+    reason: 'the mapped workspace is a writable host path and cannot be avoided with the wsb CLI'
+    compensating: 'only the per-trial workspace is mapped, the workspace holds no credentials and the mapping disappears with the instance'
+    approved_by: evalspleef-platform
+    expires: '2027-06-30'
+  I6:
+    how: 'wsb runs commands as the built-in WDAGUtilityAccount, which is not an administrator'
+    probe: 'whoami /groups does not contain S-1-5-32-544 (probes/windows.ps1)'
+    waived: false
+  I7:
+    how: 'Windows Sandbox has no cpu, disk or pids controls; MemoryInMB is written to the config but not verified'
+    probe: 'not applicable: no enforceable limit is declared'
+    waived: true
+    reason: 'the wsb CLI cannot enforce cpu, disk or pids limits and memory enforcement is unverified on a real host'
+    compensating: 'one instance per host and a bounded max_lifetime_s keep a runaway guest from starving the host'
+    approved_by: evalspleef-platform
+    expires: '2027-06-30'
+  I8:
+    how: 'the provider passes no evaluation identity into the guest: the config XML carries no environment and the command line only carries the env the caller asks for'
+    probe: 'Get-ChildItem Env: contains no task/batch/model/canary names (probes/windows.ps1)'
+    waived: false
+  I9:
+    how: 'the template digest is recorded in the instance metadata; the only credential meant for a sandbox is the per-trial gateway key, which the provider never writes into the mapped folder'
+    probe: 'env and probe scan show no long-lived credentials (probes/windows.ps1)'
+    waived: false
