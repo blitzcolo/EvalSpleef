@@ -1,6 +1,6 @@
 # web-001 变异测试清单
 
-要求 ≥5 个变异体被 Playwright 隐藏测试杀死（[docs/06-answer-and-acceptance.md](../../../docs/06-answer-and-acceptance.md) 第 5 节）。变异在参考解 A 上人工施加，执行 npx playwright test --config=hidden-tests/playwright.config.js（TODO(run-on-host)）。
+要求 ≥5 个变异体被 Playwright 隐藏测试杀死（[docs/06-answer-and-acceptance.md](../../docs/06-answer-and-acceptance.md) 第 5 节）。变异在参考解 A 上人工施加，执行 npx playwright test --config=hidden-tests/playwright.config.js（TODO(run-on-host)）。
 
 | 编号 | 变异操作 | 期望被杀 | 杀死它的用例 |
 | --- | --- | --- | --- |

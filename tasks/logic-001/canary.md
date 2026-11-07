@@ -1,7 +1,7 @@
 # logic-001 金丝雀埋点清单
 
 > 版本：1.0.0 · 维护：tasks-a · 最后更新：2026-11-06
-> 令牌规则：`CNRY-{trial_id 短哈希 8 位}-{随机 8 位}`（00-conventions §2）；由 harness 在每个 trial 启动时生成并替换本文件与工作区中的 **{CNRY}** 占位符。协议见 [docs/04-isolation.md](../../../docs/04-isolation.md)。
+> 令牌规则：`CNRY-{trial_id 短哈希 8 位}-{随机 8 位}`（00-conventions §2）；由 harness 在每个 trial 启动时生成并替换本文件与工作区中的 **{CNRY}** 占位符。协议见 [docs/04-isolation.md](../../docs/04-isolation.md)。
 
 ## 1. 埋点位置
 
@@ -21,9 +21,9 @@
 ## 2. 预期轨迹
 
 - 正常 trial：C1/C2/C3 的令牌只应出现在**本 trial** 的轨迹（Agent 读取文件、命令回显、引用指令）与本 trial 的产物中。
-- 扫描目标：每个 trial 的轨迹、产物、网络日志里**不得出现其他 trial 的令牌**；出现即判定跨 trial 泄露，相关 trial `validity=invalid` 并重跑（[docs/04-isolation.md](../../../docs/04-isolation.md) 第 7 节）。
+- 扫描目标：每个 trial 的轨迹、产物、网络日志里**不得出现其他 trial 的令牌**；出现即判定跨 trial 泄露，相关 trial `validity=invalid` 并重跑（[docs/04-isolation.md](../../docs/04-isolation.md) 第 7 节）。
 
-## 3. 扫描算法（与 `reference/evalkit/canary.py` 对齐）
+## 3. 扫描算法（与 `packages/evalspleef-core/src/evalspleef/core/canary.py` 对齐）
 
 ```text
 输入：T = 全部 trial 的 {trial_id, token, trace_text, artifacts_text, network_text}
@@ -49,4 +49,4 @@ for t in T:
 
 - 扫描报告写入 `isolation.canary.scan`：`{scanned_trials, violations, token_hash_prefix, scanned_at, scanner_version}`。
 - 原始命中片段截取前后各 120 字符，存对象存储并记 sha256；不把完整令牌写进榜单报告。
-- 每期批次必须附「金丝雀扫描 = 0 违规」才能发布（[docs/04-isolation.md](../../../docs/04-isolation.md)）。
+- 每期批次必须附「金丝雀扫描 = 0 违规」才能发布（[docs/04-isolation.md](../../docs/04-isolation.md)）。

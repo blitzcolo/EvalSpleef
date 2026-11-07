@@ -23,5 +23,5 @@
 ## 异常判定
 
 - 令牌出现在**其他 trial** 的轨迹、产物或网络日志 → `cross_trial_hit`：涉事 trial 判 `invalid`，
-  并触发 [Device/宿主归还清单](../../checklists/device-pool-handover.md) 的隔离排查。
+  并触发 [Device/宿主归还清单](../../docs/appendix/checklists/device-pool-handover.md) 的隔离排查。
 - 令牌只用于事后检测，不参与判分，也不进任何反馈文本。

@@ -1,7 +1,7 @@
 # data-001 答案与验收说明
 
 > 版本：1.0.0 · 维护：tasks-a · 最后更新：2026-11-06
-> 相关：[docs/06-answer-and-acceptance.md](../../../docs/06-answer-and-acceptance.md)
+> 相关：[docs/06-answer-and-acceptance.md](../../docs/06-answer-and-acceptance.md)
 
 ## 1. 题目形态
 
@@ -34,7 +34,7 @@
 ## 3. 复现命令（本地已实跑）
 
 ```bash
-cd llm-eval/appendix/examples/data-001
+cd tasks/data-001
 python3 answers/reference-b.py workspace/access.log /tmp/report.json
 python3 hidden-tests/checker.py --answer /tmp/report.json
 bash hidden-tests/run.sh

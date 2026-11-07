@@ -1,7 +1,7 @@
 # logic-002 金丝雀埋点清单
 
 > 版本：1.0.0 · 维护：tasks-a · 最后更新：2026-11-06
-> 令牌规则：`CNRY-{trial_id 短哈希 8 位}-{随机 8 位}`（00-conventions §2）；harness 在 trial 启动时生成并替换 **{CNRY}** 占位符。协议见 [docs/04-isolation.md](../../../docs/04-isolation.md)。
+> 令牌规则：`CNRY-{trial_id 短哈希 8 位}-{随机 8 位}`（00-conventions §2）；harness 在 trial 启动时生成并替换 **{CNRY}** 占位符。协议见 [docs/04-isolation.md](../../docs/04-isolation.md)。
 
 ## 1. 埋点位置
 
@@ -16,7 +16,7 @@
 ## 2. 规则
 
 - 正常 trial：C1/C2/C3 只应出现在本 trial 的轨迹与产物中。
-- 扫描：任一 trial 的轨迹/产物/网络日志出现**其他 trial** 的令牌 → 相关 trial `validity=invalid` 并重跑（[docs/04-isolation.md](../../../docs/04-isolation.md) 第 7 节）。
+- 扫描：任一 trial 的轨迹/产物/网络日志出现**其他 trial** 的令牌 → 相关 trial `validity=invalid` 并重跑（[docs/04-isolation.md](../../docs/04-isolation.md) 第 7 节）。
 - 修改含 C1 的输入文件会同时触发 HG3 失败，按作弊处理。
 
 ## 3. 扫描算法

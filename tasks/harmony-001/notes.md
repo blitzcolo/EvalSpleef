@@ -1,7 +1,7 @@
 # harmony-001 答案与验收说明
 
 > 状态：v1 · 维护：research · 最后更新：2026-11-06
-> 上游：[00-conventions](../../../docs/00-conventions.md) · 相关：[harmony-device-pool playbook](../../playbooks/harmony-device-pool.md)、[05-platform-notes](../../../research/05-platform-notes.md)
+> 上游：[00-conventions](../../docs/00-conventions.md) · 相关：[harmony-device-pool playbook](../../docs/appendix/playbooks/harmony-device-pool.md)、05-platform-notes
 
 ## 1. 结构
 
@@ -84,7 +84,7 @@
 
 ## 8. 隔离要点
 
-- 设备独占租用，归还按 [device-pool-handover](../../checklists/device-pool-handover.md) 执行；
+- 设备独占租用，归还按 [device-pool-handover](../../docs/appendix/checklists/device-pool-handover.md) 执行；
 - Agent 不直接持有 `hdc» 全权（只能通过受限代理执行安装/启动/截图）；
 - 金丝雀注入位置见 canary.md，注意**不得**写进两个哈希锁定文件；
 - 构建容器断网（docs 白名单由平台代理提供），依赖预装进镜像。

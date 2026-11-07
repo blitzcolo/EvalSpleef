@@ -1,7 +1,7 @@
 # macos-001 答案与验收说明
 
 > 状态：v1 · 维护：tasks-b · 最后更新：2026-11-06
-> 上游：[00-conventions](../../../docs/00-conventions.md) · 相关：[macos-metal playbook](../../playbooks/macos-metal.md)
+> 上游：[00-conventions](../../docs/00-conventions.md) · 相关：[macos-metal playbook](../../docs/appendix/playbooks/macos-metal.md)
 
 ## 1. 结构
 

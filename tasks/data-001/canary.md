@@ -1,7 +1,7 @@
 # data-001 金丝雀埋点清单
 
 > 版本：1.0.0 · 维护：tasks-a · 最后更新：2026-11-06
-> 令牌规则：`CNRY-{trial_id 短哈希 8 位}-{随机 8 位}`（00-conventions §2）；harness 在 trial 启动时生成并替换 **{CNRY}** 占位符。协议见 [docs/04-isolation.md](../../../docs/04-isolation.md)。
+> 令牌规则：`CNRY-{trial_id 短哈希 8 位}-{随机 8 位}`（00-conventions §2）；harness 在 trial 启动时生成并替换 **{CNRY}** 占位符。协议见 [docs/04-isolation.md](../../docs/04-isolation.md)。
 
 ## 1. 埋点位置
 

@@ -18,7 +18,7 @@
 ## 3. 本地复现
 
 ~~~bash
-cd llm-eval/appendix/examples/harmony-001
+cd tasks/harmony-001
 bash hidden-tests/run.sh --selftest        # 证明 starter 必然失败、参考解必然通过
 bash hidden-tests/run.sh starter; echo "exit=$?"   # 期望非 0
 ~~~

@@ -1,6 +1,6 @@
 # logic-001 变异测试清单
 
-要求：≥5 个变异体必须被隐藏测试杀死（[docs/06-answer-and-acceptance.md](../../../docs/06-answer-and-acceptance.md) 第 5 节）。执行方式：`bash hidden-tests/run.sh` 中的 `test_t07_mutants_killed`；变异体由隐藏测试在临时目录构造，不写入题包。
+要求：≥5 个变异体必须被隐藏测试杀死（[docs/06-answer-and-acceptance.md](../../docs/06-answer-and-acceptance.md) 第 5 节）。执行方式：`bash hidden-tests/run.sh` 中的 `test_t07_mutants_killed`；变异体由隐藏测试在临时目录构造，不写入题包。
 
 | 编号 | 变异对象 | 变异操作 | 期望被杀 | 杀死它的断言 |
 | --- | --- | --- | --- | --- |

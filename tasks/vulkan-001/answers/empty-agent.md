@@ -19,7 +19,7 @@
 ## 3. 本地复现
 
 ~~~bash
-cd llm-eval/appendix/examples/vulkan-001
+cd tasks/vulkan-001
 bash hidden-tests/run.sh --selftest
 bash hidden-tests/run.sh starter
 ~~~

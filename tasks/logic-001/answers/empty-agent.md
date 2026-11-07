@@ -19,7 +19,7 @@
 ## 3. 本地复现
 
 ```bash
-cd llm-eval/appendix/examples/logic-001
+cd tasks/logic-001
 python3 hidden-tests/verify_submission.py --answer /tmp/does-not-exist.json; echo "exit=$?"
 # 期望输出：HG1_answer_correct=False HG2_format_ok=False HG3_input_untampered=True
 # 期望 exit=1

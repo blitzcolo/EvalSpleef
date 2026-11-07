@@ -1,6 +1,6 @@
 # logic-002 变异测试清单
 
-要求 ≥5 个变异体被杀死（[docs/06-answer-and-acceptance.md](../../../docs/06-answer-and-acceptance.md) 第 5 节）。执行：`bash hidden-tests/run.sh` 中 `test_t07_mutants_killed`。
+要求 ≥5 个变异体被杀死（[docs/06-answer-and-acceptance.md](../../docs/06-answer-and-acceptance.md) 第 5 节）。执行：`bash hidden-tests/run.sh` 中 `test_t07_mutants_killed`。
 
 | 编号 | 变异操作 | 期望被杀 | 杀死断言 |
 | --- | --- | --- | --- |

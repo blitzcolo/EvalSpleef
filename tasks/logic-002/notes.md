@@ -1,7 +1,7 @@
 # logic-002 答案与验收说明
 
 > 版本：1.0.0 · 维护：tasks-a · 最后更新：2026-11-06
-> 相关：[docs/06-answer-and-acceptance.md](../../../docs/06-answer-and-acceptance.md)
+> 相关：[docs/06-answer-and-acceptance.md](../../docs/06-answer-and-acceptance.md)
 
 ## 1. 题目形态
 
@@ -33,7 +33,7 @@
 ## 3. 复现命令（本地已实跑）
 
 ```bash
-cd llm-eval/appendix/examples/logic-002
+cd tasks/logic-002
 python3 hidden-tests/generator.py --validate
 python3 answers/reference-a.py workspace/instances.json /tmp/answer-a.json
 python3 answers/reference-b.py workspace/instances.json /tmp/answer-b.json

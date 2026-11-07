@@ -1,7 +1,7 @@
 # logic-001 答案与验收说明
 
 > 版本：1.0.0 · 维护：tasks-a · 最后更新：2026-11-06
-> 相关：[docs/06-answer-and-acceptance.md](../../../docs/06-answer-and-acceptance.md) · [docs/05-task-library.md](../../../docs/05-task-library.md)
+> 相关：[docs/06-answer-and-acceptance.md](../../docs/06-answer-and-acceptance.md) · [docs/05-task-library.md](../../docs/05-task-library.md)
 
 ## 1. 题目形态
 
@@ -35,7 +35,7 @@
 环境：Python 3.15.2，只用标准库（无需 pytest/jsonschema）。
 
 ```bash
-cd llm-eval/appendix/examples/logic-001
+cd tasks/logic-001
 
 # 1) 生成器自检：唯一性 / 最小充分记录 / 确定性
 python3 hidden-tests/generator.py --validate
@@ -83,10 +83,10 @@ CANDIDATE_ANSWER=/tmp/answer-a.json bash hidden-tests/run.sh
 
 - 规则族固定公开，强模型可写脚本穷举；本题定位是逻辑赛道入门/标定题，不追求高区分度。若要提高难度，可在 MINOR 版本改为双规则（P1/P2 各一条隐藏规则），需同步升 rubric 与生成器。
 - 生成器当前 5 个实例全部为 2 次转移即唯一（m=2）；m=3 的最小充分记录在随机搜索中出现率低，生成器只在前 2 次不唯一时才采用。标定后若发现过易，可放宽 `MAX_STEPS_TRIED` 并重跑隐藏测试。
-- 推导质量依赖裁判：R6/R7 为 functional，若裁判一致性 < 0.6 进人工队列（[docs/03-grading.md](../../../docs/03-grading.md)）。
+- 推导质量依赖裁判：R6/R7 为 functional，若裁判一致性 < 0.6 进人工队列（[docs/03-grading.md](../../docs/03-grading.md)）。
 
 ## 7. 版本与重跑规则
 
 - 1.0.0（2026-11-06）：首版上线。
 - 修改 `generator.py` 的规则族/种子 = 验收语义变化 → MAJOR 升版并重跑全部 trial。
-- 只改 instruction/persona 文案 = PATCH，可复用旧 trial；改 rubric 判定口径 = MINOR，需重判（[docs/05-task-library.md](../../../docs/05-task-library.md) 第 8 节）。
+- 只改 instruction/persona 文案 = PATCH，可复用旧 trial；改 rubric 判定口径 = MINOR，需重判（[docs/05-task-library.md](../../docs/05-task-library.md) 第 8 节）。

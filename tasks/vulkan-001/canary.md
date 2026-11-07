@@ -22,5 +22,5 @@
 ## 异常判定
 
 - 令牌出现在**其他 trial** 的轨迹、产物或网络日志 → `cross_trial_hit»：涉事 trial 判 `invalid»，
-  并触发 GPU 节点隔离排查（见 [vulkan-gpu playbook](../../playbooks/vulkan-gpu.md) §5）。
+  并触发 GPU 节点隔离排查（见 [vulkan-gpu playbook](../../docs/appendix/playbooks/vulkan-gpu.md) §5）。
 - 令牌只用于事后检测，不参与判分，也不进反馈文本。

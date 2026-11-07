@@ -18,7 +18,7 @@
 ## 3. 本地复现
 
 ```bash
-cd llm-eval/appendix/examples/web-001
+cd tasks/web-001
 APP_DIR="$PWD/workspace" bash hidden-tests/run.sh
 # 当前开发机无 @playwright/test：静态契约检查会通过并 SKIP；
 # 在预装 Playwright 的镜像内对起始代码跑完整用例，期望 HG1 fail。

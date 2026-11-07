@@ -18,7 +18,7 @@
 ## 3. 本地复现
 
 ```bash
-cd llm-eval/appendix/examples/data-001
+cd tasks/data-001
 python3 hidden-tests/verify_submission.py --submission /tmp/does-not-exist.py; echo "exit=$?"
 # 期望：HG1_sample_ok=False HG2_hidden_ok=False HG3_integrity_ok=True，exit=1
 ```

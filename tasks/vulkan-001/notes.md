@@ -1,7 +1,7 @@
 # vulkan-001 答案与验收说明
 
 > 状态：v1 · 维护：research · 最后更新：2026-11-06
-> 上游：[00-conventions](../../../docs/00-conventions.md) · 相关：[vulkan-gpu playbook](../../playbooks/vulkan-gpu.md)、[05-platform-notes](../../../research/05-platform-notes.md)
+> 上游：[00-conventions](../../docs/00-conventions.md) · 相关：[vulkan-gpu playbook](../../docs/appendix/playbooks/vulkan-gpu.md)、05-platform-notes
 
 ## 1. 结构
 
@@ -89,4 +89,4 @@ GPU 段（构建/运行/验证层/截图）尚未在本机执行——见 §2 �
 - Agent 环境 separate、`no-network»；SPIR-V 与截图作为 artifacts 进验证沙箱；
 - 验证层日志与截图必须由 verifier 侧采集，不能只信 Agent 自报；
 - 金丝雀注入见 canary.md（不得写进哈希锁定文件）；
-- GPU 节点归还：容器销毁 + 显存/进程检查，见 [vulkan-gpu playbook](../../playbooks/vulkan-gpu.md) §5。
+- GPU 节点归还：容器销毁 + 显存/进程检查，见 [vulkan-gpu playbook](../../docs/appendix/playbooks/vulkan-gpu.md) §5。

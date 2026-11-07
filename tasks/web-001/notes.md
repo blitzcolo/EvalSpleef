@@ -1,7 +1,7 @@
 # web-001 答案与验收说明
 
 > 版本：1.0.0 · 维护：tasks-a · 最后更新：2026-11-06
-> 相关：[docs/06-answer-and-acceptance.md](../../../docs/06-answer-and-acceptance.md)
+> 相关：[docs/06-answer-and-acceptance.md](../../docs/06-answer-and-acceptance.md)
 
 ## 1. 题目形态
 
@@ -30,7 +30,7 @@
 ## 3. 运行与复现
 
 ```bash
-cd llm-eval/appendix/examples/web-001
+cd tasks/web-001
 
 # 参考解 A：替换 app.js 后本地验证
 cp answers/reference-a.js /tmp/reference-a.js
