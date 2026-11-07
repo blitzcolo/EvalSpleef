@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-sbx-apple-container"
+version = "0.1.0"
+description = "Sandbox provider: apple/container lightweight Linux VMs."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi"]
+
+[project.entry-points."evalspleef.sandbox_providers"]
+apple-container = "evalspleef_sbx_apple_container.provider:AppleContainerProvider"
+
+[project.entry-points."evalspleef.conformance_targets"]
+apple-container = "evalspleef_sbx_apple_container.conformance:build_targets"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef_sbx_apple_container"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }

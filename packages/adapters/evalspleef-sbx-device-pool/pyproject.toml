@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-sbx-device-pool"
+version = "0.1.0"
+description = "Sandbox providers: HarmonyOS device pool and bare-metal performance host."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "pyyaml>=6"]
+
+[project.entry-points."evalspleef.sandbox_providers"]
+device-pool = "evalspleef_sbx_device_pool.provider:DevicePoolProvider"
+perf-host = "evalspleef_sbx_device_pool.perf:PerfHostProvider"
+
+[project.entry-points."evalspleef.conformance_targets"]
+device-pool = "evalspleef_sbx_device_pool.conformance:build_targets"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef_sbx_device_pool"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }

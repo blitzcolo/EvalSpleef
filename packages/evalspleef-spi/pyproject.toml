@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-spi"
+version = "0.1.0"
+description = "Provider SPIs (model endpoints, sandboxes, runners), capability types, errors. Interfaces and data classes only."
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef"]

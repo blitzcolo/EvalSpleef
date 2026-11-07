@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-control"
+version = "0.1.0"
+description = "Control plane: registry, planner, scheduler, lease manager, endpoint manager, probe runner, cost ledger, event store, spleef CLI."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "evalspleef-core", "pydantic>=2.9", "pyyaml>=6", "httpx>=0.27", "huggingface_hub>=0.26", "psycopg[binary,pool]>=3.2", "typer>=0.12", "opentelemetry-api>=1.27", "opentelemetry-sdk>=1.27"]
+
+[project.scripts]
+spleef = "evalspleef.control.cli.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }
+evalspleef-core = { workspace = true }

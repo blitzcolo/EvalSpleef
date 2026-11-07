@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-sbx-docker"
+version = "0.1.0"
+description = "Sandbox provider: Docker/Podman (runc, runsc)."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "aiodocker>=0.24"]
+
+[project.entry-points."evalspleef.sandbox_providers"]
+docker = "evalspleef_sbx_docker.provider:DockerProvider"
+
+[project.entry-points."evalspleef.conformance_targets"]
+docker = "evalspleef_sbx_docker.conformance:build_targets"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef_sbx_docker"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }

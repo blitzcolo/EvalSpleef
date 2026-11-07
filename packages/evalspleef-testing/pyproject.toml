@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-testing"
+version = "0.1.0"
+description = "Test doubles: mock sandbox, mock endpoint, fake OpenAI-compatible server, in-memory gateway admin."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "fastapi>=0.115", "uvicorn>=0.30", "httpx>=0.27"]
+
+[project.entry-points."evalspleef.sandbox_providers"]
+mock-sandbox = "evalspleef.testing.mock_sandbox:MockSandboxProvider"
+
+[project.entry-points."evalspleef.model_providers"]
+mock-external = "evalspleef.testing.mock_endpoint:MockExternalProvider"
+mock-assisted = "evalspleef.testing.mock_endpoint:MockAssistedProvider"
+mock-api = "evalspleef.testing.mock_endpoint:MockApiProvider"
+
+[project.entry-points."evalspleef.runners"]
+scripted = "evalspleef.testing.scripted_runner:ScriptedRunner"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }

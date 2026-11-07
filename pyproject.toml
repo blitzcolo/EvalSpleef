@@ -1,0 +1,266 @@
+[project]
+name = "evalspleef-workspace"
+version = "0.0.0"
+description = "EvalSpleef monorepo root: tooling configuration only. Product code lives under packages/."
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false
+default-groups = ["dev"]
+
+[tool.uv.workspace]
+members = ["packages/*", "packages/adapters/*"]
+exclude = ["packages/adapters"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.7",
+  "mypy>=1.11",
+  "import-linter>=2.1",
+  "types-PyYAML",
+  "grpcio-tools>=1.66",
+]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"
+testpaths = ["packages", "tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["tasks", "docs", "packages/evalspleef-core/examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM", "RUF"]
+ignore = [
+  "E501",   # the formatter owns line wrapping
+  "RUF001", # full-width punctuation appears in imported reference code and task content
+  "RUF002",
+  "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"packages/evalspleef-core/**" = ["UP042"]  # reference enums keep their (str, Enum) behaviour
+"packages/evalspleef-core/tests/_gen_examples.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["evalspleef"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+namespace_packages = true
+explicit_package_bases = true
+packages = ["evalspleef.spi"]
+
+[tool.importlinter]
+root_packages = [
+  "evalspleef",
+  "evalspleef_model_openai_compat",
+  "evalspleef_model_novita",
+  "evalspleef_model_vpc_vllm",
+  "evalspleef_sbx_docker",
+  "evalspleef_sbx_e2b_family",
+  "evalspleef_sbx_tart",
+  "evalspleef_sbx_apple_container",
+  "evalspleef_sbx_libvirt",
+  "evalspleef_sbx_hyperv",
+  "evalspleef_sbx_windows_sandbox",
+  "evalspleef_sbx_k8s_agent_sandbox",
+  "evalspleef_sbx_device_pool",
+  "evalspleef_harbor_bridge",
+  "novita_sandbox",
+  "e2b",
+  "aiodocker",
+  "kubernetes",
+  "asyncssh",
+  "pydantic",
+  "yaml",
+  "httpx",
+  "fastapi",
+  "uvicorn",
+  "huggingface_hub",
+  "psycopg",
+  "typer",
+  "opentelemetry",
+  "grpc",
+  "openai",
+  "cryptography",
+]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "spi imports nothing else from the workspace"
+type = "forbidden"
+source_modules = ["evalspleef.spi"]
+forbidden_modules = [
+  "evalspleef.core",
+  "evalspleef.control",
+  "evalspleef.gateway",
+  "evalspleef.runners",
+  "evalspleef.hostd",
+  "evalspleef.egress",
+  "evalspleef.conformance",
+  "evalspleef.testing",
+  "evalspleef_model_openai_compat",
+  "evalspleef_model_novita",
+  "evalspleef_model_vpc_vllm",
+  "evalspleef_sbx_docker",
+  "evalspleef_sbx_e2b_family",
+  "evalspleef_sbx_tart",
+  "evalspleef_sbx_apple_container",
+  "evalspleef_sbx_libvirt",
+  "evalspleef_sbx_hyperv",
+  "evalspleef_sbx_windows_sandbox",
+  "evalspleef_sbx_k8s_agent_sandbox",
+  "evalspleef_sbx_device_pool",
+  "evalspleef_harbor_bridge",
+]
+allow_indirect_imports = false
+
+[[tool.importlinter.contracts]]
+name = "core stays standard-library only"
+type = "forbidden"
+source_modules = ["evalspleef.core"]
+forbidden_modules = [
+  "evalspleef.spi",
+  "evalspleef.control",
+  "evalspleef.gateway",
+  "evalspleef.runners",
+  "evalspleef.hostd",
+  "evalspleef.egress",
+  "evalspleef.conformance",
+  "evalspleef.testing",
+  "evalspleef_model_openai_compat",
+  "evalspleef_model_novita",
+  "evalspleef_model_vpc_vllm",
+  "evalspleef_sbx_docker",
+  "evalspleef_sbx_e2b_family",
+  "evalspleef_sbx_tart",
+  "evalspleef_sbx_apple_container",
+  "evalspleef_sbx_libvirt",
+  "evalspleef_sbx_hyperv",
+  "evalspleef_sbx_windows_sandbox",
+  "evalspleef_sbx_k8s_agent_sandbox",
+  "evalspleef_sbx_device_pool",
+  "evalspleef_harbor_bridge",
+  "novita_sandbox",
+  "e2b",
+  "aiodocker",
+  "kubernetes",
+  "asyncssh",
+  "pydantic",
+  "yaml",
+  "httpx",
+  "fastapi",
+  "uvicorn",
+  "huggingface_hub",
+  "psycopg",
+  "typer",
+  "opentelemetry",
+  "grpc",
+  "openai",
+  "cryptography",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "platform packages never import adapters or vendor SDKs"
+type = "forbidden"
+source_modules = [
+  "evalspleef.control",
+  "evalspleef.gateway",
+  "evalspleef.runners",
+  "evalspleef.hostd",
+  "evalspleef.egress",
+  "evalspleef.conformance",
+  "evalspleef.testing",
+]
+forbidden_modules = [
+  "evalspleef_model_openai_compat",
+  "evalspleef_model_novita",
+  "evalspleef_model_vpc_vllm",
+  "evalspleef_sbx_docker",
+  "evalspleef_sbx_e2b_family",
+  "evalspleef_sbx_tart",
+  "evalspleef_sbx_apple_container",
+  "evalspleef_sbx_libvirt",
+  "evalspleef_sbx_hyperv",
+  "evalspleef_sbx_windows_sandbox",
+  "evalspleef_sbx_k8s_agent_sandbox",
+  "evalspleef_sbx_device_pool",
+  "evalspleef_harbor_bridge",
+  "novita_sandbox",
+  "e2b",
+  "aiodocker",
+  "kubernetes",
+  "asyncssh",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "adapters are independent of each other"
+type = "independence"
+modules = [
+  "evalspleef_model_openai_compat",
+  "evalspleef_model_novita",
+  "evalspleef_model_vpc_vllm",
+  "evalspleef_sbx_docker",
+  "evalspleef_sbx_e2b_family",
+  "evalspleef_sbx_tart",
+  "evalspleef_sbx_apple_container",
+  "evalspleef_sbx_libvirt",
+  "evalspleef_sbx_hyperv",
+  "evalspleef_sbx_windows_sandbox",
+  "evalspleef_sbx_k8s_agent_sandbox",
+  "evalspleef_sbx_device_pool",
+  "evalspleef_harbor_bridge",
+]
+
+[[tool.importlinter.contracts]]
+name = "adapters depend on spi only"
+type = "forbidden"
+source_modules = [
+  "evalspleef_model_openai_compat",
+  "evalspleef_model_novita",
+  "evalspleef_model_vpc_vllm",
+  "evalspleef_sbx_docker",
+  "evalspleef_sbx_e2b_family",
+  "evalspleef_sbx_tart",
+  "evalspleef_sbx_apple_container",
+  "evalspleef_sbx_libvirt",
+  "evalspleef_sbx_hyperv",
+  "evalspleef_sbx_windows_sandbox",
+  "evalspleef_sbx_k8s_agent_sandbox",
+  "evalspleef_sbx_device_pool",
+]
+forbidden_modules = [
+  "evalspleef.core",
+  "evalspleef.control",
+  "evalspleef.gateway",
+  "evalspleef.runners",
+  "evalspleef.hostd",
+  "evalspleef.egress",
+  "evalspleef.conformance",
+  "evalspleef.testing",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "harbor bridge may use core but no platform package"
+type = "forbidden"
+source_modules = ["evalspleef_harbor_bridge"]
+forbidden_modules = [
+  "evalspleef.control",
+  "evalspleef.gateway",
+  "evalspleef.runners",
+  "evalspleef.hostd",
+  "evalspleef.egress",
+  "evalspleef.conformance",
+  "evalspleef.testing",
+]
+allow_indirect_imports = true

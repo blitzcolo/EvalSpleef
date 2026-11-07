@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-runners"
+version = "0.1.0"
+description = "Agent runners: unified shell (remote-tools), native shell (in-sandbox), inspect runner."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "httpx>=0.27", "openai>=1.50"]
+
+
+[project.entry-points."evalspleef.runners"]
+terminus = "evalspleef.runners.unified_shell:UnifiedShellRunner"
+claude-code = "evalspleef.runners.native_shell:ClaudeCodeRunner"
+codex-cli = "evalspleef.runners.native_shell:CodexCliRunner"
+opencode = "evalspleef.runners.native_shell:OpenCodeRunner"
+inspect = "evalspleef.runners.inspect_runner:InspectRunner"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }

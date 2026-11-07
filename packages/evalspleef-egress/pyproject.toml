@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-egress"
+version = "0.1.0"
+description = "Egress proxy: allowlist CONNECT proxy, config generators, URL/DNS audit logs."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "pyyaml>=6"]
+
+[project.scripts]
+spleef-egress = "evalspleef.egress.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }

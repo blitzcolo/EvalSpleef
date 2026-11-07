@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-hostd"
+version = "0.1.0"
+description = "Host agent (hostd) and RemoteProvider: local providers exposed to the control plane over mTLS gRPC."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "grpcio>=1.66", "protobuf>=5", "cryptography>=43", "pyyaml>=6"]
+
+[project.entry-points."evalspleef.sandbox_providers"]
+remote = "evalspleef.hostd.remote:RemoteProvider"
+
+[project.entry-points."evalspleef.conformance_targets"]
+hostd = "evalspleef.hostd.conformance:build_targets"
+
+[project.scripts]
+spleef-hostd = "evalspleef.hostd.daemon:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }

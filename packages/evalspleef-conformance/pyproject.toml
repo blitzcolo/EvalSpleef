@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-conformance"
+version = "0.1.0"
+description = "Conformance kit pytest plugin for sandbox and model provider adapters."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "evalspleef-testing", "pytest>=8", "pytest-asyncio>=0.24"]
+
+[project.entry-points."pytest11"]
+spleef-conformance = "evalspleef.conformance.plugin"
+
+[project.entry-points."evalspleef.conformance_targets"]
+builtin = "evalspleef.conformance.builtin:build_targets"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }
+evalspleef-testing = { workspace = true }

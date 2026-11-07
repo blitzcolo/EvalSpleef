@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-sbx-tart"
+version = "0.1.0"
+description = "Sandbox provider: Tart macOS/Linux VMs on Apple Silicon hosts."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "asyncssh>=2.17"]
+
+[project.entry-points."evalspleef.sandbox_providers"]
+tart = "evalspleef_sbx_tart.provider:TartProvider"
+
+[project.entry-points."evalspleef.conformance_targets"]
+tart = "evalspleef_sbx_tart.conformance:build_targets"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef_sbx_tart"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }

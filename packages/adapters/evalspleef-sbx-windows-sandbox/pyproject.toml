@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-sbx-windows-sandbox"
+version = "0.1.0"
+description = "Sandbox provider: Windows Sandbox (developer self-test only)."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi"]
+
+[project.entry-points."evalspleef.sandbox_providers"]
+windows-sandbox = "evalspleef_sbx_windows_sandbox.provider:WindowsSandboxProvider"
+
+[project.entry-points."evalspleef.conformance_targets"]
+windows-sandbox = "evalspleef_sbx_windows_sandbox.conformance:build_targets"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef_sbx_windows_sandbox"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }

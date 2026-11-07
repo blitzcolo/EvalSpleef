@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-sbx-k8s-agent-sandbox"
+version = "0.1.0"
+description = "Sandbox provider: kubernetes-sigs/agent-sandbox with gVisor or Kata."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi"]
+
+[project.optional-dependencies]
+k8s = ["kubernetes>=30"]
+
+[project.entry-points."evalspleef.sandbox_providers"]
+k8s-agent-sandbox = "evalspleef_sbx_k8s_agent_sandbox.provider:K8sAgentSandboxProvider"
+
+[project.entry-points."evalspleef.conformance_targets"]
+k8s-agent-sandbox = "evalspleef_sbx_k8s_agent_sandbox.conformance:build_targets"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef_sbx_k8s_agent_sandbox"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }

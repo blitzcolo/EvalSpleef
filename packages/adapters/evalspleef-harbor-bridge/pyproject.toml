@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-harbor-bridge"
+version = "0.1.0"
+description = "Harbor bridge: expose sandbox providers as Harbor environments and run Harbor as an executor."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "evalspleef-core"]
+
+[project.entry-points."evalspleef.runners"]
+harbor = "evalspleef_harbor_bridge.runner:HarborRunner"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef_harbor_bridge"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }
+evalspleef-core = { workspace = true }

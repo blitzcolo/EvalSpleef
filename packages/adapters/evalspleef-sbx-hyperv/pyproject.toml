@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-sbx-hyperv"
+version = "0.1.0"
+description = "Sandbox provider: Hyper-V Windows and Linux VMs."
+requires-python = ">=3.12"
+dependencies = ["evalspleef-spi", "asyncssh>=2.17"]
+
+[project.entry-points."evalspleef.sandbox_providers"]
+hyperv = "evalspleef_sbx_hyperv.provider:HyperVProvider"
+
+[project.entry-points."evalspleef.conformance_targets"]
+hyperv = "evalspleef_sbx_hyperv.conformance:build_targets"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef_sbx_hyperv"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }
