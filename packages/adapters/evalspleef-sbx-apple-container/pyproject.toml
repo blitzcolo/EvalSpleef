@@ -18,5 +18,9 @@ apple-container = "evalspleef_sbx_apple_container.conformance:build_targets"
 [tool.hatch.build.targets.wheel]
 packages = ["src/evalspleef_sbx_apple_container"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/evalspleef_sbx_apple_container/isolation_profile.yaml" = "evalspleef_sbx_apple_container/isolation_profile.yaml"
+"src/evalspleef_sbx_apple_container/probes" = "evalspleef_sbx_apple_container/probes"
+
 [tool.uv.sources]
 evalspleef-spi = { workspace = true }

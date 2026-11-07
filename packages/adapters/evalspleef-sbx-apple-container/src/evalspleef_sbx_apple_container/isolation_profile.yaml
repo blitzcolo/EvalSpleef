@@ -1,0 +1,91 @@
+# Isolation profile for the apple-container sandbox provider (FR-SBX-11).
+# I1-I16 per PRD appendix D.2; generated from evalspleef_sbx_apple_container.isolation
+# (the runtime source of truth) - keep both in sync, the tests enforce it.
+provider: apple-container
+declared_isolation: L3
+verified_isolation: null
+invariants:
+  I1:
+    how: every trial gets a fresh lightweight VM from an immutable OCI image and the container is removed
+      after the trial; the lease id is a label
+    probe: list(labels) returns exactly one instance per lease while live
+    waived: false
+  I2:
+    how: containers start with --read-only; the only writable paths are the tmpfs mounts /tmp, /workspace
+      and the agent home
+    probe: findmnt -no OPTIONS / starts with ro and touch /.__probe fails
+    waived: false
+  I3:
+    how: the VM disk is per-trial and /workspace, /tmp and the agent home are tmpfs; no host directory
+      is ever mounted into the container
+    probe: findmnt -no FSTYPE /workspace is tmpfs; a marker from one trial is absent in the next
+    waived: false
+  I4:
+    how: every container runs in its own VM and network namespace; NetMode.OFF attaches it to an internal
+      network created with 'network create --internal'
+    probe: curl --max-time 3 https://example.com exits non-zero in an off sandbox
+    waived: false
+  I5:
+    how: no --volume/--mount/--ssh flags, no published sockets, --cap-drop ALL and a read-only root filesystem
+      on every container
+    probe: the mount table shows no writable host path and no container socket exists
+    waived: false
+  I6:
+    how: the init process and every exec run as the non-root run_as_user; task images must not ship sudo
+    probe: id -u is not 0 and sudo -n true fails
+    waived: false
+  I7:
+    how: cpu and memory are enforced with '--cpus' and '--memory' (and visible in the guest cgroup); the
+      CLI has no pids or disk quota for a container
+    probe: cat /sys/fs/cgroup/cpu.max and memory.max match the requested resources
+    waived: true
+    reason: the container CLI sets cpu and memory limits but exposes no per-VM pids or disk quota
+    compensating: C-ISO-05 checks cpu and memory; the host keeps disk headroom and the TTL sweep bounds
+      the container lifetime
+    approved_by: evaluation lead
+    expires: '2027-06-30'
+  I8:
+    how: 'the provider injects no evaluation identity: container names are neutral and only spec.env (task
+      environment) plus proxy settings reach an exec'
+    probe: env contains no TASK/BATCH/MODEL/EVAL-style names (runner-side env -i whitelist on top)
+    waived: false
+  I9:
+    how: OCI images are referenced by digest in TemplateRef and run as ref@sha256:...; the only credential
+      allowed in a sandbox is the per-trial gateway key, which the provider never injects
+    probe: the image reference carries a sha256 digest; env scan shows no long-lived credentials
+    waived: false
+  I10:
+    how: verifier and judge roles are separate SandboxSpec roles scheduled to their own containers and
+      leases; the provider never mixes them
+    probe: verifier_lease_id != agent_lease_id for a trial
+    waived: false
+  I11:
+    how: 'download re-validates the copied tree: absolute or escaping symlinks and special files are rejected,
+      setuid/setgid bits are cleared, sizes are capped'
+    probe: downloading a symlink pointing at /etc/passwd raises TransferError
+    waived: false
+  I12:
+    how: hidden tests never enter agent-side images; hash locks live in the task pack, which the provider
+      does not touch
+    probe: tests.sha256 manifest matches the verifier-side files
+    waived: false
+  I13:
+    how: the provider creates a fresh container per trial so no state can carry over; canary token placement
+      is a runner/control-plane concern
+    probe: cross-trial canary scan reports zero critical hits
+    waived: false
+  I14:
+    how: containers are removed at trial end and never returned to a pool; orphans are reclaimed by label
+      through reap() and the TTL sweep, and every container carries spleef.created_at / spleef.expires_at
+    probe: list(labels) is empty after destroy; spleef.expires_at bounds the lifetime
+    waived: false
+  I15:
+    how: judge contexts run in their own trial-scoped container like any other role
+    probe: judge session is unique per trial
+    waived: false
+  I16:
+    how: docs_whitelist/package_mirror are only offered when the provider config names an egress proxy
+      and the policy carries via_proxy; the container then sits on an internal network and reaches only
+      the proxy, which logs URLs. Open networking stays platform-logged
+    probe: the egress proxy's url.jsonl has one line per request; direct egress bypass is not offered
+    waived: false
