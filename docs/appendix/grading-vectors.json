@@ -1,0 +1,765 @@
+{
+  "schema_version": "1.0",
+  "title": "档位判定边界测试向量（12 个基础用例 + 1 个补充用例）",
+  "description": "docs/03-grading.md §9.7 判定表的机器可读版本，供 reference/evalkit 直接转 unittest。输入是 trial 级聚合量与缺陷/反馈事实；期望输出是确定性聚合器应命中的规则与档位。12 个基础用例在 vectors（V01-V12，与文档判定表一一对应），1 个格式违规补充用例在 supplementary_vectors（V13）。聚合器必须先独立算出 derived 中的中间量，再按 §9.2 优先级表命中规则。",
+  "source": "llm-eval/docs/03-grading.md#97-判定表12-个边界用例",
+  "generated_at": "2026-11-06",
+  "input_contract": {
+    "validity": "枚举 valid/invalid/pending/manual（00-conventions §4.7）",
+    "hard_gates_passed": "L1 硬门槛是否全部通过",
+    "cheat_flag": "作弊检测是否命中（隔离/verifier/裁判 guard/网络审计）",
+    "budget": "预算快照；exhausted=true 表示轮数/token/墙钟/费用任一触底",
+    "feedback_rounds": "实质反馈轮（F1-F3）列表，不含 F0 催促",
+    "defects": "去重后的缺陷记录；persisting 不新增记录，修复后复发按新记录",
+    "derived": "由输入确定性计算：max_level、success、multi_round_f1、need_feedback、total_defects、half_step",
+    "note": "half_step 条件为整数比较 3 * need_feedback <= total_defects（只对 max_level=F1 的通过分支生效）"
+  },
+  "vectors": [
+    {
+      "id": "V01",
+      "name": "无缺陷一次过（F0 → Perfect）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 0,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [],
+        "defects": []
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F0",
+          "success": true,
+          "multi_round_f1": 0,
+          "need_feedback": 0,
+          "total_defects": 0,
+          "half_step": false
+        },
+        "rule_id": "G-F0-PERFECT",
+        "tier": "P",
+        "tier_numeric": 7,
+        "penalty": 0,
+        "flags": [],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V02",
+      "name": "只剩 minor（F0 → A）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 0,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [],
+        "defects": [
+          {
+            "defect_id": "R7#1",
+            "rubric_item_id": "R7",
+            "severity": "minor",
+            "first_round": 1,
+            "fixed_round": null,
+            "status": "open",
+            "feedback_rounds": 0,
+            "max_level_during_open": null
+          }
+        ]
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F0",
+          "success": true,
+          "multi_round_f1": 0,
+          "need_feedback": 0,
+          "total_defects": 1,
+          "half_step": false
+        },
+        "rule_id": "G-F0-MINOR",
+        "tier": "A",
+        "tier_numeric": 6,
+        "penalty": 1,
+        "flags": [
+          "minor_only"
+        ],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V03",
+      "name": "F0 特例：无信息量催促不计反馈轮、不降档",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 0,
+          "max_feedback_rounds": 3,
+          "nudges_used": 2,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [],
+        "defects": []
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F0",
+          "success": true,
+          "multi_round_f1": 0,
+          "need_feedback": 0,
+          "total_defects": 0,
+          "half_step": false
+        },
+        "rule_id": "G-F0-PERFECT",
+        "tier": "P",
+        "tier_numeric": 7,
+        "penalty": 0,
+        "flags": [],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V04",
+      "name": "单轮 F1 修复（→ B）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 1,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [
+          {
+            "round": 1,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": true
+          }
+        ],
+        "defects": [
+          {
+            "defect_id": "R1#1",
+            "rubric_item_id": "R1",
+            "severity": "functional",
+            "first_round": 1,
+            "fixed_round": 2,
+            "status": "fixed",
+            "feedback_rounds": 1,
+            "max_level_during_open": "F1"
+          }
+        ]
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F1",
+          "success": true,
+          "multi_round_f1": 0,
+          "need_feedback": 1,
+          "total_defects": 1,
+          "half_step": false
+        },
+        "rule_id": "G-F1-B",
+        "tier": "B",
+        "tier_numeric": 4,
+        "penalty": 3,
+        "flags": [],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V05",
+      "name": "单轮 F1 + 半档（1/3 缺陷需反馈 → B+）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 1,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [
+          {
+            "round": 1,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": true
+          }
+        ],
+        "defects": [
+          {
+            "defect_id": "R1#1",
+            "rubric_item_id": "R1",
+            "severity": "functional",
+            "first_round": 1,
+            "fixed_round": 2,
+            "status": "fixed",
+            "feedback_rounds": 1,
+            "max_level_during_open": "F1"
+          },
+          {
+            "defect_id": "R7#1",
+            "rubric_item_id": "R7",
+            "severity": "minor",
+            "first_round": 1,
+            "fixed_round": null,
+            "status": "open",
+            "feedback_rounds": 0,
+            "max_level_during_open": null
+          },
+          {
+            "defect_id": "R8#1",
+            "rubric_item_id": "R8",
+            "severity": "minor",
+            "first_round": 1,
+            "fixed_round": null,
+            "status": "open",
+            "feedback_rounds": 0,
+            "max_level_during_open": null
+          }
+        ]
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F1",
+          "success": true,
+          "multi_round_f1": 0,
+          "need_feedback": 1,
+          "total_defects": 3,
+          "half_step": true
+        },
+        "rule_id": "G-F1-BPLUS",
+        "tier": "B+",
+        "tier_numeric": 5,
+        "penalty": 5,
+        "flags": [
+          "half_step"
+        ],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V06",
+      "name": "同一缺陷多轮 F1 才修好（→ C）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 2,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [
+          {
+            "round": 1,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": false
+          },
+          {
+            "round": 2,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": true
+          }
+        ],
+        "defects": [
+          {
+            "defect_id": "R1#1",
+            "rubric_item_id": "R1",
+            "severity": "functional",
+            "first_round": 1,
+            "fixed_round": 3,
+            "status": "fixed",
+            "feedback_rounds": 2,
+            "max_level_during_open": "F1"
+          }
+        ]
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F1",
+          "success": true,
+          "multi_round_f1": 1,
+          "need_feedback": 1,
+          "total_defects": 1,
+          "half_step": false
+        },
+        "rule_id": "G-F1-C",
+        "tier": "C",
+        "tier_numeric": 2,
+        "penalty": 3,
+        "flags": [
+          "f1_multiround"
+        ],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V07",
+      "name": "多轮 F1 + 半档（→ C+）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 2,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [
+          {
+            "round": 1,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": false
+          },
+          {
+            "round": 2,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": true
+          }
+        ],
+        "defects": [
+          {
+            "defect_id": "R1#1",
+            "rubric_item_id": "R1",
+            "severity": "functional",
+            "first_round": 1,
+            "fixed_round": 3,
+            "status": "fixed",
+            "feedback_rounds": 2,
+            "max_level_during_open": "F1"
+          },
+          {
+            "defect_id": "R7#1",
+            "rubric_item_id": "R7",
+            "severity": "minor",
+            "first_round": 1,
+            "fixed_round": null,
+            "status": "open",
+            "feedback_rounds": 0,
+            "max_level_during_open": null
+          },
+          {
+            "defect_id": "R8#1",
+            "rubric_item_id": "R8",
+            "severity": "minor",
+            "first_round": 1,
+            "fixed_round": null,
+            "status": "open",
+            "feedback_rounds": 0,
+            "max_level_during_open": null
+          }
+        ]
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F1",
+          "success": true,
+          "multi_round_f1": 1,
+          "need_feedback": 1,
+          "total_defects": 3,
+          "half_step": true
+        },
+        "rule_id": "G-F1-CPLUS",
+        "tier": "C+",
+        "tier_numeric": 3,
+        "penalty": 5,
+        "flags": [
+          "f1_multiround",
+          "half_step"
+        ],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V08",
+      "name": "升级到 F2 后修复（→ D）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 2,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [
+          {
+            "round": 1,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": false
+          },
+          {
+            "round": 2,
+            "level": "F2",
+            "defect_id": "R1#1",
+            "made_progress": true
+          }
+        ],
+        "defects": [
+          {
+            "defect_id": "R1#1",
+            "rubric_item_id": "R1",
+            "severity": "functional",
+            "first_round": 1,
+            "fixed_round": 3,
+            "status": "fixed",
+            "feedback_rounds": 2,
+            "max_level_during_open": "F2"
+          }
+        ]
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F2",
+          "success": true,
+          "multi_round_f1": 0,
+          "need_feedback": 1,
+          "total_defects": 1,
+          "half_step": false
+        },
+        "rule_id": "G-F2-D",
+        "tier": "D",
+        "tier_numeric": 1,
+        "penalty": 3,
+        "flags": [],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V09",
+      "name": "升级到 F3 后修复（→ D）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 4,
+          "max_feedback_rounds": 5,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [
+          {
+            "round": 1,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": false
+          },
+          {
+            "round": 2,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": false
+          },
+          {
+            "round": 3,
+            "level": "F2",
+            "defect_id": "R1#1",
+            "made_progress": false
+          },
+          {
+            "round": 4,
+            "level": "F3",
+            "defect_id": "R1#1",
+            "made_progress": true
+          }
+        ],
+        "defects": [
+          {
+            "defect_id": "R1#1",
+            "rubric_item_id": "R1",
+            "severity": "functional",
+            "first_round": 1,
+            "fixed_round": 5,
+            "status": "fixed",
+            "feedback_rounds": 4,
+            "max_level_during_open": "F3"
+          }
+        ]
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F3",
+          "success": true,
+          "multi_round_f1": 0,
+          "need_feedback": 1,
+          "total_defects": 1,
+          "half_step": false
+        },
+        "rule_id": "G-F3-D",
+        "tier": "D",
+        "tier_numeric": 1,
+        "penalty": 3,
+        "flags": [],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V10",
+      "name": "预算耗尽且硬门槛未过（→ Failed）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": false,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 3,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": true,
+          "exhausted_by": "rounds"
+        },
+        "feedback_rounds": [
+          {
+            "round": 1,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": false
+          },
+          {
+            "round": 2,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": false
+          },
+          {
+            "round": 3,
+            "level": "F2",
+            "defect_id": "R1#1",
+            "made_progress": false
+          }
+        ],
+        "defects": [
+          {
+            "defect_id": "R1#1",
+            "rubric_item_id": "R1",
+            "severity": "functional",
+            "first_round": 1,
+            "fixed_round": null,
+            "status": "persisting",
+            "feedback_rounds": 3,
+            "max_level_during_open": "F2"
+          },
+          {
+            "defect_id": "R2#1",
+            "rubric_item_id": "R2",
+            "severity": "fatal",
+            "first_round": 1,
+            "fixed_round": null,
+            "status": "open",
+            "feedback_rounds": 0,
+            "max_level_during_open": null
+          }
+        ]
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F2",
+          "success": false,
+          "multi_round_f1": 0,
+          "need_feedback": 0,
+          "total_defects": 2,
+          "half_step": false
+        },
+        "rule_id": "G-BUDGET-F",
+        "tier": "F",
+        "tier_numeric": 0,
+        "penalty": 8,
+        "flags": [
+          "budget_exhausted",
+          "hard_gate_failed"
+        ],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V11",
+      "name": "作弊命中（→ F，判 0 并标记）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": true,
+        "budget": {
+          "feedback_rounds_used": 1,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [
+          {
+            "round": 1,
+            "level": "F1",
+            "defect_id": "R1#1",
+            "made_progress": true
+          }
+        ],
+        "defects": [
+          {
+            "defect_id": "R1#1",
+            "rubric_item_id": "R1",
+            "severity": "functional",
+            "first_round": 1,
+            "fixed_round": 2,
+            "status": "fixed",
+            "feedback_rounds": 1,
+            "max_level_during_open": "F1"
+          }
+        ]
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F1",
+          "success": true,
+          "multi_round_f1": 0,
+          "need_feedback": 1,
+          "total_defects": 1,
+          "half_step": false
+        },
+        "rule_id": "G-CHEAT-01",
+        "tier": "F",
+        "tier_numeric": 0,
+        "penalty": 0,
+        "flags": [
+          "cheat",
+          "zeroed"
+        ],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    },
+    {
+      "id": "V12",
+      "name": "裁判不可用/一致性低 → 人工仲裁（不出自动档位）",
+      "inputs": {
+        "validity": "manual",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 0,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [],
+        "defects": [],
+        "manual_reason": "judge_timeout_after_retries"
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F0",
+          "success": true,
+          "multi_round_f1": 0,
+          "need_feedback": 0,
+          "total_defects": 0,
+          "half_step": false
+        },
+        "rule_id": "G-HUMAN-99",
+        "tier": null,
+        "tier_numeric": null,
+        "penalty": null,
+        "flags": [
+          "manual_arbitration"
+        ],
+        "counted_in_leaderboard": false,
+        "requires_human": true,
+        "no_grade": true
+      }
+    }
+  ],
+  "supplementary_vectors": [
+    {
+      "id": "V13",
+      "name": "逻辑题格式违规（→ F + format_violation，判 0）",
+      "inputs": {
+        "validity": "valid",
+        "hard_gates_passed": true,
+        "cheat_flag": false,
+        "budget": {
+          "feedback_rounds_used": 0,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "feedback_rounds": [],
+        "defects": [],
+        "format_violation": "题目要求只给最终数值且不写解释；产物包含完整推导与 Python 代码块"
+      },
+      "expected": {
+        "derived": {
+          "max_level": "F0",
+          "success": true,
+          "multi_round_f1": 0,
+          "need_feedback": 0,
+          "total_defects": 0,
+          "half_step": false
+        },
+        "rule_id": "G-FORMAT-05",
+        "tier": "F",
+        "tier_numeric": 0,
+        "penalty": 0,
+        "flags": [
+          "format_violation",
+          "zeroed"
+        ],
+        "counted_in_leaderboard": true,
+        "requires_human": false
+      }
+    }
+  ]
+}
