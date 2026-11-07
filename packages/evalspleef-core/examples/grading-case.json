@@ -1,0 +1,105 @@
+{
+  "trial_id": "web-001.demo-model.claude-code.e1.t01",
+  "validity": "valid",
+  "hard_gates": [
+    {
+      "check_id": "HG1",
+      "passed": true
+    },
+    {
+      "check_id": "HG2",
+      "passed": true
+    }
+  ],
+  "defects": [
+    {
+      "defect_id": "R1#1",
+      "rubric_item_id": "R1",
+      "severity": "functional",
+      "status": "fixed",
+      "first_round": 1,
+      "last_round": 2,
+      "rounds_failed": [
+        1
+      ],
+      "fixed_round": 2,
+      "feedback_rounds": 1,
+      "max_level_during_open": "F1",
+      "progress": "fixed",
+      "evidence": []
+    },
+    {
+      "defect_id": "R3#1",
+      "rubric_item_id": "R3",
+      "severity": "minor",
+      "status": "open",
+      "first_round": 1,
+      "last_round": 2,
+      "rounds_failed": [
+        1,
+        2
+      ],
+      "fixed_round": null,
+      "feedback_rounds": 0,
+      "max_level_during_open": null,
+      "progress": "none",
+      "evidence": []
+    },
+    {
+      "defect_id": "R4#1",
+      "rubric_item_id": "R4",
+      "severity": "minor",
+      "status": "open",
+      "first_round": 1,
+      "last_round": 2,
+      "rounds_failed": [
+        1,
+        2
+      ],
+      "fixed_round": null,
+      "feedback_rounds": 0,
+      "max_level_during_open": null,
+      "progress": "none",
+      "evidence": []
+    }
+  ],
+  "feedback_rounds": [
+    {
+      "round": 1,
+      "level": "F1",
+      "defect_ids": [
+        "R1#1"
+      ],
+      "made_progress": true
+    }
+  ],
+  "budget": {
+    "max_rounds": 6,
+    "max_feedback_rounds": 3,
+    "max_nudges": 2,
+    "max_total_tokens": 2000000,
+    "max_wall_clock_s": 3600,
+    "max_cost_usd": 15.0,
+    "max_observe_s": 600,
+    "escalation": {
+      "f1_no_progress_rounds": 2,
+      "f2_no_progress_rounds": 2
+    }
+  },
+  "usage": {
+    "rounds": 2,
+    "feedback_rounds": 1,
+    "nudges": 0,
+    "total_tokens": 180000,
+    "wall_clock_s": 420.0,
+    "agent_cost_usd": 12.34,
+    "judge_cost_usd": 1.2,
+    "user_cost_usd": 0.3
+  },
+  "judge_consistency": 0.9,
+  "judge_samples": 10,
+  "decided_at": "2026-11-06T08:10:00Z",
+  "rubric_version": "1.3.0",
+  "task_version": "1.2.0",
+  "boundary_review": false
+}

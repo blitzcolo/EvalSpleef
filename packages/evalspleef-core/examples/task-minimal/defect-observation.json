@@ -1,0 +1,84 @@
+{
+  "document_type": "observation",
+  "schema_version": "1.0",
+  "trial_id": "web-001.claude-sonnet-5.claude-code.e1.t01",
+  "round": 2,
+  "observed_at": "2026-11-06T08:05:00Z",
+  "source": "mixed",
+  "items": [
+    {
+      "defect_id": "R1#1",
+      "rubric_item_id": "R1",
+      "severity": "functional",
+      "status": "fixed",
+      "first_round": 1,
+      "last_round": 2,
+      "rounds_failed": [
+        1
+      ],
+      "fixed_round": 2,
+      "feedback_rounds": 1,
+      "max_level_during_open": "F1",
+      "progress": "fixed",
+      "evidence": [
+        {
+          "kind": "screenshot",
+          "uri": "s3://llm-eval/web-001/r1-round1.png"
+        }
+      ]
+    },
+    {
+      "defect_id": "R3#1",
+      "rubric_item_id": "R3",
+      "severity": "minor",
+      "status": "open",
+      "first_round": 1,
+      "last_round": 2,
+      "rounds_failed": [
+        1,
+        2
+      ],
+      "fixed_round": null,
+      "feedback_rounds": 0,
+      "max_level_during_open": null,
+      "progress": "none",
+      "evidence": [
+        {
+          "kind": "screenshot",
+          "uri": "s3://llm-eval/web-001/r3-round2.png"
+        }
+      ]
+    },
+    {
+      "defect_id": "R4#1",
+      "rubric_item_id": "R4",
+      "severity": "minor",
+      "status": "open",
+      "first_round": 1,
+      "last_round": 2,
+      "rounds_failed": [
+        1,
+        2
+      ],
+      "fixed_round": null,
+      "feedback_rounds": 0,
+      "max_level_during_open": null,
+      "progress": "none",
+      "evidence": []
+    }
+  ],
+  "summary": {
+    "new": 0,
+    "persisting": 2,
+    "fixed": 1,
+    "open": 2,
+    "blocking_open": 0,
+    "total_discovered": 3,
+    "defects_requiring_feedback": 1,
+    "by_severity": {
+      "minor": 2,
+      "functional": 1,
+      "fatal": 0
+    }
+  }
+}

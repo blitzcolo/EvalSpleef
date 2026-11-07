@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "task_id": "web-001",
+  "rubric_version": "1.3.0",
+  "items": [
+    {
+      "id": "R1",
+      "kind": "llm_judge",
+      "severity": "functional",
+      "description": "提交表单后出现成功结果面板",
+      "f1_symptom": "填写表单点击提交后，页面没有任何结果提示",
+      "judge_question": "提交表单后是否出现成功结果面板",
+      "pass_criteria": "提交后 3 秒内出现带成功文案的结果面板",
+      "applies_to": [
+        "screenshot"
+      ],
+      "f2_evidence": "Uncaught TypeError: submitForm is not a function",
+      "f3_visual": "截图右侧结果区域为空，按钮保持禁用状态"
+    },
+    {
+      "id": "R2",
+      "kind": "llm_judge",
+      "severity": "functional",
+      "description": "刷新页面后已提交的数据仍在",
+      "f1_symptom": "刷新页面后刚才填写的内容全部消失",
+      "judge_question": "刷新页面后已提交的数据是否仍然存在",
+      "pass_criteria": "刷新后列表仍显示刚提交的记录",
+      "applies_to": [
+        "screenshot"
+      ]
+    },
+    {
+      "id": "R3",
+      "kind": "llm_judge",
+      "severity": "minor",
+      "description": "按钮在窄屏下不换行",
+      "f1_symptom": "窗口变窄时按钮文字挤在一起",
+      "judge_question": "窄屏下按钮文字是否不重叠",
+      "pass_criteria": "360px 宽时按钮文字不重叠",
+      "applies_to": [
+        "screenshot"
+      ],
+      "hidden": true
+    },
+    {
+      "id": "R4",
+      "kind": "llm_judge",
+      "severity": "minor",
+      "description": "错误提示文案语气一致",
+      "f1_symptom": "错误提示有的很正式有的很随意",
+      "judge_question": "错误提示文案语气是否一致",
+      "pass_criteria": "全部错误提示使用同一语气模板",
+      "applies_to": [
+        "screenshot"
+      ]
+    },
+    {
+      "id": "R5",
+      "kind": "llm_judge",
+      "severity": "minor",
+      "description": "深色模式下对比度达标",
+      "f1_symptom": "深色模式里部分文字看不清",
+      "judge_question": "深色模式下文字与背景对比度是否达标",
+      "pass_criteria": "深色模式文字对比度 >= 4.5:1",
+      "applies_to": [
+        "screenshot"
+      ]
+    },
+    {
+      "id": "R6",
+      "kind": "llm_judge",
+      "severity": "minor",
+      "description": "提交按钮有加载状态",
+      "f1_symptom": "点击提交后按钮没有反应提示",
+      "judge_question": "提交过程中按钮是否显示加载状态",
+      "pass_criteria": "提交后 300ms 内按钮出现 loading 状态",
+      "applies_to": [
+        "screenshot"
+      ],
+      "hidden": true
+    }
+  ],
+  "title": "订单表单页"
+}

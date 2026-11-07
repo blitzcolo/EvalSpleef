@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0",
+  "trial_id": "web-001.claude-sonnet-5.claude-code.e1.t01",
+  "feedback_index": 1,
+  "kind": "feedback",
+  "level": "F1",
+  "target_defect_id": "R1#1",
+  "allowed_fields": [
+    "f1_symptom"
+  ],
+  "text": "我填好表单点提交以后，页面没有任何成功提示，也没有报错；我期望看到结果面板。",
+  "text_hash": "97c9b53e01c5c650d2575f224fffc2c8d8e3be73934d40fc9d79c9fdbe95a16c",
+  "template_id": "F1-FORM-BLANK",
+  "leak_check": {
+    "passed": true,
+    "rule_ids_hit": [],
+    "categories_hit": [],
+    "model_check": {
+      "model": "",
+      "verdict": "clean",
+      "reasons": []
+    },
+    "rewrite_count": 0,
+    "fallback_used": false,
+    "final_action": "send"
+  },
+  "budget": {
+    "feedback_rounds_used": 0,
+    "max_feedback_rounds": 3,
+    "nudges_used": 0,
+    "max_nudges": 2,
+    "tokens_used": 90000,
+    "max_total_tokens": 2000000,
+    "wall_clock_s": 210.0,
+    "max_wall_clock_s": 3600,
+    "cost_usd_used": 6.1,
+    "max_cost_usd": 15.0,
+    "exhausted": false,
+    "exhausted_by": null
+  },
+  "decided_at": "2026-11-06T07:52:00Z",
+  "delivery": {
+    "status": "sent",
+    "sent_at": "2026-11-06T07:52:05Z"
+  }
+}

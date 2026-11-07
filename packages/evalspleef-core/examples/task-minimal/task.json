@@ -1,0 +1,89 @@
+{
+  "id": "web-001",
+  "version": "1.2.0",
+  "track": "web",
+  "title": "订单表单页（最小示例）",
+  "platform": "linux-container",
+  "difficulty": 3,
+  "instruction": "instruction.md",
+  "persona": "persona.md",
+  "rubric_ref": "rubric.yaml",
+  "defects_ref": "defects.yaml",
+  "isolation": {
+    "agent_user": "agent",
+    "environment_mode": "separate",
+    "network_mode": "no-network"
+  },
+  "reference_solutions": [
+    {
+      "id": "a",
+      "path": "answers/reference-a.html",
+      "approach": "原生 JS + DOM API",
+      "runnable": false,
+      "notes": "Node 本地起静态服务器验证。"
+    },
+    {
+      "id": "b",
+      "path": "answers/reference-b.tsx",
+      "approach": "React 受控组件",
+      "runnable": false,
+      "notes": "Vite 构建后静态验证。"
+    }
+  ],
+  "resources": {
+    "image": "ghcr.io/llm-eval/web-001",
+    "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cpu": 2,
+    "memory_mb": 4096,
+    "disk_mb": 10240,
+    "network": false,
+    "tools": [
+      "screenshot",
+      "browser"
+    ]
+  },
+  "budget": {
+    "max_rounds": 6,
+    "max_feedback_rounds": 3,
+    "max_nudges": 2,
+    "max_total_tokens": 2000000,
+    "max_wall_clock_s": 3600,
+    "max_cost_usd": 15.0,
+    "max_observe_s": 600,
+    "escalation": {
+      "f1_no_progress_rounds": 2,
+      "f2_no_progress_rounds": 2
+    }
+  },
+  "hard_gates": [
+    {
+      "id": "HG1",
+      "title": "可见交互测试全过",
+      "kind": "script",
+      "script": "bash hidden-tests/run.sh",
+      "required": true,
+      "pass_condition": "退出码 0 且 JSON 结果 passed=true",
+      "description": "Playwright 驱动表单提交与刷新断言。"
+    },
+    {
+      "id": "HG2",
+      "title": "产物文件存在",
+      "kind": "script",
+      "script": "python3 hidden-tests/check_artifacts.py",
+      "required": true,
+      "pass_condition": "退出码 0",
+      "description": "检查构建产物与 source map。"
+    }
+  ],
+  "canary": {
+    "manifest": "canary.md",
+    "locations": [
+      "src/app.js#L1 注释",
+      "data/sample.json 的 note 字段"
+    ],
+    "expected_trace": [
+      "第 1 次 read src/app.js"
+    ]
+  },
+  "status": "active"
+}

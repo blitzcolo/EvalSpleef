@@ -1,0 +1,449 @@
+{
+  "schema_version": "1.0",
+  "trial_id": "web-001.claude-sonnet-5.claude-code.e1.t01",
+  "batch_id": "2026-11-b1",
+  "cell_id": "web-001.claude-sonnet-5.claude-code",
+  "task": {
+    "id": "web-001",
+    "version": "1.2.0",
+    "track": "web",
+    "platform": "linux-container"
+  },
+  "model": {
+    "slug": "claude-sonnet-5",
+    "provider": "anthropic",
+    "version": "2026-10-01"
+  },
+  "shell": {
+    "slug": "claude-code",
+    "version": "2.0.14",
+    "mode": "native"
+  },
+  "epoch": 1,
+  "index": 1,
+  "state": "scored",
+  "validity": "valid",
+  "terminal_condition": "P2",
+  "budget": {
+    "max_rounds": 6,
+    "max_feedback_rounds": 3,
+    "max_nudges": 2,
+    "max_total_tokens": 2000000,
+    "max_wall_clock_s": 3600,
+    "max_cost_usd": 15.0,
+    "max_observe_s": 600,
+    "escalation": {
+      "f1_no_progress_rounds": 2,
+      "f2_no_progress_rounds": 2
+    }
+  },
+  "rounds": [
+    {
+      "round_no": 1,
+      "started_at": "2026-11-06T07:40:00Z",
+      "stop_reason": "completed",
+      "usage": {
+        "input_tokens": 60000,
+        "output_tokens": 30000,
+        "cost_usd": 6.1
+      },
+      "hard_gates": [
+        {
+          "check_id": "HG1",
+          "result": "fail"
+        },
+        {
+          "check_id": "HG2",
+          "result": "fail"
+        }
+      ],
+      "defects": [
+        {
+          "defect_id": "R1#1",
+          "rubric_item_id": "R1",
+          "severity": "functional",
+          "status": "open",
+          "first_round": 1,
+          "feedback_rounds": 1,
+          "counted": true,
+          "fixed_round": 2,
+          "max_level_during_open": "F1"
+        },
+        {
+          "defect_id": "R3#1",
+          "rubric_item_id": "R3",
+          "severity": "minor",
+          "status": "new",
+          "first_round": 1,
+          "feedback_rounds": 0,
+          "counted": true,
+          "max_level_during_open": null
+        },
+        {
+          "defect_id": "R4#1",
+          "rubric_item_id": "R4",
+          "severity": "minor",
+          "status": "new",
+          "first_round": 1,
+          "feedback_rounds": 0,
+          "counted": true,
+          "max_level_during_open": null
+        }
+      ],
+      "feedback": {
+        "schema_version": "1.0",
+        "trial_id": "web-001.claude-sonnet-5.claude-code.e1.t01",
+        "feedback_index": 1,
+        "kind": "feedback",
+        "level": "F1",
+        "target_defect_id": "R1#1",
+        "allowed_fields": [
+          "f1_symptom"
+        ],
+        "text": "我填好表单点提交以后，页面没有任何成功提示，也没有报错；我期望看到结果面板。",
+        "text_hash": "97c9b53e01c5c650d2575f224fffc2c8d8e3be73934d40fc9d79c9fdbe95a16c",
+        "template_id": "F1-FORM-BLANK",
+        "leak_check": {
+          "passed": true,
+          "rule_ids_hit": [],
+          "categories_hit": [],
+          "model_check": {
+            "model": "",
+            "verdict": "clean",
+            "reasons": []
+          },
+          "rewrite_count": 0,
+          "fallback_used": false,
+          "final_action": "send"
+        },
+        "budget": {
+          "feedback_rounds_used": 0,
+          "max_feedback_rounds": 3,
+          "nudges_used": 0,
+          "max_nudges": 2,
+          "tokens_used": 90000,
+          "max_total_tokens": 2000000,
+          "wall_clock_s": 210.0,
+          "max_wall_clock_s": 3600,
+          "cost_usd_used": 6.1,
+          "max_cost_usd": 15.0,
+          "exhausted": false,
+          "exhausted_by": null
+        },
+        "decided_at": "2026-11-06T07:52:00Z",
+        "delivery": {
+          "status": "sent",
+          "sent_at": "2026-11-06T07:52:05Z"
+        }
+      }
+    },
+    {
+      "round_no": 2,
+      "started_at": "2026-11-06T07:58:00Z",
+      "stop_reason": "completed",
+      "usage": {
+        "input_tokens": 60000,
+        "output_tokens": 30000,
+        "cost_usd": 6.24
+      },
+      "hard_gates": [
+        {
+          "check_id": "HG1",
+          "result": "pass"
+        },
+        {
+          "check_id": "HG2",
+          "result": "pass"
+        }
+      ],
+      "defects": [
+        {
+          "defect_id": "R1#1",
+          "rubric_item_id": "R1",
+          "severity": "functional",
+          "status": "fixed",
+          "first_round": 1,
+          "feedback_rounds": 1,
+          "counted": true,
+          "fixed_round": 2,
+          "max_level_during_open": "F1"
+        },
+        {
+          "defect_id": "R3#1",
+          "rubric_item_id": "R3",
+          "severity": "minor",
+          "status": "persisting",
+          "first_round": 1,
+          "feedback_rounds": 0,
+          "counted": true,
+          "max_level_during_open": null
+        },
+        {
+          "defect_id": "R4#1",
+          "rubric_item_id": "R4",
+          "severity": "minor",
+          "status": "persisting",
+          "first_round": 1,
+          "feedback_rounds": 0,
+          "counted": true,
+          "max_level_during_open": null
+        }
+      ],
+      "feedback": null
+    }
+  ],
+  "isolation": {
+    "sandbox": {
+      "provider": "docker",
+      "host": "host-07",
+      "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "isolation_mode": "container",
+      "network_mode": "off",
+      "root_readonly": true,
+      "non_root_user": "agent",
+      "quota": {
+        "cpu": 2,
+        "memory_mb": 4096,
+        "disk_mb": 10240,
+        "pids": 512,
+        "wall_clock_s": 3600
+      },
+      "lease_id": "lease-web001-e1-t01"
+    },
+    "canary": {
+      "token": "CNRY-8e9fa230-9f3a1c02",
+      "placements": [
+        {
+          "path": "src/app.js",
+          "kind": "comment"
+        },
+        {
+          "path": "data/sample.json",
+          "kind": "sample_data"
+        }
+      ],
+      "hits": [],
+      "scan_status": "clean"
+    },
+    "checks": [
+      {
+        "id": "I1",
+        "result": "pass"
+      }
+    ],
+    "leaks": [],
+    "network": {
+      "mode": "off",
+      "allowlist": [],
+      "blocked_requests": 0,
+      "bypass_attempts": 0
+    },
+    "secrets": {
+      "api_key_in_sandbox": false,
+      "ssh_control_plane_only": true,
+      "per_trial_key": true,
+      "log_redaction": true
+    }
+  },
+  "result": {
+    "hard_gates": [
+      {
+        "check_id": "HG1",
+        "result": "pass"
+      },
+      {
+        "check_id": "HG2",
+        "result": "pass"
+      }
+    ],
+    "defects": [
+      {
+        "defect_id": "R1#1",
+        "rubric_item_id": "R1",
+        "severity": "functional",
+        "status": "fixed",
+        "first_round": 1,
+        "feedback_rounds": 1,
+        "counted": true,
+        "fixed_round": 2,
+        "max_level_during_open": "F1"
+      },
+      {
+        "defect_id": "R3#1",
+        "rubric_item_id": "R3",
+        "severity": "minor",
+        "status": "persisting",
+        "first_round": 1,
+        "feedback_rounds": 0,
+        "counted": true,
+        "max_level_during_open": null
+      },
+      {
+        "defect_id": "R4#1",
+        "rubric_item_id": "R4",
+        "severity": "minor",
+        "status": "persisting",
+        "first_round": 1,
+        "feedback_rounds": 0,
+        "counted": true,
+        "max_level_during_open": null
+      }
+    ],
+    "grades": [
+      {
+        "schema_version": "1.0",
+        "trial_id": "web-001.claude-sonnet-5.claude-code.e1.t01",
+        "grade_version": 1,
+        "supersedes": null,
+        "tier": "B+",
+        "tier_numeric": 5,
+        "status": "final",
+        "validity": "valid",
+        "counted_in_leaderboard": true,
+        "flags": [
+          "half_step"
+        ],
+        "decided_by": "auto",
+        "decided_at": "2026-11-06T08:10:00Z",
+        "hard_gate_summary": {
+          "passed": true,
+          "total": 2,
+          "failed": [],
+          "evidence_uri": "s3://llm-eval/web-001/hidden-tests.log"
+        },
+        "defect_summary": {
+          "total": 3,
+          "by_severity": {
+            "minor": 2,
+            "functional": 1,
+            "fatal": 0
+          },
+          "open_blocking": 0,
+          "fixed": 1,
+          "requiring_feedback": 1,
+          "multi_round_f1": 0,
+          "regressed": 0
+        },
+        "feedback_summary": {
+          "max_level": "F1",
+          "feedback_rounds": 1,
+          "level_counts": {
+            "F0": 0,
+            "F1": 1,
+            "F2": 0,
+            "F3": 0
+          },
+          "nudges_used": 0,
+          "total_defects": 3,
+          "need_feedback": 1,
+          "half_step_applied": true,
+          "multi_round_f1": 0
+        },
+        "penalty": 5,
+        "penalty_breakdown": [
+          {
+            "defect_id": "R1#1",
+            "rubric_item_id": "R1",
+            "severity": "functional",
+            "weight": 3,
+            "first_round": 1,
+            "counted": true
+          },
+          {
+            "defect_id": "R3#1",
+            "rubric_item_id": "R3",
+            "severity": "minor",
+            "weight": 1,
+            "first_round": 1,
+            "counted": true
+          },
+          {
+            "defect_id": "R4#1",
+            "rubric_item_id": "R4",
+            "severity": "minor",
+            "weight": 1,
+            "first_round": 1,
+            "counted": true
+          }
+        ],
+        "cost": {
+          "agent": 12.34,
+          "judge": 1.2,
+          "user": 0.3,
+          "total": 13.84,
+          "currency": "USD"
+        },
+        "consistency": {
+          "metric": "percent_agreement",
+          "value": 0.9,
+          "samples": 10,
+          "threshold": 0.6,
+          "note": "评审团逐条采样一致率"
+        },
+        "decision": {
+          "rule_id": "G-F1-BPLUS",
+          "priority": 6,
+          "rationale": "hard_gates_passed=True, open_blocking=0, max_level=F1, multi_round_f1=0, need_feedback=1/3, half_step=True；单轮 F1 修复"
+        },
+        "rubric_version": "1.3.0",
+        "task_version": "1.2.0",
+        "judge_panel": [],
+        "defects": [
+          {
+            "defect_id": "R1#1",
+            "rubric_item_id": "R1",
+            "severity": "functional",
+            "status": "fixed",
+            "first_round": 1,
+            "feedback_rounds": 1,
+            "counted": true,
+            "fixed_round": 2,
+            "max_level_during_open": "F1"
+          },
+          {
+            "defect_id": "R3#1",
+            "rubric_item_id": "R3",
+            "severity": "minor",
+            "status": "open",
+            "first_round": 1,
+            "feedback_rounds": 0,
+            "counted": true,
+            "max_level_during_open": null
+          },
+          {
+            "defect_id": "R4#1",
+            "rubric_item_id": "R4",
+            "severity": "minor",
+            "status": "open",
+            "first_round": 1,
+            "feedback_rounds": 0,
+            "counted": true,
+            "max_level_during_open": null
+          }
+        ]
+      }
+    ],
+    "cost": {
+      "agent": 12.34,
+      "judge": 1.2,
+      "user": 0.3,
+      "total": 13.84,
+      "currency": "USD"
+    },
+    "versions": {
+      "task_version": "1.2.0",
+      "model_version": "2026-10-01",
+      "shell_version": "2.0.14",
+      "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rubric_version": "1.3.0",
+      "grader_version": "evalspleef-core-0.1.0",
+      "freeze_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "timestamps": {
+    "created_at": "2026-11-06T07:30:00Z"
+  },
+  "audit": {
+    "events_uri": "s3://llm-eval/audit/web-001.e1.t01.jsonl"
+  }
+}

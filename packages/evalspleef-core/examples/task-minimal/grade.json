@@ -1,0 +1,132 @@
+{
+  "schema_version": "1.0",
+  "trial_id": "web-001.claude-sonnet-5.claude-code.e1.t01",
+  "grade_version": 1,
+  "supersedes": null,
+  "tier": "B+",
+  "tier_numeric": 5,
+  "status": "final",
+  "validity": "valid",
+  "counted_in_leaderboard": true,
+  "flags": [
+    "half_step"
+  ],
+  "decided_by": "auto",
+  "decided_at": "2026-11-06T08:10:00Z",
+  "hard_gate_summary": {
+    "passed": true,
+    "total": 2,
+    "failed": [],
+    "evidence_uri": "s3://llm-eval/web-001/hidden-tests.log"
+  },
+  "defect_summary": {
+    "total": 3,
+    "by_severity": {
+      "minor": 2,
+      "functional": 1,
+      "fatal": 0
+    },
+    "open_blocking": 0,
+    "fixed": 1,
+    "requiring_feedback": 1,
+    "multi_round_f1": 0,
+    "regressed": 0
+  },
+  "feedback_summary": {
+    "max_level": "F1",
+    "feedback_rounds": 1,
+    "level_counts": {
+      "F0": 0,
+      "F1": 1,
+      "F2": 0,
+      "F3": 0
+    },
+    "nudges_used": 0,
+    "total_defects": 3,
+    "need_feedback": 1,
+    "half_step_applied": true,
+    "multi_round_f1": 0
+  },
+  "penalty": 5,
+  "penalty_breakdown": [
+    {
+      "defect_id": "R1#1",
+      "rubric_item_id": "R1",
+      "severity": "functional",
+      "weight": 3,
+      "first_round": 1,
+      "counted": true
+    },
+    {
+      "defect_id": "R3#1",
+      "rubric_item_id": "R3",
+      "severity": "minor",
+      "weight": 1,
+      "first_round": 1,
+      "counted": true
+    },
+    {
+      "defect_id": "R4#1",
+      "rubric_item_id": "R4",
+      "severity": "minor",
+      "weight": 1,
+      "first_round": 1,
+      "counted": true
+    }
+  ],
+  "cost": {
+    "agent": 12.34,
+    "judge": 1.2,
+    "user": 0.3,
+    "total": 13.84,
+    "currency": "USD"
+  },
+  "consistency": {
+    "metric": "percent_agreement",
+    "value": 0.9,
+    "samples": 10,
+    "threshold": 0.6,
+    "note": "评审团逐条采样一致率"
+  },
+  "decision": {
+    "rule_id": "G-F1-BPLUS",
+    "priority": 6,
+    "rationale": "hard_gates_passed=True, open_blocking=0, max_level=F1, multi_round_f1=0, need_feedback=1/3, half_step=True；单轮 F1 修复"
+  },
+  "rubric_version": "1.3.0",
+  "task_version": "1.2.0",
+  "judge_panel": [],
+  "defects": [
+    {
+      "defect_id": "R1#1",
+      "rubric_item_id": "R1",
+      "severity": "functional",
+      "status": "fixed",
+      "first_round": 1,
+      "feedback_rounds": 1,
+      "counted": true,
+      "fixed_round": 2,
+      "max_level_during_open": "F1"
+    },
+    {
+      "defect_id": "R3#1",
+      "rubric_item_id": "R3",
+      "severity": "minor",
+      "status": "open",
+      "first_round": 1,
+      "feedback_rounds": 0,
+      "counted": true,
+      "max_level_during_open": null
+    },
+    {
+      "defect_id": "R4#1",
+      "rubric_item_id": "R4",
+      "severity": "minor",
+      "status": "open",
+      "first_round": 1,
+      "feedback_rounds": 0,
+      "counted": true,
+      "max_level_during_open": null
+    }
+  ]
+}
