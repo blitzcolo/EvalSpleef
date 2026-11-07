@@ -1,0 +1,11 @@
+# DeepSeek V3 / R1 share the deepseek_v3 tool parser; V3.1 has its own.
+name: deepseek
+match: [deepseek]
+tool_call_parser: deepseek_v3
+reasoning_parser: deepseek_r1
+quantization: null
+extra_args: [--trust-remote-code]
+variants:
+  - match: [v3.1, v3-1]
+    tool_call_parser: deepseek_v31
+    reasoning_parser: deepseek_r1

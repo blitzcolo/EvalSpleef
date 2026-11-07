@@ -1,0 +1,11 @@
+# GLM-4.5/4.6 use glm45; GLM-4.7 uses glm47.
+name: glm
+match: [glm]
+tool_call_parser: glm45
+reasoning_parser: glm45
+quantization: null
+extra_args: []
+variants:
+  - match: [glm-4.7, glm4.7, glm-4-7]
+    tool_call_parser: glm47
+    reasoning_parser: glm45
