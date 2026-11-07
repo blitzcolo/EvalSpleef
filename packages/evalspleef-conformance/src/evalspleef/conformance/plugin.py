@@ -279,27 +279,41 @@ def _run_cleanup(cleanup: Callable[[], Awaitable[None]]) -> None:
     asyncio.run(runner())
 
 
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Run target cleanup and write the report when requested."""
-    items = [item for item in session.items if isinstance(item, ConformanceItem)]
-    if not items:
-        return
+def _cleanup_targets(items: list[ConformanceItem]) -> list[str]:
+    """Clean every target once; a failing cleanup is reported, never swallowed."""
+    errors: list[str] = []
     cleaned: set[str] = set()
     for item in items:
         target = item.target
         if target.name in cleaned or target.cleanup is None:
             continue
         cleaned.add(target.name)
-        _run_cleanup(target.cleanup)
-    report_path = session.config.getoption("--spleef-report")
-    if report_path is None:
+        try:
+            _run_cleanup(target.cleanup)
+        except Exception as exc:
+            errors.append(f"{target.name}: {type(exc).__name__}: {exc}")
+    return errors
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Write the report first, then clean up; a failing cleanup fails the run."""
+    items = [item for item in session.items if isinstance(item, ConformanceItem)]
+    if not items:
         return
-    report = _build_report(items)
-    json_path, markdown_path = report.write(report_path)
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
-    if reporter is not None:
-        counts = report.counts()
-        reporter.write_line(
-            f"spleef-conformance: {counts['pass']} passed, {counts['fail']} failed, "
-            f"{counts['not-applicable']} not-applicable; report: {json_path}, {markdown_path}"
-        )
+    report_path = session.config.getoption("--spleef-report")
+    if report_path is not None:
+        report = _build_report(items)
+        json_path, markdown_path = report.write(report_path)
+        if reporter is not None:
+            counts = report.counts()
+            reporter.write_line(
+                f"spleef-conformance: {counts['pass']} passed, {counts['fail']} failed, "
+                f"{counts['not-applicable']} not-applicable; report: {json_path}, {markdown_path}"
+            )
+    errors = _cleanup_targets(items)
+    for error in errors:
+        if reporter is not None:
+            reporter.write_line(f"spleef-conformance: cleanup of target {error}", red=True)
+    if errors and session.exitstatus == pytest.ExitCode.OK:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED

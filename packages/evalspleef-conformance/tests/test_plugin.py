@@ -223,6 +223,23 @@ def test_fully_passing_run_exits_zero(
     result.assert_outcomes(passed=1)
 
 
+def test_failing_cleanup_still_writes_the_report_and_fails_the_run(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A target whose cleanup raises must not hide the results it already produced."""
+    pytester.makeconftest(TARGET_CONFTEST)
+    defs = TARGET_DEFS.replace("fake=False,", "fake=False,\n        cleanup=_boom,").replace(
+        "TARGETS = [",
+        "async def _boom():\n    raise RuntimeError('cleanup exploded')\n\n\nTARGETS = [",
+    )
+    pytester.makefile(".py", test_target_defs=defs)
+    _install_cases(monkeypatch, (_passing_case(),))
+    result = pytester.runpytest("--spleef-provider=streaming", "--spleef-report=conf/report")
+    assert (pytester.path / "conf" / "report.json").exists()
+    assert result.ret == pytest.ExitCode.TESTS_FAILED
+    result.stdout.fnmatch_lines(["*cleanup of target streaming*cleanup exploded*"])
+
+
 class _BrokenEntryPoint:
     name = "broken-adapter"
 
