@@ -7,15 +7,22 @@ conformance machinery itself, not a real provider host.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
-from evalspleef.conformance.target import ConformanceTarget, ModelFixture
+from evalspleef.conformance.builtin_doubles import (
+    FaultAssistedProvider,
+    HFDouble,
+    LazyUpstreamServer,
+    StatusMappingProvider,
+)
+from evalspleef.conformance.cases_model import HF_PUBLIC_REPO
+from evalspleef.conformance.target import ConformanceTarget, Injector, ModelFixture
 from evalspleef.spi.caps import Arch, NetMode, OSFamily
 from evalspleef.spi.errors import SandboxCreateError
 from evalspleef.spi.model import (
     DeploymentSpec,
+    HFSource,
     ModelSpec,
-    VendorSource,
 )
 from evalspleef.spi.sandbox import NetworkPolicy, Resources, Sandbox, SandboxSpec, TemplateRef
 from evalspleef.testing.clock import FakeClock
@@ -28,6 +35,11 @@ from evalspleef.testing.mock_sandbox import MockSandboxProvider
 from evalspleef.testing.secrets import DictSecretResolver
 
 _TEMPLATE_DIGEST = "sha256:" + "0" * 64
+_MODEL_SLUG = "mock-model"
+_MODEL_SECRET_REF = "vault://models/mock-model"
+_MODEL_API_KEY = "sk-mock-conformance"
+_OPERATOR_BASE_URL = "https://operator.example/v1"
+_HF_REVISION = "0" * 40
 
 
 def _sandbox_spec_factory(trial_id: str, *, network: NetMode, max_lifetime_s: int) -> SandboxSpec:
@@ -45,17 +57,17 @@ def _sandbox_spec_factory(trial_id: str, *, network: NetMode, max_lifetime_s: in
     )
 
 
-def _model_spec_factory() -> ModelSpec:
+def _model_spec(base_url: str) -> ModelSpec:
     return ModelSpec(
-        slug="mock-model",
+        slug=_MODEL_SLUG,
         spec_version=1,
         family="mock",
         roles=frozenset({"target"}),
-        source=VendorSource(vendor="mock", model_id="fake-model"),
+        source=HFSource(repo=HF_PUBLIC_REPO, revision=_HF_REVISION, access="public"),
         deployment=DeploymentSpec(
             adapter="builtin",
             account="default",
-            params={"base_url": "https://mock.invalid/v1", "model": "fake-model"},
+            params={"base_url": base_url, "model": "fake-model"},
         ),
         declared_context_tokens=8192,
         declared_max_output_tokens=1024,
@@ -67,7 +79,7 @@ def _model_spec_factory() -> ModelSpec:
 
 def _operator_input_factory() -> Mapping[str, str]:
     return {
-        "base_url": "https://operator.example/v1",
+        "base_url": _OPERATOR_BASE_URL,
         "model": "fake-model",
         "deployment_id": "dep-mock-1",
     }
@@ -104,32 +116,81 @@ def _mock_sandbox_target() -> ConformanceTarget:
 
 def _model_target(
     provider: MockApiProvider | MockAssistedProvider | MockExternalProvider,
+    *,
+    spec_factory: Callable[[], ModelSpec],
+    operator_input_factory: Callable[[], Mapping[str, str]] | None = None,
+    upstream: LazyUpstreamServer | None = None,
+    injectors: Mapping[str, Injector] | None = None,
 ) -> ConformanceTarget:
+    async def cleanup() -> None:
+        if upstream is not None:
+            upstream.stop()
+
     return ConformanceTarget(
         name=f"mock-model-{provider.management_mode.value}",
         kind="model",
         provider=provider,
         fake=True,
         model_fixture=ModelFixture(
-            spec_factory=_model_spec_factory,
-            operator_input_factory=(
-                _operator_input_factory if isinstance(provider, MockAssistedProvider) else None
-            ),
-            upstream=None,
+            spec_factory=spec_factory,
+            operator_input_factory=operator_input_factory,
+            upstream=upstream,
+            hf_access=HFDouble(),
         ),
-        notes="management-plane double; no live upstream server is started",
+        injectors=dict(injectors or {}),
+        notes="management-plane double with in-process upstream and HF fixtures",
+        cleanup=cleanup if upstream is not None else None,
+    )
+
+
+def _api_model_target() -> ConformanceTarget:
+    provider = StatusMappingProvider("default", {}, _secrets())
+    upstream = LazyUpstreamServer(api_key=_MODEL_API_KEY)
+
+    async def upstream_status(status: int) -> None:
+        provider.injected_status = status
+
+    return _model_target(
+        provider,
+        spec_factory=lambda: _model_spec(upstream.base_url),
+        upstream=upstream,
+        injectors={"upstream_status": upstream_status},
+    )
+
+
+def _assisted_model_target() -> ConformanceTarget:
+    provider = FaultAssistedProvider("default", {}, _secrets())
+
+    async def upstream_status(status: int) -> None:
+        provider.injected_status = status
+
+    return _model_target(
+        provider,
+        spec_factory=lambda: _model_spec(_OPERATOR_BASE_URL),
+        operator_input_factory=_operator_input_factory,
+        injectors={"upstream_status": upstream_status},
+    )
+
+
+def _external_model_target() -> ConformanceTarget:
+    provider = MockExternalProvider("default", {}, _secrets())
+    upstream = LazyUpstreamServer(api_key=_MODEL_API_KEY)
+    return _model_target(
+        provider,
+        spec_factory=lambda: _model_spec(upstream.base_url),
+        upstream=upstream,
     )
 
 
 def _secrets() -> DictSecretResolver:
-    return DictSecretResolver({"vault://models/mock-model": "sk-mock-conformance"})
+    return DictSecretResolver({_MODEL_SECRET_REF: _MODEL_API_KEY})
 
 
 def build_targets() -> list[ConformanceTarget]:
     """The four builtin targets: the mock sandbox and the three mock model providers."""
     return [
         _mock_sandbox_target(),
-        _model_target(MockApiProvider("default", {}, _secrets())),
-        _model_target(MockAssistedProvider("default", {}, _secrets())),
-        _model_target(MockExternalProvider("default", {}, _secrets())),
+        _api_model_target(),
+        _assisted_model_target(),
+        _external_model_target(),
     ]

@@ -84,6 +84,12 @@ def _applies_api(target: ConformanceTarget) -> str | None:
     reason = _applies_model(target)
     if reason is not None:
         return reason
+    mode = _provider(target).management_mode
+    if mode is ManagementMode.ASSISTED:
+        return (
+            f"management mode {mode.value!r}: chat cases need an upstream the operator "
+            "has already attached"
+        )
     if _fixture(target).upstream is None:
         return "target supplies no upstream fixture for chat, streaming and identity checks"
     return None
@@ -93,6 +99,9 @@ def _applies_status_mapping(target: ConformanceTarget) -> str | None:
     reason = _applies_model(target)
     if reason is not None:
         return reason
+    mode = _provider(target).management_mode
+    if mode is not ManagementMode.API:
+        return f"management mode {mode.value!r}: status mapping is driven through api-mode wake"
     if "upstream_status" not in target.injectors:
         return "target supplies no 'upstream_status' injector for error-code mapping"
     return None

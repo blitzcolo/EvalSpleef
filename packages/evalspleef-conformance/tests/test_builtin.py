@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import socket
+import threading
+
+import pytest
+
 from evalspleef.conformance.builtin import build_targets
 from evalspleef.conformance.target import ConformanceTarget
 from evalspleef.spi.caps import NetMode
+from evalspleef.testing.fake_openai import FakeOpenAIServer
 from evalspleef.testing.mock_endpoint import (
     MockApiProvider,
     MockAssistedProvider,
@@ -53,6 +60,46 @@ def test_assisted_target_has_operator_input_factory() -> None:
         assert target.model_fixture.operator_input_factory is None
     assert isinstance(by_name["mock-model-api"].provider, MockApiProvider)
     assert isinstance(by_name["mock-model-external"].provider, MockExternalProvider)
+
+
+def test_build_targets_starts_no_upstream_and_no_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    starts: list[FakeOpenAIServer] = []
+    real_start = FakeOpenAIServer.start
+
+    def recording_start(self: FakeOpenAIServer) -> None:
+        starts.append(self)
+        real_start(self)
+
+    listens: list[socket.socket] = []
+    real_listen = socket.socket.listen
+
+    def recording_listen(self: socket.socket, *args: object, **kwargs: object) -> None:
+        listens.append(self)
+        real_listen(self, *args, **kwargs)
+
+    monkeypatch.setattr(FakeOpenAIServer, "start", recording_start)
+    monkeypatch.setattr(socket.socket, "listen", recording_listen)
+
+    baseline = {thread.ident for thread in threading.enumerate()}
+    targets = build_targets()
+    new_nondaemon = [
+        thread.name
+        for thread in threading.enumerate()
+        if thread.ident not in baseline and thread.is_alive() and not thread.daemon
+    ]
+
+    assert starts == [], "building targets must not start an upstream server"
+    assert listens == [], "building targets must not open a listening socket"
+    assert new_nondaemon == [], f"building targets leaked threads: {new_nondaemon}"
+
+    async def cleanup_all() -> None:
+        for target in targets:
+            if target.cleanup is not None:
+                await target.cleanup()
+
+    asyncio.run(cleanup_all())
 
 
 async def test_mock_sandbox_target_opens_and_closes() -> None:
