@@ -1,0 +1,8 @@
+{
+  "task": "debug-001",
+  "scenario": "tampered-test",
+  "cmd": "bash /Users/pog/blitzcolo/EvalSpleef/tasks/debug-001/hidden-tests/run.sh /var/folders/fh/5w07ff9j17v2z45bfnl686rh0000gn/T/fixture-capture-a9kal7p9/debug-tampered",
+  "exit_code": 3,
+  "stdout": "",
+  "stderr": "LOCK VIOLATION: 测试文件哈希校验失败\n  - 被修改: tests/test_public.py（期望 8e7c6f6fc286…，实际 566d01f9c57c…）\nFAIL: 测试文件哈希校验失败（硬门槛 H2：tests/ 必须保持原样）\n"
+}
