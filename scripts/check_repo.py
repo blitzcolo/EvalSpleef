@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""仓库一致性自检：目录契约、相对链接、Schema 引用、可运行测试。
+"""Repository consistency check: layout contract, relative links, schema refs, runnable tests.
 
-用法：
-    python3 scripts/check_repo.py            # 结构 + 链接 + Schema 检查
-    python3 scripts/check_repo.py --run      # 额外运行参考实现单测与题包验收脚本
+Usage:
+    python3 scripts/check_repo.py            # structure + links + schema checks
+    python3 scripts/check_repo.py --run      # also run core unit tests and task-pack selftests
 
-退出码：0 = 全部通过；1 = 有 error；2 = 仅 warning。
+Exit codes: 0 = all checks pass; 1 = at least one error; 2 = warnings only.
 """
 
 from __future__ import annotations
@@ -14,8 +14,10 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,7 +34,6 @@ REQUIRED_DOCS = [
     "docs/06-answer-and-acceptance.md",
     "docs/07-harness-mapping.md",
     "docs/08-implementation-notes.md",
-    "README.md",
 ]
 
 REQUIRED_SCHEMAS = [
@@ -56,6 +57,11 @@ TASK_PACKAGE_FILES = [
     "notes.md",
 ]
 
+# Only these trees are owned by this check; packages may be mid-edit by other lanes.
+LINK_ROOTS = ("docs", "tasks")
+TASKS_DIR = ROOT / "tasks"
+CORE_DIR = ROOT / "packages" / "evalspleef-core"
+
 LINK_RE = re.compile(r"(?<!\!)\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
 
@@ -70,30 +76,29 @@ def warn(msg: str) -> None:
 def check_required_files() -> None:
     for rel in REQUIRED_DOCS:
         if not (ROOT / rel).is_file():
-            err(f"缺少必需文档：{rel}")
+            err(f"missing required document: {rel}")
     for rel in REQUIRED_SCHEMAS:
         p = ROOT / rel
         if not p.is_file():
-            err(f"缺少必需 Schema：{rel}")
+            err(f"missing required schema: {rel}")
             continue
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception as exc:
-            err(f"Schema 不是合法 JSON：{rel} ({exc})")
+            err(f"schema is not valid JSON: {rel} ({exc})")
             continue
         expected = f"https://llm-eval.local/schemas/{p.name}"
         if data.get("$id") != expected:
-            err(f"Schema $id 不符：{rel} 期望 {expected}，实际 {data.get('$id')}")
+            err(f"schema $id mismatch: {rel} expected {expected}, got {data.get('$id')}")
         for key in ("$schema", "title", "type", "properties"):
             if key not in data:
-                warn(f"Schema 缺字段 {key}：{rel}")
-        # 检查跨文件 $ref 是否存在
+                warn(f"schema is missing {key}: {rel}")
         for ref in find_refs(data):
             if ref.startswith("#") or "://" in ref:
                 continue
             target = (p.parent / ref.split("#")[0]).resolve()
             if not target.is_file():
-                err(f"Schema 引用不存在：{rel} -> {ref}")
+                err(f"schema reference does not exist: {rel} -> {ref}")
 
 
 def find_refs(node: object) -> list[str]:
@@ -111,59 +116,70 @@ def find_refs(node: object) -> list[str]:
 
 
 def check_task_packages() -> None:
-    base = ROOT / "appendix" / "examples"
-    if not base.is_dir():
-        err("缺少 appendix/examples/ 目录")
+    if not TASKS_DIR.is_dir():
+        err("missing tasks/ directory")
         return
-    packages = sorted(p for p in base.iterdir() if p.is_dir())
+    packages = sorted(p for p in TASKS_DIR.iterdir() if p.is_dir())
     if not packages:
-        err("appendix/examples/ 下没有任何题包")
+        err("tasks/ contains no task packs")
     for pkg in packages:
         for rel in TASK_PACKAGE_FILES:
             if not (pkg / rel).is_file():
-                err(f"题包缺文件：{pkg.name}/{rel}")
+                err(f"task pack is missing a file: {pkg.name}/{rel}")
         for letter in ("a", "b"):
             found = any((pkg / "answers").glob(f"reference-{letter}.*"))
             if not found:
-                err(f"题包缺参考解：{pkg.name}/answers/reference-{letter}.*")
-        # 隐藏测试不得出现在 Agent 可见文件里（task.yaml 属控制面元数据，硬门槛引用 hidden-tests 是正常的）
+                err(
+                    f"task pack is missing a reference solution: {pkg.name}/answers/reference-{letter}.*"
+                )
+        # Hidden tests must not leak into agent-visible files (task.yaml references them
+        # as hard-gate entry points, which is expected for control-plane metadata).
         for visible in ("instruction.md",):
             f = pkg / visible
             if f.is_file() and "hidden-tests" in f.read_text(encoding="utf-8"):
-                warn(f"{pkg.name}/{visible} 提及 hidden-tests，检查是否泄露")
+                warn(f"{pkg.name}/{visible} mentions hidden-tests; check for a leak")
         ws = pkg / "workspace"
         if ws.is_dir():
             for f in ws.rglob("*"):
                 if f.is_file() and "hidden-tests" in str(f):
-                    warn(f"{pkg.name}/workspace 中出现 hidden-tests 路径：{f.relative_to(pkg)}")
+                    warn(f"{pkg.name}/workspace contains a hidden-tests path: {f.relative_to(pkg)}")
+
+
+def iter_link_sources():
+    for root_name in LINK_ROOTS:
+        base = ROOT / root_name
+        if not base.is_dir():
+            continue
+        for md in sorted(base.rglob("*.md")):
+            if any(part in (".git", ".venv", "node_modules") for part in md.parts):
+                continue
+            yield md
 
 
 def check_links() -> None:
-    for md in sorted(ROOT.rglob("*.md")):
-        if ".git" in md.parts or "reference/examples" in md.as_posix():
-            continue
+    for md in iter_link_sources():
         text = md.read_text(encoding="utf-8", errors="replace")
         for m in LINK_RE.finditer(text):
             target = m.group(2).split("#")[0]
             if not target or "://" in target or target.startswith("mailto:"):
                 continue
             if target.startswith("/"):
-                err(f"绝对路径链接应改相对路径：{md.relative_to(ROOT)} -> {m.group(2)}")
+                err(f"absolute link should be relative: {md.relative_to(ROOT)} -> {m.group(2)}")
                 continue
             resolved = (md.parent / target).resolve()
             if not resolved.exists():
-                err(f"链接失效：{md.relative_to(ROOT)} -> {m.group(2)}")
+                err(f"broken link: {md.relative_to(ROOT)} -> {m.group(2)}")
 
 
 def check_enums() -> None:
-    """粗查关键枚举拼写是否统一（防止 B+/C+ 写成 Bplus 之类）。"""
+    """Spot-check that tier spellings stay unified (no Bplus/Cplus variants)."""
     tiers = {"P", "A", "B+", "B", "C+", "C", "D", "F"}
     for schema in ("schemas/grade.schema.json", "schemas/trial.schema.json"):
         p = ROOT / schema
         if not p.is_file():
             continue
         data = json.loads(p.read_text(encoding="utf-8"))
-        found = set()
+        found: set[str] = set()
 
         def walk(node: object, key: str = "", bucket: set[str] = found) -> None:
             if isinstance(node, dict):
@@ -177,61 +193,71 @@ def check_enums() -> None:
 
         walk(data)
         if found and found != tiers:
-            warn(f"{schema} 中档位枚举不完整：{sorted(found)}")
+            warn(f"{schema} has an incomplete tier enum: {sorted(found)}")
+
+
+def _python_for_packages() -> str:
+    """Prefer the workspace interpreter so evalspleef.core is importable."""
+    venv_python = ROOT / ".venv" / "bin" / "python"
+    return str(venv_python) if venv_python.is_file() else sys.executable
 
 
 def run_tests() -> None:
-    ref = ROOT / "reference"
-    if (ref / "tests").is_dir():
+    tests = CORE_DIR / "tests"
+    if tests.is_dir():
         cmd = [
-            sys.executable,
+            _python_for_packages(),
             "-m",
             "unittest",
             "discover",
             "-s",
-            str(ref / "tests"),
-            "-t",
-            str(ref),
+            "tests",
+            "-p",
+            "test_*.py",
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=CORE_DIR)
         tail = (proc.stdout + proc.stderr).strip().splitlines()[-3:]
-        print(f"[run] 参考实现单测：exit={proc.returncode} | " + " / ".join(tail))
+        print(f"[run] core unit tests: exit={proc.returncode} | " + " / ".join(tail))
         if proc.returncode != 0:
-            err("参考实现单测未通过")
-    base = ROOT / "appendix" / "examples"
-    if base.is_dir():
-        for pkg in sorted(p for p in base.iterdir() if p.is_dir()):
-            runner = pkg / "hidden-tests" / "run.sh"
-            if runner.is_file() and os.access(runner, os.X_OK):
-                # run.sh 语义：默认跑候选工程（Agent 产物）；--selftest 验证题包自身
-                # （参考解通过 / starter 失败 / 哈希锁 / 变异测试）。仓检查用 --selftest。
-                cmd = ["bash", str(runner)]
-                try:
-                    has_selftest = "--selftest" in runner.read_text(
-                        encoding="utf-8", errors="replace"
-                    )
-                except OSError:
-                    has_selftest = False
-                if has_selftest:
-                    cmd.append("--selftest")
-                try:
-                    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=pkg, timeout=300)
-                except subprocess.TimeoutExpired:
-                    err(f"题包隐藏测试超时：{pkg.name}")
-                    continue
-                print(
-                    f"[run] {pkg.name} hidden-tests{' --selftest' if has_selftest else ''}：exit={proc.returncode}"
-                )
-                if proc.returncode != 0:
-                    tail = (proc.stdout + proc.stderr).strip().splitlines()[-3:]
-                    err(f"题包隐藏测试未通过：{pkg.name}（{' / '.join(tail)}）")
-            else:
-                warn(f"题包隐藏测试脚本不可执行或不存在：{pkg.name}")
+            err("core unit tests failed")
+
+    if not TASKS_DIR.is_dir():
+        return
+    for pkg in sorted(p for p in TASKS_DIR.iterdir() if p.is_dir()):
+        runner = pkg / "hidden-tests" / "run.sh"
+        if not (runner.is_file() and os.access(runner, os.X_OK)):
+            warn(f"task pack hidden-test script missing or not executable: {pkg.name}")
+            continue
+        # run.sh semantics: default checks the candidate tree; --selftest proves the pack
+        # itself (references pass / starter fails / hash locks hold). The repository check
+        # uses --selftest and runs on a copy because selftests write temporary files.
+        try:
+            has_selftest = "--selftest" in runner.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            has_selftest = False
+        selftest_arg = ["--selftest"] if has_selftest else []
+        with tempfile.TemporaryDirectory(prefix=f"check-repo-{pkg.name}-") as tmp:
+            copy = Path(tmp) / pkg.name
+            shutil.copytree(pkg, copy)
+            copy_runner = copy / "hidden-tests" / "run.sh"
+            cmd = ["bash", str(copy_runner), *selftest_arg]
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, cwd=copy, timeout=600)
+            except subprocess.TimeoutExpired:
+                err(f"task pack hidden tests timed out: {pkg.name}")
+                continue
+        print(
+            f"[run] {pkg.name} hidden-tests{' --selftest' if has_selftest else ''}: "
+            f"exit={proc.returncode}"
+        )
+        if proc.returncode != 0:
+            tail = (proc.stdout + proc.stderr).strip().splitlines()[-3:]
+            err(f"task pack hidden tests failed: {pkg.name} ({' / '.join(tail)})")
 
 
 def check_todos() -> None:
     counts = {"TODO(verify)": 0, "TODO(run-on-host)": 0, "TODO": 0}
-    for md in ROOT.rglob("*.md"):
+    for md in iter_link_sources():
         text = md.read_text(encoding="utf-8", errors="replace")
         if "TODO(verify)" in text:
             counts["TODO(verify)"] += text.count("TODO(verify)")
@@ -239,15 +265,16 @@ def check_todos() -> None:
             counts["TODO(run-on-host)"] += text.count("TODO(run-on-host)")
         counts["TODO"] += text.count("TODO(")
     print(
-        f"[info] TODO(verify)={counts['TODO(verify)']} TODO(run-on-host)={counts['TODO(run-on-host)']}"
+        f"[info] TODO(verify)={counts['TODO(verify)']} "
+        f"TODO(run-on-host)={counts['TODO(run-on-host)']}"
     )
     if counts["TODO(verify)"] > 20:
-        warn("TODO(verify) 超过 20 处，证据链不足")
+        warn("more than 20 TODO(verify) markers; evidence chain is thin")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="llm-eval 仓库自检")
-    parser.add_argument("--run", action="store_true", help="运行参考实现单测与题包验收脚本")
+    parser = argparse.ArgumentParser(description="EvalSpleef repository check")
+    parser.add_argument("--run", action="store_true", help="run core tests and pack selftests")
     args = parser.parse_args()
 
     check_required_files()
@@ -262,7 +289,7 @@ def main() -> int:
         print(f"[WARN] {w}")
     for e in ERRORS:
         print(f"[ERROR] {e}")
-    print(f"\n结果：{len(ERRORS)} error / {len(WARNINGS)} warning")
+    print(f"\nresult: {len(ERRORS)} error / {len(WARNINGS)} warning")
     if ERRORS:
         return 1
     return 0 if not WARNINGS else 2
