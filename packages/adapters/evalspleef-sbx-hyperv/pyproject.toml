@@ -18,5 +18,9 @@ hyperv = "evalspleef_sbx_hyperv.conformance:build_targets"
 [tool.hatch.build.targets.wheel]
 packages = ["src/evalspleef_sbx_hyperv"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/evalspleef_sbx_hyperv/isolation_profile.yaml" = "evalspleef_sbx_hyperv/isolation_profile.yaml"
+"src/evalspleef_sbx_hyperv/probes" = "evalspleef_sbx_hyperv/probes"
+
 [tool.uv.sources]
 evalspleef-spi = { workspace = true }

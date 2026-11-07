@@ -1,0 +1,98 @@
+# Isolation profile for the hyperv sandbox provider (FR-SBX-11).
+# I1-I16 per PRD appendix D.2; generated from evalspleef_sbx_hyperv.isolation
+# (the runtime source of truth) - keep both in sync, the tests enforce it.
+provider: hyperv
+declared_isolation: L3
+verified_isolation: null
+invariants:
+  I1:
+    how: every trial gets its own VM on a differencing VHD created from the golden image and the VM plus
+      its disk are destroyed after the trial; the lease id is recorded in the provider registry
+    probe: list(labels) returns exactly one instance per lease while live
+    waived: false
+  I2:
+    how: 'waived: the guest disk is writable by design (a VM is not a container rootfs); every trial still
+      starts from a fresh differencing disk chained to the immutable golden VHDX'
+    probe: the differencing disk is deleted with the VM at trial end
+    waived: true
+    reason: Windows and Linux guests need a writable system disk; a read-only root disk is not practical
+      for Windows servicing and toolchains
+    compensating: fresh differencing VHD per trial chained to the sha256-pinned golden image, cross-trial
+      canary scan, and the disk is deleted (not reused) when the trial ends
+    approved_by: platform-evaluation-lead
+    expires: '2027-03-01'
+  I3:
+    how: each VM's writes go to its own differencing disk; C:\workspace (and /workspace on Linux guests)
+      start empty in every trial and no host directory, shared VHDX or Enhanced Session drive is attached
+    probe: a marker written in one trial is absent in the next trial's VM
+    waived: false
+  I4:
+    how: network mode off connects the VM to a Private vSwitch, which has no external uplink at all, so
+      no packet can leave the host
+    probe: Test-NetConnection to an external host fails in an off-network VM
+    waived: false
+  I5:
+    how: 'no host path is mounted into the guest: no shared VHDX, no SMB share, no Enhanced Session redirected
+      drive, no device passthrough; PowerShell Direct is host-administator-only and the guest exposes
+      no endpoint for it'
+    probe: Get-SmbShare shows no host share and the probe set reports clean
+    waived: false
+  I6:
+    how: the golden image creates a non-administrator agent account and the OpenSSH Server is configured
+      for that account only; the account is not in the Administrators group
+    probe: whoami /groups has no Administrators entry; sudo-equivalent checks are covered by the Windows
+      probe set
+    waived: false
+  I7:
+    how: Set-VMProcessor -Count and Set-VMMemory -StartupBytes fix the CPU and memory configuration before
+      Start-VM; the guest cannot grow beyond the VM configuration
+    probe: the guest sees the requested vCPU count and memory size
+    waived: false
+  I8:
+    how: the golden image carries a neutral computer name; the provider injects no task, batch or model
+      identity into the guest and the runner starts the agent with a whitelisted environment
+    probe: 'Env: contains no credential or evaluation identifier (Windows probe set env check)'
+    waived: false
+  I9:
+    how: the golden VHDX is referenced by sha256 in TemplateRef and the builder records it in the template
+      registry; the only credential allowed in a sandbox is the per-trial gateway key, which the provider
+      never adds
+    probe: 'describe() reports the template digest; the Env: scan shows no long-lived credentials'
+    waived: false
+  I10:
+    how: verifier and judge roles are separate SandboxSpec roles scheduled to their own VMs and leases;
+      the provider never mixes them
+    probe: verifier_lease_id != agent_lease_id for a trial
+    waived: false
+  I11:
+    how: 'download sanitises the artifact stream: SFTP refuses symlinks that resolve outside the workspace,
+      and archive members that escape the export root, special files and setuid bits are rejected, sizes
+      are capped'
+    probe: downloading a symlink pointing at C:\Windows\win.ini raises TransferError
+    waived: false
+  I12:
+    how: hidden tests never enter the agent-side guest; hash locks live in the task pack, which the provider
+      does not touch
+    probe: tests.sha256 manifest matches the verifier-side files
+    waived: false
+  I13:
+    how: the provider creates a fresh VM per trial so no state can carry over; canary token placement
+      is a runner/control-plane concern
+    probe: cross-trial canary scan reports zero critical hits
+    waived: false
+  I14:
+    how: VMs are stopped and removed at trial end and never returned to a pool; orphans are reclaimed
+      by label through reap() and the TTL sweep, and every registry entry carries an expires_at lifetime
+      guard
+    probe: list(labels) is empty after destroy; expired entries are reaped
+    waived: false
+  I15:
+    how: judge contexts run in their own trial-scoped VM like any other role
+    probe: judge session is unique per trial
+    waived: false
+  I16:
+    how: allowlisted modes connect an Internal vSwitch and add Add-VMNetworkAdapterAcl rules that permit
+      only the egress proxy address (or the task CIDRs), so all allowlisted traffic flows through the
+      logging egress proxy; hostname allowlists are only offered with via_proxy
+    probe: the egress proxy's url.jsonl has one line per request; direct egress bypass is not offered
+    waived: false
