@@ -210,6 +210,7 @@ class DockerProvider(SandboxProvider):
         try:
             image = await self._ensure_image(spec)
             labels = self._labels(spec)
+            container: Any = None
             try:
                 container = await self.client().containers.create(
                     self._container_config(spec, image, labels)
@@ -217,7 +218,16 @@ class DockerProvider(SandboxProvider):
                 sandbox_id = container.id
                 await container.start()
             except Exception as exc:
-                raise SandboxCreateError(f"failed to create the sandbox container: {exc}") from exc
+                message = f"failed to create the sandbox container: {exc}"
+                if container is not None:
+                    try:
+                        await container.delete(force=True)
+                    except Exception as cleanup_exc:
+                        message += (
+                            f"; the created container {container.id} could not be "
+                            f"removed either: {cleanup_exc}"
+                        )
+                raise SandboxCreateError(message) from exc
         finally:
             self._pending -= 1
         self._live.add(sandbox_id)

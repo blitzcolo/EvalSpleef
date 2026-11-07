@@ -94,6 +94,13 @@ async def test_max_concurrency(spec_factory) -> None:
         await limited.close()
 
 
+async def test_failed_start_leaves_no_container(provider, spec_factory) -> None:
+    spec = replace(spec_factory("leak-check"), run_as_user="no-such-user")
+    with pytest.raises(SandboxCreateError):
+        await provider.create(spec)
+    assert await provider.list({"trial": "leak-check"}) == []
+
+
 async def test_fail_next_create(provider, spec_factory) -> None:
     provider.fail_next_creates(1, SandboxCreateError)
     with pytest.raises(SandboxCreateError):
