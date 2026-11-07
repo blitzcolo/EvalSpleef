@@ -27,10 +27,10 @@ A run is one phase of work. Lanes inside a run have disjoint write scopes and ha
 
 | Phase | Lanes (write scope) | Needs | Status |
 | --- | --- | --- | --- |
-| Repository foundation | AGENTS.md, .gitattributes, .gitignore, commit-msg hook, uv workspace, spi, migrated core, schemas, task packs, docs | v2 source | doing |
-| Foundations run | testing-doubles, core-v3, task-packs-v3, egress-proxy, gateway-protocols, conformance-kit | Foundation | todo |
-| Engines run | gateway-core, control-data, runners, control-config, sbx-docker, sbx-e2b-family, model-openai-compat, model-novita, hostd-remote, control-endpoints, control-sched, control-trial, control-cli | Foundations run | todo |
-| Breadth run | sbx-tart, sbx-apple-container, sbx-libvirt, sbx-hyperv, sbx-windows-sandbox, sbx-k8s-agent-sandbox, sbx-device-pool, harbor-bridge, model-vpc-vllm, templates, deploy, docs | Foundations run | todo |
+| Repository foundation | AGENTS.md, .gitattributes, .gitignore, commit-msg hook, uv workspace, spi, migrated core, schemas, task packs, docs | v2 source | done |
+| Foundations run | testing-doubles, core-v3, task-packs-v3, egress-proxy, gateway-protocols, conformance-kit | Foundation | done |
+| Engines run | gateway-core, control-data, runners, control-config, sbx-docker, sbx-e2b-family, model-openai-compat, model-novita, hostd-remote, control-endpoints, control-sched, control-trial, control-cli | Foundations run | doing |
+| Breadth run | sbx-tart, sbx-apple-container, sbx-libvirt, sbx-hyperv, sbx-windows-sandbox, sbx-k8s-agent-sandbox, sbx-device-pool, harbor-bridge, model-vpc-vllm, templates, deploy, docs | Foundations run | done |
 | Integration | End-to-end on real surfaces, conformance on local Docker, review | Engines and Breadth runs | todo |
 
 ## Lane scopes
@@ -88,9 +88,27 @@ Stop condition: criteria 1-8 hold with evidence captured, everything is committe
 
 ## Progress log
 
-| Item | Status |
-| --- | --- |
-| Repository files (AGENTS.md, .gitattributes, .gitignore, hook, lint script) | doing |
-| Workspace skeleton and lock | doing |
-| SPI package | doing |
-| Core migrated with its 131 tests | doing |
+Evidence was captured by running the command itself, with the exit code of the tool and not of a pipe. Anything that ran only against a fake of an external system is **not verified on a real host**.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Repository files: AGENTS.md, .gitattributes, .gitignore, commit-msg hook, lint script | done | Real `git commit` attempts with an M1 label, the word Milestone, a P2.1 code, a Co-Authored-By trailer and a session link were all rejected and HEAD did not move; `python3 scripts/lint_commit_msg.py --history` reports 0 failing commits |
+| SPI, core v3 (events, versions, batch lifecycle, cost basis), schemas | done | Package tests, `ruff`, `mypy` and `lint-imports` green per package |
+| Reference core migrated with its tests | done | 129 tests stay in `evalspleef-core`; 2 Harbor event tests moved to `evalspleef-harbor-bridge` with the code they cover |
+| Ten task packs | done | `python3 scripts/check_repo.py --run` exits 0: self-tests of all ten packs on temporary copies (web-001 skips Playwright and runs its static contract only) |
+| Gateway: data plane, admin plane, trial key budgets, protocol conversion | done | Real `spleef-gateway` process driven with `curl -i`: chat with usage record, 429 `cost_cap`, 401 for a revoked key, Anthropic Messages tool round trip. Captured in `docs/evidence/gateway-curl.md`. The upstream was a test double |
+| Conformance kit and test doubles | done | 87 kit tests; broken providers must fail the matching cases; a fully passing run exits 0 |
+| Conformance on real Docker | done | `local-docker` 27 pass, 0 fail, 6 not applicable; `remote-docker` (hostd over mutual-TLS gRPC on loopback in front of the same Docker adapter) 27 pass, 0 fail, 6 not applicable |
+| Conformance on transport fakes | done | Not verified on a real host. Pass counts, all with 0 failures: mock sandbox 24, tart 21, apple-container 25, libvirt 26, k8s 24, windows-sandbox 23, device-pool 24, perf-host 20, novita-sandbox 25, e2b-selfhost 25, hyperv 21, vpc-vllm 9, openai-compat, novita-dedicated and novita-serverless 14 together |
+| hostd, egress proxy, runners, templates, deploy | done | Package tests green. Compose file validates with `docker compose config`; the Helm chart was checked structurally only, never rendered by Helm. Runners ran against stub CLIs, not the real Claude Code, Codex CLI, OpenCode or Inspect |
+| Control plane: persistence, config and registry, endpoints, probes, admission, scheduling, leases, batch freeze, trial runner | done | Per-subpackage tests, `ruff`, `mypy`; PostgreSQL tests run against a real `postgres:16` container |
+| Control plane: observer and verification wiring | doing | |
+| `spleef` CLI and end-to-end batch (criteria 5 and 7) | todo | |
+| Whole-repository gates (criterion 2) | todo | To run last, after the root mypy package list covers every workspace package |
+
+## Defects found by the checks, and fixed
+
+- A cancelled child kept writing and overwrote other lanes' modules; found by file times and per-file test runs, contained and rewritten against the test contracts.
+- The Docker adapter left a created container behind when it failed to start, and `close()` raised across event loops; both found on real Docker and covered by regression tests.
+- The conformance plugin exited 5 on a fully passing run, aborted the report when a target cleanup raised, and let one broken adapter break unrelated runs.
+- The `.gitignore` credential rule also hid the `secrets` source package.
