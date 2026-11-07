@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "evalspleef.fullname" . }}-egress
+  labels:
+    {{- include "evalspleef.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress
+spec:
+  replicas: {{ .Values.egress.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "evalspleef.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "egress") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "evalspleef.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "egress") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: egress
+          image: "{{ .Values.egress.image.repository }}:{{ .Values.egress.image.tag }}"
+          imagePullPolicy: {{ .Values.egress.image.pullPolicy }}
+          ports:
+            - name: proxy
+              containerPort: {{ .Values.egress.service.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.egress.resources | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.egress.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.egress.livenessProbe | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "evalspleef.fullname" . }}-egress
+  labels:
+    {{- include "evalspleef.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress
+spec:
+  type: {{ .Values.egress.service.type }}
+  ports:
+    - port: {{ .Values.egress.service.port }}
+      targetPort: proxy
+      protocol: TCP
+      name: proxy
+  selector:
+    {{- include "evalspleef.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "egress") | nindent 4 }}

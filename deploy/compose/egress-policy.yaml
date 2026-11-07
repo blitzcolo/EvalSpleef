@@ -1,0 +1,14 @@
+# Default egress policy for single-machine compose
+mode: package_mirror
+allow:
+  - huggingface.co
+  - "*.huggingface.co"
+  - cdn-lfs.huggingface.co
+  - pypi.org
+  - files.pythonhosted.org
+block:
+  - leaderboard.example.net
+blocked_cidrs:
+  - 169.254.169.254/32
+mirrors:
+  pip: http://pypi-mirror.internal:8080

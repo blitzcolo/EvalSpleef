@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "evalspleef.fullname" . }}-gateway
+  labels:
+    {{- include "evalspleef.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.gateway.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "evalspleef.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "evalspleef.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "gateway") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: gateway
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          ports:
+            - name: data
+              containerPort: {{ .Values.gateway.service.dataPort }}
+              protocol: TCP
+            - name: admin
+              containerPort: {{ .Values.gateway.service.adminPort }}
+              protocol: TCP
+          env:
+            - name: SPLEEF_GATEWAY_HOST
+              value: "0.0.0.0"
+            - name: SPLEEF_GATEWAY_DATA_PORT
+              value: {{ .Values.gateway.service.dataPort | quote }}
+            - name: SPLEEF_GATEWAY_ADMIN_PORT
+              value: {{ .Values.gateway.service.adminPort | quote }}
+            - name: SPLEEF_GATEWAY_STORE
+              value: {{ .Values.gateway.env.storeUrl | quote }}
+            - name: SPLEEF_GATEWAY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gateway.secretRefs.adminToken.secretName }}
+                  key: {{ .Values.gateway.secretRefs.adminToken.key }}
+{{- if .Values.gateway.secretRefs.novitaApiKey }}
+            - name: NOVITA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gateway.secretRefs.novitaApiKey.secretName }}
+                  key: {{ .Values.gateway.secretRefs.novitaApiKey.key }}
+{{- end }}
+{{- if .Values.gateway.secretRefs.anthropicApiKey }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gateway.secretRefs.anthropicApiKey.secretName }}
+                  key: {{ .Values.gateway.secretRefs.anthropicApiKey.key }}
+{{- end }}
+{{- if .Values.gateway.secretRefs.openaiApiKey }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gateway.secretRefs.openaiApiKey.secretName }}
+                  key: {{ .Values.gateway.secretRefs.openaiApiKey.key }}
+{{- end }}
+{{- if .Values.gateway.secretRefs.hfToken }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gateway.secretRefs.hfToken.secretName }}
+                  key: {{ .Values.gateway.secretRefs.hfToken.key }}
+{{- end }}
+
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.gateway.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.gateway.livenessProbe | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "evalspleef.fullname" . }}-gateway
+  labels:
+    {{- include "evalspleef.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  type: {{ .Values.gateway.service.type }}
+  ports:
+    - port: {{ .Values.gateway.service.dataPort }}
+      targetPort: data
+      protocol: TCP
+      name: data
+    - port: {{ .Values.gateway.service.adminPort }}
+      targetPort: admin
+      protocol: TCP
+      name: admin
+  selector:
+    {{- include "evalspleef.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "gateway") | nindent 4 }}

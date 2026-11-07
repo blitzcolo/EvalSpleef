@@ -1,0 +1,202 @@
+# Default values for evalspleef.
+# Declare variables to be passed into templates.
+
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+# Gateway deployment configuration
+gateway:
+  replicaCount: 2
+  image:
+    repository: evalspleef/gateway
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  service:
+    type: ClusterIP
+    dataPort: 8390
+    adminPort: 8391
+  env:
+    storeUrl: "postgresql://evalspleef@postgres:5432/evalspleef"
+  # Secret references (values must be created out-of-band; never commit values)
+  secretRefs:
+    adminToken:
+      secretName: evalspleef-secrets
+      key: gateway-admin-token
+    databasePassword:
+      secretName: evalspleef-secrets
+      key: postgres-password
+    novitaApiKey:
+      secretName: evalspleef-secrets
+      key: novita-api-key
+    anthropicApiKey:
+      secretName: evalspleef-secrets
+      key: anthropic-api-key
+    openaiApiKey:
+      secretName: evalspleef-secrets
+      key: openai-api-key
+    hfToken:
+      secretName: evalspleef-secrets
+      key: hf-token
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  readinessProbe:
+    httpGet:
+      path: /healthz
+      port: 8390
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 8390
+    initialDelaySeconds: 10
+    periodSeconds: 15
+
+# Control plane deployment configuration
+control:
+  replicaCount: 2
+  image:
+    repository: evalspleef/control
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  service:
+    type: ClusterIP
+    port: 8000
+  secretRefs:
+    adminToken:
+      secretName: evalspleef-secrets
+      key: gateway-admin-token
+    databasePassword:
+      secretName: evalspleef-secrets
+      key: postgres-password
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+    limits:
+      cpu: 4000m
+      memory: 4Gi
+  readinessProbe:
+    exec:
+      command:
+        - python3
+        - -c
+        - "import evalspleef.control"
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  livenessProbe:
+    exec:
+      command:
+        - python3
+        - -c
+        - "import evalspleef.control"
+    initialDelaySeconds: 10
+    periodSeconds: 20
+
+# Egress proxy deployment configuration
+egress:
+  replicaCount: 2
+  image:
+    repository: evalspleef/egress
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  service:
+    type: ClusterIP
+    port: 3128
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  readinessProbe:
+    tcpSocket:
+      port: 3128
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  livenessProbe:
+    tcpSocket:
+      port: 3128
+    initialDelaySeconds: 10
+    periodSeconds: 15
+
+# hostd-gateway deployment configuration
+hostdGateway:
+  replicaCount: 2
+  image:
+    repository: evalspleef/hostd
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  service:
+    type: ClusterIP
+    registrationPort: 50051
+    gatewayPort: 50052
+  secretRefs:
+    registrationToken:
+      secretName: evalspleef-secrets
+      key: hostd-registration-token
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  readinessProbe:
+    tcpSocket:
+      port: 50051
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  livenessProbe:
+    tcpSocket:
+      port: 50051
+    initialDelaySeconds: 10
+    periodSeconds: 15
+
+# ConfigMaps for providers and models
+configs:
+  providersYaml: |
+    model_accounts:
+      novita-main:
+        adapter: novita-dedicated
+        api_key_ref: vault://novita/main
+      anthropic-official:
+        adapter: openai-compatible
+        base_url: https://api.anthropic.com
+        api_key_ref: vault://anthropic/eval
+    sandbox_instances:
+      novita-us-phx-1:
+        adapter: novita-sandbox
+        config:
+          region: us-phx-1
+          api_key_ref: vault://novita/main
+  modelsYaml: |
+    models:
+      - slug: claude-sonnet-5
+        family: claude
+        roles: [judge, target]
+        source:
+          type: vendor
+          vendor: anthropic
+          model_id: "claude-sonnet-5-20261022"
+        deployment:
+          adapter: openai-compatible
+          account: anthropic-official
+          params:
+            protocol: anthropic_messages
+        declared_context_tokens: 200000
+        declared_max_output_tokens: 64000
+        pricing_ref: api:anthropic@2026-11
+        license: proprietary
+        owner: eval-lead
+
+# NetworkPolicies
+networkPolicy:
+  enabled: true

@@ -1,0 +1,87 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "evalspleef.fullname" . }}-gateway
+  labels:
+    {{- include "evalspleef.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "evalspleef.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Public inference data port is open to sandboxes and agent runners
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.service.dataPort }}
+    # Admin port restricted to control plane pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "evalspleef.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: control
+      ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.service.adminPort }}
+  egress:
+    # Allow egress to external APIs (OpenAI, Anthropic, Novita, HuggingFace) and database
+    - {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "evalspleef.fullname" . }}-control
+  labels:
+    {{- include "evalspleef.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "evalspleef.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: control
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "evalspleef.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.control.service.port }}
+  egress:
+    - {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "evalspleef.fullname" . }}-hostd-gateway
+  labels:
+    {{- include "evalspleef.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "evalspleef.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: hostd-gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Registration and mTLS gateway ports open to external hostd daemons
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.hostdGateway.service.registrationPort }}
+        - protocol: TCP
+          port: {{ .Values.hostdGateway.service.gatewayPort }}
+  egress:
+    - {}
+{{- end }}

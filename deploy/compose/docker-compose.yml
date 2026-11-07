@@ -1,0 +1,135 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-evalspleef}
+      POSTGRES_USER: ${POSTGRES_USER:-evalspleef}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-evalspleef_dev_pw}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-evalspleef} -d ${POSTGRES_DB:-evalspleef}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-evalspleef-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-evalspleef_dev_minio_pw}
+    volumes:
+      - minio_data:/data
+    networks:
+      - internal
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/gateway.Dockerfile
+    image: evalspleef/gateway:latest
+    restart: unless-stopped
+    environment:
+      SPLEEF_GATEWAY_ADMIN_TOKEN: ${SPLEEF_GATEWAY_ADMIN_TOKEN:-dev_admin_token}
+      SPLEEF_GATEWAY_STORE: ${SPLEEF_GATEWAY_STORE:-postgresql://evalspleef:evalspleef_dev_pw@postgres:5432/evalspleef}
+      SPLEEF_GATEWAY_DATA_PORT: 8390
+      SPLEEF_GATEWAY_ADMIN_PORT: 8391
+      SPLEEF_GATEWAY_HOST: "0.0.0.0"
+      NOVITA_API_KEY: ${NOVITA_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    ports:
+      # Gateway public data port for inference from agents / sandboxes
+      - "8390:8390"
+      # Admin port bound to loopback only
+      - "127.0.0.1:8391:8391"
+
+  control:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/control.Dockerfile
+    image: evalspleef/control:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${SPLEEF_GATEWAY_STORE:-postgresql://evalspleef:evalspleef_dev_pw@postgres:5432/evalspleef}
+      SPLEEF_GATEWAY_ADMIN_TOKEN: ${SPLEEF_GATEWAY_ADMIN_TOKEN:-dev_admin_token}
+      SPLEEF_GATEWAY_ADMIN_URL: http://gateway:8391
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    volumes:
+      - logs_data:/var/log/evalspleef
+    networks:
+      - internal
+    command: ["--help"]
+
+  egress:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/egress.Dockerfile
+    image: evalspleef/egress:latest
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./egress-policy.yaml:/etc/evalspleef/egress-policy.yaml:ro
+      - logs_data:/var/log/evalspleef
+    networks:
+      - internal
+    ports:
+      - "127.0.0.1:3128:3128"
+    command:
+      - "--policy"
+      - "/etc/evalspleef/egress-policy.yaml"
+      - "--listen"
+      - "0.0.0.0:3128"
+      - "--log-dir"
+      - "/var/log/evalspleef"
+      - "--trial-id"
+      - "compose-shared"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - logs_data:/var/log/evalspleef
+    networks:
+      - internal
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  minio_data:
+  logs_data:

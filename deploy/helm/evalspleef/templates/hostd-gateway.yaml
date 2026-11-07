@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "evalspleef.fullname" . }}-hostd-gateway
+  labels:
+    {{- include "evalspleef.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hostd-gateway
+spec:
+  replicas: {{ .Values.hostdGateway.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "evalspleef.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "hostd-gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "evalspleef.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "hostd-gateway") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: hostd-gateway
+          image: "{{ .Values.hostdGateway.image.repository }}:{{ .Values.hostdGateway.image.tag }}"
+          imagePullPolicy: {{ .Values.hostdGateway.image.pullPolicy }}
+          ports:
+            - name: registration
+              containerPort: {{ .Values.hostdGateway.service.registrationPort }}
+              protocol: TCP
+            - name: gateway
+              containerPort: {{ .Values.hostdGateway.service.gatewayPort }}
+              protocol: TCP
+          env:
+            - name: HOST_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.hostdGateway.secretRefs.registrationToken.secretName }}
+                  key: {{ .Values.hostdGateway.secretRefs.registrationToken.key }}
+          resources:
+            {{- toYaml .Values.hostdGateway.resources | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.hostdGateway.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.hostdGateway.livenessProbe | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "evalspleef.fullname" . }}-hostd-gateway
+  labels:
+    {{- include "evalspleef.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hostd-gateway
+spec:
+  type: {{ .Values.hostdGateway.service.type }}
+  ports:
+    - port: {{ .Values.hostdGateway.service.registrationPort }}
+      targetPort: registration
+      protocol: TCP
+      name: registration
+    - port: {{ .Values.hostdGateway.service.gatewayPort }}
+      targetPort: gateway
+      protocol: TCP
+      name: gateway
+  selector:
+    {{- include "evalspleef.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "hostd-gateway") | nindent 4 }}
