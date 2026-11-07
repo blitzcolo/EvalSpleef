@@ -843,6 +843,208 @@
       },
       "description": "本版本替代的旧题/旧版本（题目生命周期审计用）。"
     },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "运行需求块（PRD FR-TSK-01）。既有题包可缺省以保持兼容；新题包必填，且 runtime.requirements 取代在 platform 里写死载体。载体相关特殊参数只能放在 runtime.provider_overrides.<adapter> 下，仅优化、不改变语义（FR-TSK-02）。",
+      "required": [
+        "requirements",
+        "environment",
+        "execution_modes",
+        "model_requirements"
+      ],
+      "properties": {
+        "requirements": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "沙箱必须满足的资源与策略需求；调度按 requirements ⊆ capabilities 匹配（TECH-DESIGN 5.2）。",
+          "required": [
+            "os",
+            "arch",
+            "min_isolation",
+            "network",
+            "gpu",
+            "gui",
+            "cpus",
+            "memory_mb",
+            "disk_mb",
+            "max_lifetime_s"
+          ],
+          "properties": {
+            "os": {
+              "type": "string",
+              "enum": [
+                "linux",
+                "macos",
+                "windows",
+                "harmony"
+              ],
+              "description": "操作系统族（PRD FR-TSK-01）。"
+            },
+            "arch": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "x86_64",
+                  "arm64"
+                ]
+              },
+              "description": "可接受的 CPU 架构集合。"
+            },
+            "min_isolation": {
+              "type": "string",
+              "enum": [
+                "L1",
+                "L2",
+                "L3",
+                "L4"
+              ],
+              "description": "最低隔离强度（PRD 附录 D.1）；L0 禁止使用，因此不在枚举内。"
+            },
+            "network": {
+              "type": "string",
+              "enum": [
+                "off",
+                "docs_whitelist",
+                "package_mirror",
+                "full"
+              ],
+              "description": "网络模式，与 PRD 附录 D.3 及 network.mode 逐字一致。"
+            },
+            "allow_hosts": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253
+              },
+              "description": "网络模式为 docs_whitelist/package_mirror 时放行的主机名；in-sandbox 执行模式下必须包含网关出口。"
+            },
+            "gpu": {
+              "type": "boolean",
+              "description": "是否需要独占 GPU。"
+            },
+            "gui": {
+              "type": "boolean",
+              "description": "是否需要图形会话（窗口/帧缓冲）。"
+            },
+            "cpus": {
+              "type": "number",
+              "minimum": 0.5,
+              "maximum": 128,
+              "description": "vCPU 配额。"
+            },
+            "memory_mb": {
+              "type": "integer",
+              "minimum": 256,
+              "maximum": 524288,
+              "description": "内存配额 MiB。"
+            },
+            "disk_mb": {
+              "type": "integer",
+              "minimum": 256,
+              "maximum": 1048576,
+              "description": "磁盘配额 MiB。"
+            },
+            "max_lifetime_s": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 604800,
+              "description": "沙箱最长存活时间（秒），必须 ≥ budget.max_wall_clock_s + budget.max_rounds × budget.max_observe_s（FR-TSK-03）。"
+            }
+          }
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "载体镜像：Linux 用 OCI 引用，macOS 用 Tart 金镜像 OCI 引用，Windows 用金 VHDX 标识。镜像必须带 digest；未固定时填 TODO(pin-on-host)。",
+          "required": [
+            "oci_image",
+            "macos_image",
+            "windows_image"
+          ],
+          "properties": {
+            "oci_image": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 300,
+              "description": "Linux 题的唯一事实来源；形如 registry/repo@sha256:...，未固定时填 TODO(pin-on-host)。"
+            },
+            "macos_image": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 300,
+              "description": "macOS 题的 Tart 金镜像引用 + digest；非 macOS 题为 null。"
+            },
+            "windows_image": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 300,
+              "description": "Windows 题的金 VHDX 标识 + sha256；非 Windows 题为 null。"
+            }
+          }
+        },
+        "execution_modes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "remote-tools",
+              "in-sandbox"
+            ]
+          },
+          "description": "本题允许的执行模式（PRD FR-RUN）。声明 in-sandbox 时必须声明网关出口。"
+        },
+        "model_requirements": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "被测模型能力门槛；与 ModelCapabilities 比较，不满足则 cell 自动 Skip。",
+          "required": [
+            "tool_calling",
+            "min_context_tokens"
+          ],
+          "properties": {
+            "tool_calling": {
+              "type": "string",
+              "enum": [
+                "required",
+                "optional",
+                "none"
+              ],
+              "description": "工具调用要求。"
+            },
+            "min_context_tokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20000000,
+              "description": "有效上下文下限（token）。"
+            }
+          }
+        },
+        "provider_overrides": {
+          "type": "object",
+          "description": "按载体适配器名索引的专用参数（FR-TSK-02）；只允许优化、不改变语义。",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      }
+    },
     "extensions": {
       "type": "object",
       "description": "扩展字段统一放这里；顶层 additionalProperties=false。",
