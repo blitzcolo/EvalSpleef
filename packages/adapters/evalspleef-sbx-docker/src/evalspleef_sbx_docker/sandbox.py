@@ -281,9 +281,12 @@ class DockerSandbox(Sandbox):
         remote_path = PurePosixPath(remote)
         if not remote_path.is_absolute():
             raise TransferError(f"remote path must be absolute, got {remote!r}")
-        dest_dir = posixpath.dirname(str(remote_path)) or "/"
+        # A directory is unpacked into the remote path itself, never over it: tar would
+        # otherwise try to change the owner, mode and times of an existing mount point.
+        into_dir = await asyncio.to_thread(lambda: local.is_dir() and not local.is_symlink())
+        dest_dir = str(remote_path) if into_dir else posixpath.dirname(str(remote_path)) or "/"
         try:
-            tar_bytes = build_upload_tar(local, arcname=remote_path.name)
+            tar_bytes = build_upload_tar(local, arcname=remote_path.name, contents_only=into_dir)
         except TransferError:
             raise
         except Exception as exc:

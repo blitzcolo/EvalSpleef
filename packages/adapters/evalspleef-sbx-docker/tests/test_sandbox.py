@@ -125,6 +125,18 @@ async def test_directory_roundtrip_preserves_modes(sandbox) -> None:
         assert stat.S_IMODE((back / "sub" / "nested.bin").stat().st_mode) == 0o755
 
 
+async def test_directory_can_be_uploaded_as_the_workspace_mount(sandbox) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = Path(tmp) / "pack"
+        (tree / "sub").mkdir(parents=True)
+        (tree / "task.txt").write_bytes(b"alpha\n")
+        (tree / "sub" / "nested.txt").write_bytes(b"beta\n")
+        await sandbox.upload(tree, "/workspace")
+    shown = await sandbox.exec(["cat", "/workspace/task.txt", "/workspace/sub/nested.txt"])
+    assert shown.exit_code == 0
+    assert shown.stdout == b"alpha\nbeta\n"
+
+
 async def test_download_rejects_escaping_symlink(sandbox) -> None:
     created = await sandbox.exec(["ln", "-sfn", "/etc/passwd", "/workspace/escape"])
     assert created.exit_code == 0

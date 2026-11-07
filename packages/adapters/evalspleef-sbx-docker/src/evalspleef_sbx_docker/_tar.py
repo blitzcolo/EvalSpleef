@@ -19,11 +19,14 @@ _MAX_MEMBER_BYTES = 1 << 30
 """Refuse a single tar member larger than 1 GiB before streaming it to disk."""
 
 
-def build_upload_tar(local: Path, *, arcname: str) -> bytes:
+def build_upload_tar(local: Path, *, arcname: str, contents_only: bool = False) -> bytes:
     """Pack ``local`` into a tar archive whose top-level entry is ``arcname``.
 
     Permission bits and mtimes are preserved; symlinks inside a uploaded tree are
     kept only when they stay inside the tree, otherwise the upload is rejected.
+    With ``contents_only`` a directory is packed without its own entry, so extracting
+    the archive never rewrites the metadata of the destination directory (a mount
+    point such as /workspace is owned by root and cannot be changed by the agent).
     """
     if not local.exists() and not local.is_symlink():
         raise TransferError(f"local path does not exist: {local}")
@@ -32,7 +35,10 @@ def build_upload_tar(local: Path, *, arcname: str) -> bytes:
         if local.is_symlink():
             _add_symlink(tar, local, arcname, root=local.parent)
         elif local.is_dir():
-            _add_directory(tar, local, arcname)
+            if contents_only:
+                _add_children(tar, local, prefix="")
+            else:
+                _add_directory(tar, local, arcname)
         else:
             _add_file(tar, local, arcname)
     return buffer.getvalue()
@@ -58,8 +64,12 @@ def _add_directory(tar: tarfile.TarFile, root: Path, arcname: str) -> None:
     if not info.isdir():
         raise TransferError(f"not a directory: {root}")
     tar.addfile(info)
+    _add_children(tar, root, prefix=f"{arcname}/")
+
+
+def _add_children(tar: tarfile.TarFile, root: Path, *, prefix: str) -> None:
     for child in sorted(root.iterdir()):
-        member = f"{arcname}/{child.name}"
+        member = f"{prefix}{child.name}"
         if child.is_symlink():
             _add_symlink(tar, child, member, root=root)
         elif child.is_dir():
