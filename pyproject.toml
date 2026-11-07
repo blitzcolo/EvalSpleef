@@ -55,7 +55,30 @@ python_version = "3.12"
 strict = true
 namespace_packages = true
 explicit_package_bases = true
-packages = ["evalspleef.spi"]
+packages = [
+  "evalspleef.spi",
+  "evalspleef.core",
+  "evalspleef.egress",
+  "evalspleef.gateway",
+  "evalspleef.hostd",
+  "evalspleef.runners",
+  "evalspleef.conformance",
+  "evalspleef.testing",
+  "evalspleef.control",
+  "evalspleef_model_openai_compat",
+  "evalspleef_model_novita",
+  "evalspleef_model_vpc_vllm",
+  "evalspleef_sbx_docker",
+  "evalspleef_sbx_e2b_family",
+  "evalspleef_sbx_tart",
+  "evalspleef_sbx_apple_container",
+  "evalspleef_sbx_libvirt",
+  "evalspleef_sbx_hyperv",
+  "evalspleef_sbx_windows_sandbox",
+  "evalspleef_sbx_k8s_agent_sandbox",
+  "evalspleef_sbx_device_pool",
+  "evalspleef_harbor_bridge",
+]
 
 [tool.importlinter]
 root_packages = [
