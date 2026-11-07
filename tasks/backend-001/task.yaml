@@ -104,6 +104,27 @@ references:
   empty_agent: answers/empty-agent.md
   patch_apply: patch -p1
 
+runtime:
+  requirements:
+    os: linux
+    arch: [x86_64, arm64]
+    min_isolation: L1
+    network: "off"
+    gpu: false
+    gui: false
+    cpus: 2
+    memory_mb: 2048
+    disk_mb: 1024
+    max_lifetime_s: 7200
+  environment:
+    oci_image: "python:3.12-slim@TODO(pin-on-host)"
+    macos_image: null
+    windows_image: null
+  execution_modes: [remote-tools]
+  model_requirements:
+    tool_calling: required
+    min_context_tokens: 64000
+
 isolation:
   agent_user: agent
   environment_mode: separate

@@ -45,6 +45,27 @@ resources:
   services: []
   notes: GPU 节点容器内跑；无 GPU 的宿主仅用于静态与 CPU 数学段；lavapipe 只做功能验证，不采性能。
 
+runtime:
+  requirements:
+    os: linux
+    arch: [x86_64]
+    min_isolation: L4
+    network: "off"
+    gpu: true
+    gui: false
+    cpus: 4
+    memory_mb: 8192
+    disk_mb: 20480
+    max_lifetime_s: 22800
+  environment:
+    oci_image: "registry.local/llm-eval/vulkan-build:1.3.290@TODO(pin-on-host)"
+    macos_image: null
+    windows_image: null
+  execution_modes: [remote-tools]
+  model_requirements:
+    tool_calling: required
+    min_context_tokens: 64000
+
 isolation:
   agent_user: agent
   environment_mode: separate

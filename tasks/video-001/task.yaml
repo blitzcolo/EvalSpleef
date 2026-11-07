@@ -111,6 +111,27 @@ artifacts:
     max_bytes: 209715200
     description: 30 秒 1080p H.264 片头 MP4。
 
+runtime:
+  requirements:
+    os: linux
+    arch: [x86_64, arm64]
+    min_isolation: L1
+    network: "off"
+    gpu: false
+    gui: false
+    cpus: 4
+    memory_mb: 4096
+    disk_mb: 4096
+    max_lifetime_s: 10800
+  environment:
+    oci_image: "python:3.12-slim@TODO(pin-on-host)"
+    macos_image: null
+    windows_image: null
+  execution_modes: [remote-tools]
+  model_requirements:
+    tool_calling: required
+    min_context_tokens: 64000
+
 isolation:
   agent_user: agent
   environment_mode: separate

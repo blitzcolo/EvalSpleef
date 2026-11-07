@@ -48,12 +48,34 @@ resources:
     签名材料（证书/Profile/p12）由平台预置在 /opt/harmony-signing，Agent 不得自行申请账号。
     设备由控制器独占租用，Agent 不直接持有设备 shell。
 
+runtime:
+  requirements:
+    os: harmony
+    arch: [arm64]
+    min_isolation: L4
+    network: "docs_whitelist"
+    allow_hosts: [developer.huawei.com, developer.openharmony.cn, docs.openharmony.cn]
+    gpu: false
+    gui: false
+    cpus: 4
+    memory_mb: 8192
+    disk_mb: 20480
+    max_lifetime_s: 14400
+  environment:
+    oci_image: "registry.local/llm-eval/harmony-build:6.0.2-api22@TODO(pin-on-host)"
+    macos_image: null
+    windows_image: null
+  execution_modes: [remote-tools]
+  model_requirements:
+    tool_calling: required
+    min_context_tokens: 64000
+
 isolation:
   agent_user: agent
   environment_mode: separate
   network_mode: allowlist
   lint_extend_select: [unpinned-image, root-agent]
-  notes: 设备池独占租用（真机），归还按 appendix/checklists/device-pool-handover.md；构建容器断网。
+  notes: 设备池独占租用（真机），归还按 docs/appendix/checklists/device-pool-handover.md；构建容器断网。
 
 budget:
   max_rounds: 8
