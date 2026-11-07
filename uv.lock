@@ -836,14 +836,23 @@ dependencies = [
     { name = "pyyaml" },
 ]
 
+[package.optional-dependencies]
+conformance = [
+    { name = "evalspleef-conformance" },
+    { name = "evalspleef-testing" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=43" },
+    { name = "evalspleef-conformance", marker = "extra == 'conformance'", editable = "packages/evalspleef-conformance" },
     { name = "evalspleef-spi", editable = "packages/evalspleef-spi" },
-    { name = "grpcio", specifier = ">=1.66" },
-    { name = "protobuf", specifier = ">=5" },
+    { name = "evalspleef-testing", marker = "extra == 'conformance'", editable = "packages/evalspleef-testing" },
+    { name = "grpcio", specifier = ">=1.85" },
+    { name = "protobuf", specifier = ">=7" },
     { name = "pyyaml", specifier = ">=6" },
 ]
+provides-extras = ["conformance"]
 
 [[package]]
 name = "evalspleef-model-novita"
@@ -852,13 +861,24 @@ source = { editable = "packages/adapters/evalspleef-model-novita" }
 dependencies = [
     { name = "evalspleef-spi" },
     { name = "httpx" },
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+conformance = [
+    { name = "evalspleef-conformance" },
+    { name = "evalspleef-testing" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "evalspleef-conformance", marker = "extra == 'conformance'", editable = "packages/evalspleef-conformance" },
     { name = "evalspleef-spi", editable = "packages/evalspleef-spi" },
+    { name = "evalspleef-testing", marker = "extra == 'conformance'", editable = "packages/evalspleef-testing" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "pyyaml", specifier = ">=6" },
 ]
+provides-extras = ["conformance"]
 
 [[package]]
 name = "evalspleef-model-openai-compat"
