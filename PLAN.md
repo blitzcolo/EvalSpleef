@@ -285,6 +285,12 @@ D3, D6-D12 and the rest of the unfinished list above remain open.
 | Novita Serverless GPU | endpoint create with 0 workers succeeded and was deleted; all serverless products had 0 GPUs available. The repository's serverless adapter sends a snake_case body to `/gpus/v2/endpoints`, which does not match the documented camelCase body at `/gpu-instance/openapi/v1/endpoint/create` (open) |
 | Real probes through the gateway | deepseek-flash 11/14, glm-5.3-flash 10/14, qwen3.8-flash 11/14 after the fixes. Remaining failures: P-06 tool_choice modes, P-07 (DeepSeek rejects json_schema), P-11 seed determinism and stop, P-12 a few rate-limited requests |
 
+Real-model batch on local Docker (batch 2026-11-b2, logic-001, data-001 and debug-001, 2 epochs, targets deepseek-flash via the DeepSeek API and glm-5.3-flash via Novita, judge qwen3.8-flash via Novita, all through the gateway): 25 trials including retries, and the event projection matched all 25 rows. deepseek-flash scored 0/Perfect on both epochs of data-001 and debug-001; glm-5.3-flash reached Perfect on data-001 and debug-001 only on the fourth attempt, so with one valid epoch those cells went to Manual; logic-001 stayed Pending for both models (observation timeouts after 300 s, gateway read timeouts). Real defects this run found, all open:
+
+- The gateway does not catch `httpx.ReadTimeout` from a slow upstream; the request fails and the runner crashes, and a read timeout is classified as `invalid` instead of a retryable provider error.
+- The cost ledger booked 0 USD: the runner records no cost, so the gateway's priced usage never reaches the trial record, the grade cost or the ledger.
+- Four trials that failed while observing stayed in `observing` with validity invalid, because the transition table has no path from observing to invalid.
+
 The first live conformance attempt was invalid: the fake target patched the adapter module process-wide, so `novita-live` ran against the in-memory fake. Building the live target without the fake fixed it; only the third run above counts.
 
 New defects found on real surfaces and still open:
