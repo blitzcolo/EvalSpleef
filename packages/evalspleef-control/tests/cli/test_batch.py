@@ -161,3 +161,22 @@ def test_batch_run_and_report(
         app, ["trials", "regrade", "--trial-id", trial_id, "--reason", "after void"]
     )
     assert refused.exit_code == 1
+
+
+@pytest.mark.parametrize("command", ["freeze", "run"])
+def test_a_model_without_prices_cannot_be_frozen_or_run(
+    cli_runner: CliRunner, args: list[str], env: Path, command: str
+) -> None:
+    models = env / "models.yaml"
+    models.write_text(
+        models.read_text(encoding="utf-8").replace(
+            ", pricing: {input_per_mtok: 0, output_per_mtok: 0}", "", 1
+        ),
+        encoding="utf-8",
+    )
+    assert cli_runner.invoke(app, ["models", "register", "--model", "demo", *args]).exit_code == 0
+    assert cli_runner.invoke(app, ["models", "probe", "--model", "demo", *args]).exit_code == 0
+    result = cli_runner.invoke(app, ["batch", command, *_batch_args(env, args)])
+    assert result.exit_code == 1, result.output
+    assert "no deployment.params.pricing for demo" in result.output
+    assert not (Path(env).parent / "state" / "freezes" / "2026-11-b1.json").exists()

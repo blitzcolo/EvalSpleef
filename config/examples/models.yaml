@@ -32,6 +32,7 @@ models:
       account: fake-local # a model_accounts entry of providers.yaml
       params:
         model: fake-ref-agent # `model` field sent upstream and expected back (probe P-14)
+        pricing: {input_per_mtok: 0, output_per_mtok: 0} # explicit: a local fake is free
     declared_context_tokens: 131072 # probe P-09 bisects the real context limit from this
     declared_max_output_tokens: 4096 # probe P-10 measures the real output limit from this
     pricing_ref: "assumed:fake-ref-agent@2026-11" # cost basis; basis = assumed (no real price)
@@ -46,7 +47,7 @@ models:
     deployment:
       adapter: openai-compatible
       account: fake-local
-      params: {model: fake-empty-agent}
+      params: {model: fake-empty-agent, pricing: {input_per_mtok: 0, output_per_mtok: 0}}
     declared_context_tokens: 131072
     declared_max_output_tokens: 4096
     pricing_ref: "assumed:fake-empty-agent@2026-11"
@@ -61,7 +62,7 @@ models:
     deployment:
       adapter: openai-compatible
       account: fake-local
-      params: {model: fake-judge}
+      params: {model: fake-judge, pricing: {input_per_mtok: 0, output_per_mtok: 0}}
     declared_context_tokens: 131072
     declared_max_output_tokens: 4096
     pricing_ref: "assumed:fake-judge@2026-11"

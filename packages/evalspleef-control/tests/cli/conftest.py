@@ -56,7 +56,7 @@ models:
     family: demo
     roles: [target]
     source: {type: vendor, vendor: evalspleef, model_id: demo}
-    deployment: {adapter: openai-compatible, account: fake, params: {model: demo}}
+    deployment: {adapter: openai-compatible, account: fake, params: {model: demo, pricing: {input_per_mtok: 0, output_per_mtok: 0}}}
     declared_context_tokens: 32768
     declared_max_output_tokens: 4096
     pricing_ref: "assumed:demo@2026-11"
@@ -67,7 +67,7 @@ models:
     family: demo
     roles: [target]
     source: {type: vendor, vendor: evalspleef, model_id: missing-model}
-    deployment: {adapter: openai-compatible, account: fake, params: {model: missing-model}}
+    deployment: {adapter: openai-compatible, account: fake, params: {model: missing-model, pricing: {input_per_mtok: 0, output_per_mtok: 0}}}
     declared_context_tokens: 32768
     declared_max_output_tokens: 4096
     pricing_ref: "assumed:broken@2026-11"

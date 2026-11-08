@@ -1249,6 +1249,7 @@ async def _batch_freeze(
     )
     async with AppContext(settings) as ctx:
         batch_config = ctx.load_batch_config()
+        await _require_prices(ctx, batch_config)
         plan = await ctx.build_plan(batch_config)
         lint_ok = _lint_packs(ctx, batch_config)
         freeze = await _freeze_record(ctx, plan, batch_config)
@@ -1277,6 +1278,24 @@ def _lint_packs(ctx: AppContext, batch_config: Any) -> bool:
                 ok = False
                 typer.secho(f"error  {report.task_id}: {issue}", fg=typer.colors.RED, err=True)
     return ok
+
+
+async def _require_prices(ctx: AppContext, batch_config: Any) -> None:
+    """Refuse a batch whose models carry no explicit price: its cost cap could never trigger.
+
+    A route without ``deployment.params.pricing`` is costed at zero, so every spend check passes.
+    A free local model states that with zero prices.
+    """
+    unpriced = []
+    for slug in (*batch_config.models, *batch_config.judges):
+        spec = await ctx.model_registry.resolve(slug)
+        if not isinstance(spec.deployment.params.get("pricing"), Mapping):
+            unpriced.append(slug)
+    if unpriced:
+        raise DomainError(
+            f"no deployment.params.pricing for {', '.join(unpriced)}: the batch cost cap cannot "
+            "be enforced; give per-Mtok prices (0 for a free local model)"
+        )
 
 
 async def _freeze_record(ctx: AppContext, plan: Any, batch_config: Any) -> Any:
@@ -1368,6 +1387,7 @@ async def _batch_run(
     async with AppContext(settings) as ctx:
         _check_account_urls(ctx)
         batch_config = ctx.load_batch_config()
+        await _require_prices(ctx, batch_config)
         plan = await ctx.build_plan(batch_config)
         gateway_url = ctx.gateway_data_url()
         lint_ok = _lint_packs(ctx, batch_config)
