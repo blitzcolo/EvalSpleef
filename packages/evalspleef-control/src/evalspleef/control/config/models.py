@@ -174,7 +174,10 @@ class ModelConfig(BaseModel):
     def to_model_spec(self) -> ModelSpec:
         """Convert to the immutable SPI dataclass (TECH-DESIGN section 6.1)."""
         source: HFSource | VendorSource
+        params = dict(self.deployment.params)
         if isinstance(self.source, HFSourceConfig):
+            # The endpoint manager reads the mirror choice from the deployment params.
+            params.setdefault("mirror", self.source.mirror)
             source = HFSource(
                 repo=self.source.repo,
                 revision=self.source.revision,
@@ -195,7 +198,7 @@ class ModelConfig(BaseModel):
             deployment=DeploymentSpec(
                 adapter=self.deployment.adapter,
                 account=self.deployment.account,
-                params=dict(self.deployment.params),
+                params=params,
             ),
             declared_context_tokens=self.declared_context_tokens,
             declared_max_output_tokens=self.declared_max_output_tokens,

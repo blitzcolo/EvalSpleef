@@ -1439,6 +1439,24 @@ async def _batch_run(
         typer.echo(run_result.report.to_markdown())
         for alert in run_result.alerts:
             typer.secho(f"scheduler alert: {alert}", fg=typer.colors.YELLOW, err=True)
+        from datetime import UTC, datetime
+
+        from evalspleef.control.batch.mirrors import verify_mirrors
+
+        frozen_specs = [await ctx.model_registry.resolve(slug) for slug in batch_config.models]
+        moved = await verify_mirrors(
+            frozen_specs,
+            ctx.hf,
+            ctx.events,
+            batch_id=plan.batch_id,
+            ts=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        for slug in moved:
+            typer.secho(
+                f"incident: the HF mirror of {slug} no longer resolves to its frozen commit",
+                fg=typer.colors.RED,
+                err=True,
+            )
         # Trial rows are projections of the event log; a row the log does not derive is a bug.
         projection = await verify_projection(ctx.events, ctx.db, batch_id=plan.batch_id)
         typer.echo(f"event projection: {projection.checked} trial row(s) checked")
@@ -1451,7 +1469,7 @@ async def _batch_run(
                     err=True,
                 )
             return EXIT_DOMAIN
-        return EXIT_SUCCESS
+        return EXIT_DOMAIN if moved else EXIT_SUCCESS
 
 
 _RELEASE_OPT = typer.Option(
