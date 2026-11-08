@@ -31,7 +31,7 @@ A run is one phase of work. Lanes inside a run have disjoint write scopes and ha
 | Foundations run | testing-doubles, core-v3, task-packs-v3, egress-proxy, gateway-protocols, conformance-kit | Foundation | done |
 | Engines run | gateway-core, control-data, runners, control-config, sbx-docker, sbx-e2b-family, model-openai-compat, model-novita, hostd-remote, control-endpoints, control-sched, control-trial, control-cli | Foundations run | done |
 | Breadth run | sbx-tart, sbx-apple-container, sbx-libvirt, sbx-hyperv, sbx-windows-sandbox, sbx-k8s-agent-sandbox, sbx-device-pool, harbor-bridge, model-vpc-vllm, templates, deploy, docs | Foundations run | done |
-| Integration | End-to-end on real surfaces, conformance on local Docker, review | Engines and Breadth runs | done |
+| Integration | End-to-end on real surfaces, conformance on local Docker, review | Engines and Breadth runs | done against the eight success criteria below; the spec review further down lists what the PRD still needs |
 
 ## Lane scopes
 
@@ -142,6 +142,116 @@ These work today and are covered by the evidence above, but they are workarounds
 7. **Route fallback.** The example `providers.yaml` lists the mock sandbox after Docker, and an unpinned run used it for 4 of 12 trials. The end-to-end pins its routes to `local-docker`.
 8. **Documentation.** `docs/guides/` was not written. The root `README.md`, 20 package READMEs and the specs under `docs/` stand in.
 9. **Hyper-V test double.** The adapter writes a pid file such as `/tmp/spleef-<id>.pid` in the guest for every timed command so the timeout path can kill the process tree. The test double runs guest commands as host processes, so those few-byte files land in the host's `/tmp` and no test removes them. A real guest is destroyed with its pid files.
+
+## Spec conformance review (2026-11-08)
+
+The eight success criteria above are narrower than the PRD. They prove one local closed loop (Docker, a fake model, the gateway, the control plane, three packs). This review compared the code with every FR-* requirement, the SPI signatures of TECH-DESIGN sections 5-8, appendices A-E and AC-01..AC-10. Each finding below was confirmed by reading the code path, not a README. "Library only" means the code exists and has unit tests, but no command or service calls it.
+
+### Drift: implemented differently from the spec
+
+| # | Spec | What the code does | Impact |
+| --- | --- | --- | --- |
+| D1 | AGENTS rule 6, PRD B.8: events are authoritative, rows are projections | `trial/runner.py:_advance` writes `payload.transition` as a dict, but `events/project.py:_transition_for` only honours a string and otherwise guesses from the event type, so `fail_infra`, `pause` and `invalidate` replay wrongly or raise `IllegalTransition`. `verify_projection` has no caller outside tests. The batch driver also upserts trial rows directly | High: a database row cannot be audited against the event log |
+| D2 | TD 7.4.2: `runtime: runsc` runs the container under gVisor | `sbx-docker/provider.py` reads `runtime` only to declare L2; `_container_config` never sets the runtime, so the container runs under runc | High: a false isolation claim |
+| D3 | TD 7.5, FR-SBX-10: hostd dials out, no inbound port | `hostd/daemon.py` listens (`add_secure_port`) and `hostd/remote.py` connects to the host; only registration and heartbeat go outbound | High for hosts behind NAT (the Mac mini deployment) |
+| D4 | PRD A.2 / FR-MOD-09: `trial.versions` carries model revision, template digest, engine, gateway, shell and hostd versions | `core/versions.py:TrialVersions` defines the fields, but nothing in control or runners builds it; only the batch freeze record carries versions | High: US-10 and G7 cannot be answered per trial |
+| D5 | FR-MOD-02.5: freeze checks the HF token expiry | The CLI builds `EndpointManager` without `hf_token_expiry`, and a missing expiry blocks the freeze, so every HF model with a `token_ref` cannot be frozen | High for AC-01 |
+| D6 | FR-MOD-04: `rpm`/`tpm` are gateway rate limits | `openai-compat` puts them into `UpstreamRoute.default_params`, and `proxy.apply_default_params` merges them into the upstream request body; nothing enforces them | Medium: sent to the vendor as unknown fields |
+| D7 | Appendix C.5: the judge panel needs judges from at least two vendors | `cli/context.py` hard-codes `allow_single_judge=True` | Medium |
+| D8 | TD 6.3: LiteLLM in front, upstreams in their own protocol | A self-built gateway (recorded decision). Client protocols are converted to chat completions upstream only; a `responses` or `anthropic_messages` upstream returns 502 | Medium: official Anthropic and OpenAI Responses passthrough does not work |
+| D9 | TD 4: `harbor_runner` lives in `evalspleef-runners` | It lives in `evalspleef-harbor-bridge/runner.py` and shells out to `harbor run` per turn; the environment bridge builds a fake digest `sha256:<image>` instead of looking up the template registry | Low for layout, medium for the digest |
+| D10 | TD 7.6: `templates/registry.json` maps `(env, version)` to OCI, Novita, E2B, Tart and VHDX templates | It holds local Docker fingerprints only | Medium |
+| D11 | TD 16.1: the compose stack runs the control plane | The `control` service runs `--help`; the control plane is a command line, not a resident service | Low today, matters for scheduled work (alerts, health loop, ticket expiry) |
+| D12 | `tasks/README.md` usage step 3 | Still says to map packs to Harbor tasks (v2 text) | Low |
+
+### Unfinished work
+
+Priorities follow PRD section 5 (P0 is needed for the minimal closed loop). "Account" means the item needs a real vendor account or hardware that this build did not have.
+
+**Evaluation flow and events**
+
+| Item | Spec | State |
+| --- | --- | --- |
+| Fix the event projection (D1) and call `verify_projection` after every batch run | AGENTS rule 6, B.8 | code fix |
+| Batch lifecycle events (Draft, Frozen, Running, Graded) and a persisted batch state; `batch_state` is inferred from trial rows today | B.1, B.8 | missing |
+| Emit `hiddentest.result` and `judge.verdict` | B.8 | defined, never emitted |
+| Operator commands: regrade, void a trial or version, resolve the manual queue, resume a paused trial | B.6, B.7 | library only (`core/state.py`); paused trials stay paused |
+| P5 manual-intervention timeout | B.4 | `manual_interrupt_expired` has no caller |
+| Shell heartbeat consumed by the control plane (three missed beats = hung) | B.3 | the runner sends it, nobody reads it |
+| Provider-error retry rule (backoff up to five, then back to pending) | B.6 | one three-retry chain for every class |
+| Batch total budget checked at dispatch, not only at freeze | B.5 | freeze only |
+| Cold-start time excluded from the trial wall clock; dispatch pauses while an endpoint sleeps | FR-MOD-06.2, FR-FLOW-06 | the gateway sends `x-spleef-cold-start-ms`; nothing reads it |
+| Judge model and endpoint frozen into the batch | FR-GRD | not in the freeze record |
+
+**Grading, reports, cost, observability**
+
+| Item | Spec | State |
+| --- | --- | --- |
+| Cell drill-down: model source and HF revision, deployment adapter, engine, sandbox adapter and isolation level, cost basis | FR-RPT-2, NFR-02 | missing; `core/report.py:Cell` has none of these fields |
+| Cost columns split by cost basis | FR-RPT-3, PRD Q3 | missing |
+| Release package: per-carrier isolation report, judge consistency report, version manifest, probe summary, cost reconciliation | FR-RPT-4, FR-ISO-01 | missing; only the leaderboard exists |
+| Judge calibration gate (kappa or alpha >= 0.70) and the regrade agreement gate (>= 95%) as runnable tools | C.5, AC-09, NFR-01 | missing |
+| Wire `CostLedger` (token cost, endpoint running time, sandbox seconds) and Novita bill import into batches; cost dashboard | FR-OPS-02, FR-OPS-04, AC-10, NFR-08 | library only, no writer |
+| Alerts: orphan sandbox, quota, HF token expiry, frequent cold starts, lost host heartbeat | FR-OPS-03 | idle-endpoint check only, and no resident process runs it |
+| OpenTelemetry spans around SPI calls, joined per trial | NFR-10 | `telemetry/tracing.py` has no caller |
+
+**Model side**
+
+| Item | Spec | State |
+| --- | --- | --- |
+| Populate `trial.versions` (D4) | FR-MOD-09, FR-MOD-07.6 | code fix |
+| Record HF token expiry so freeze can pass (D5); schedule the 14-day warning | FR-MOD-02.5 | code fix |
+| `verify_mirror` at batch end; honour `mirror: false` from models.yaml (parsed, then dropped) | FR-MOD-02.2, 02.4 | never called |
+| Copy chat template and tokenizer hashes into the trial versions | FR-MOD-02.6 | recorded on the spec only |
+| Enforce `rpm`/`tpm` in the gateway and stop sending them upstream (D6) | FR-MOD-04 | code fix |
+| Gateway: 429/5xx backoff, read timeouts, persistent routes, prices and usage events, a non-zero cost for unpriced routes, per-request round/trial/latency/status record | FR-MOD-07.4, 07.5 | routes, prices and events are in memory; unpriced routes never hit the cost cap |
+| Upstream passthrough for Anthropic Messages and OpenAI Responses (D8) | FR-MOD-07.1 | 502 today |
+| Vendor-lock mismatch voids the trial as a provider error | FR-MOD-04 | the gateway refuses; the runner is not told |
+| Scheduled assisted-ticket expiry (24 h) and a running `HealthLoop` | FR-MOD-03, 06.4 | methods exist, nothing schedules them |
+| LoRA adapters on dedicated endpoints | FR-MOD-03.5 | missing (P1) |
+| Real Novita Dedicated, Novita Serverless GPU, vpc-vllm and Hugging Face runs; AC-01 with a public, a gated and a private model | AC-01, US-01, US-02 | account |
+
+**Sandbox side**
+
+| Item | Spec | State |
+| --- | --- | --- |
+| Apply `runsc` in the Docker adapter (D2) | TD 7.4.2 | code fix |
+| hostd dials out over one bidirectional stream (D3) | TD 7.5 | redesign of the transport |
+| Executable isolation probes instead of prose, and run the shipped `probes/*.sh`; drop the waiver | TD 7.7, appendix D | bridge 2 above |
+| Egress enforcement on Docker: internal network, proxy variables, firewall rule; gateway domain added automatically for `in-sandbox` | TD 7.3, FR-SBX-03 | only a network name is attached |
+| Docker `create` validates lifetime, disk and resource ceilings against its capabilities | TD 7.1 | disk is silently ignored |
+| Multi-carrier template registry and cross-carrier fingerprint check; Tart and VHDX template builds | TD 7.6 | Docker only |
+| Harbor: template registry lookup in the bridge, regrade and analyze integration, a run against real Harbor (AC-08) | TD 9, AC-08 | stub executable only |
+| A conformance case that proves the TTL sweeper (C-LIFE-03 force-deletes today) and one that exercises the proxy path | TD 15.1 | weak |
+| Example `providers.yaml` with a remote host, a Novita instance and egress proxies | TD 14.2 | trimmed to Docker and the mock |
+| Real runs: Novita Agent Sandbox (AC-03 second half), E2B self-host, Tart with two macOS VMs for 24 h (AC-04), Hyper-V (AC-05), libvirt, apple-container, Kubernetes, device pool | AC-03..AC-05 | account or hardware |
+
+**Runners, task packs, operations**
+
+| Item | Spec | State |
+| --- | --- | --- |
+| Native shells (Claude Code, Codex CLI, OpenCode) and Inspect run for real, with pinned versions written to `trial.versions` | FR-RUN-01, 02 | stub executables; versions are `0.1.0` constants |
+| Packs for the missing tracks (rust, ios, game) | appendix E.2 | 10 packs cover 9 of 12 tracks |
+| Replace the `agent_judge` items in backend-001, macos-001 and video-001 so they finish without a human | appendix C | they always pause |
+| Pin image digests (`TODO(pin-on-host)` in every pack) | FR-TSK-03 | the linter accepts a pending marker |
+| A resident control-plane service for scheduled work (D11); Helm rendered by `helm`; compose smoke with all services | NFR-09 | not done |
+| Throughput and start-latency measurements | NFR-04, NFR-06 | not measured |
+| Adapter onboarding drill by an engineer outside the core team | AC-07 | needs a person |
+| `docs/guides/` and the stale `tasks/README.md` step (D12) | | not written |
+
+### Acceptance criteria status
+
+| AC | State |
+| --- | --- |
+| AC-01 | not met: no real Novita or Hugging Face run; HF freeze also blocked by D5 |
+| AC-02 | partly: gateway budgets proven with a fake upstream; no source or cost-basis annotation on the leaderboard |
+| AC-03 | half: the Docker half runs for real; the Novita half is a fake |
+| AC-04, AC-05 | not met: need a Mac mini with Tart and a Hyper-V host |
+| AC-06 | met for Docker and remote-over-Docker (real) and the five in-repo doubles; the other 14 targets pass against transport fakes written together with their adapters |
+| AC-07 | not met: needs an outside engineer |
+| AC-08 | not met: Harbor not installed |
+| AC-09 | not met: no calibration or regrade-agreement tooling |
+| AC-10 | not met: the cost ledger is not wired |
 
 ## Defects found by the checks, and fixed
 
