@@ -77,6 +77,9 @@ class BatchFileConfig(BaseModel):
     budget: BatchBudget = Field(default_factory=BatchBudget)
     endpoint_policy: EndpointPolicy = Field(default_factory=EndpointPolicy)
     judges: list[str] = Field(default_factory=list)
+    #: Appendix C.5 wants judges from at least two vendors; a single-vendor panel is an
+    #: explicit, recorded exception (for example a local run against one fake judge).
+    allow_single_judge_vendor: bool = False
     pricing_table: str
 
     @field_validator("batch")

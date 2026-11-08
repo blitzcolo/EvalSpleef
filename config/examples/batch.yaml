@@ -13,4 +13,5 @@ endpoint_policy:
   warm_before_run: true # wake + health-check every endpoint before the first trial
   retire_after: terminate # deregister routes when graded (sleep | terminate)
 judges: [fake-judge] # the judge panel for llm_judge rubric items (family must differ)
+allow_single_judge_vendor: true # appendix C.5 wants two vendors; this local example has one fake judge
 pricing_table: "2026-11" # frozen into the batch for cost accounting

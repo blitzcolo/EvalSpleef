@@ -766,6 +766,7 @@ class AppContext:
         judges: Mapping[str, JudgeClient] | None = None,
         target_family: str = "",
         versions_by_endpoint: Mapping[str, Mapping[str, Any]] | None = None,
+        allow_single_judge_vendor: bool = False,
     ) -> TrialRunner:
         """The real TrialExecutor: packs from the task directory, runners from entry points."""
         # Sandboxes with a read-only rootfs and no /verify mount (the docker
@@ -774,7 +775,7 @@ class AppContext:
         evaluator = Evaluator(
             judges=judges,
             target_family=target_family,
-            allow_single_judge=True,  # the example batch runs a one-judge panel
+            allow_single_judge=allow_single_judge_vendor,
             verify_root=self._environ.get("SPLEEF_VERIFY_ROOT", "/verify"),
         )
         # Agent runners speak the OpenAI protocol: the gateway data-plane URL they
