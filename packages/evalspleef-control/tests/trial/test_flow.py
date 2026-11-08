@@ -57,6 +57,41 @@ async def test_happy_path_reaches_tier_p(harness_factory: Any, rnd: Any, legal: 
     assert record["canary_token"] == h.registry.token_of(h.trial.trial_id)
 
 
+async def test_trial_versions_are_recorded_when_the_agent_starts(
+    harness_factory: Any, rnd: Any
+) -> None:
+    seed = {
+        "model_version": "demo-model@3+0123abcd",
+        "model_source": "huggingface",
+        "hf_repo": "org/demo",
+        "hf_revision": "0123abcd",
+        "deployment_adapter": "novita-dedicated",
+        "gateway_version": "gw-9",
+        "freeze_hash": "sha256:" + "f" * 64,
+        "not_a_version_field": "dropped",
+    }
+    h = await harness_factory(rounds=[rnd()], setup_versions=seed)
+    outcome = await h.run()
+
+    (started,) = await h.of_type("trial.started")
+    versions = started.payload["versions"]
+    # The control plane's model- and batch-level fields pass through unchanged.
+    for key in ("model_version", "hf_repo", "hf_revision", "deployment_adapter", "freeze_hash"):
+        assert versions[key] == seed[key]
+    assert "not_a_version_field" not in versions
+    # The runner adds what only the trial knows.
+    assert versions["task_version"] == h.pack.version
+    assert versions["rubric_version"] == h.pack.rubric.rubric_version
+    assert versions["shell_version"] == f"{h.scripted.name}@{h.scripted.version}"
+    assert versions["image_digest"] == versions["template_digest"] == h.trial.template.digest
+    assert versions["provider_instance"] == "alpha"
+    assert versions["sandbox_adapter"] == h.providers["alpha"].name
+    assert versions["endpoint_id"] == h.trial.endpoint_id
+    assert versions["grader_version"].startswith("evalspleef-core@")
+    assert outcome.record is not None
+    assert outcome.record["extensions"]["versions"] == versions
+
+
 async def test_each_event_type_appears_in_order(harness_factory: Any, rnd: Any) -> None:
     h = await harness_factory(rounds=[rnd()], owns_terminal_events=True)
     await h.run()

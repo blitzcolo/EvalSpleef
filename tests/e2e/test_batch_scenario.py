@@ -145,6 +145,21 @@ def test_full_batch_on_local_docker(e2e: Any) -> None:
 
     grades = _grade_rows(harness.store_path)
     assert len(grades) == TRIALS, f"expected {TRIALS} graded trials, got {sorted(grades)}"
+    # trial.versions (PRD FR-MOD-09) is on every row, recorded from the real sandbox.
+    connection = sqlite3.connect(harness.store_path)
+    try:
+        row_versions = [
+            json.loads(extensions).get("versions")
+            for (extensions,) in connection.execute("SELECT extensions FROM trial")
+        ]
+    finally:
+        connection.close()
+    assert len(row_versions) == TRIALS
+    for versions in row_versions:
+        assert versions is not None
+        assert versions["sandbox_adapter"] == "docker"
+        assert versions["deployment_adapter"] == "openai-compatible"
+        assert versions["freeze_hash"].startswith("sha256:")
     trials_of_cell: dict[str, list[str]] = {}
     for trial_id in grades:
         parts = parse_trial_id(trial_id)

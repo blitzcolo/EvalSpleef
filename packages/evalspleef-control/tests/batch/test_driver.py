@@ -202,6 +202,23 @@ async def test_trial_rows_are_projections_of_the_event_log(build) -> None:
     assert report.ok, report.mismatches
 
 
+async def test_trial_rows_carry_the_versions_recorded_at_start(build) -> None:
+    h = await build(n_tasks=2)
+    h.executor.raises["web-002.alpha.terminus.e1.t01"] = CapabilityNotSupported("gpu")
+
+    await h.freeze_and_run()
+
+    rows = {row.trial_id: row for row in await h.trials.list_by_batch(BATCH)}
+    scored = rows["web-001.alpha.terminus.e1.t01"]
+    assert scored.extensions["versions"] == {
+        "task_version": "1.0.0",
+        "model_version": "alpha@1",
+        "shell_version": "t@1",
+    }
+    # A trial that failed before its agent started has no versions to copy.
+    assert "versions" not in rows["web-002.alpha.terminus.e1.t01"].extensions
+
+
 async def test_non_infrastructure_errors_are_not_retried(build) -> None:
     h = await build()
     h.executor.raises[TRIAL] = CapabilityNotSupported("gpu")

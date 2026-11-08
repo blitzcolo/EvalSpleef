@@ -15,8 +15,9 @@ import asyncio
 import shutil
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
@@ -53,6 +54,7 @@ from evalspleef.core.state import (
     event_path_for_terminal,
     record_grade,
 )
+from evalspleef.core.versions import TrialVersions
 from evalspleef.spi.errors import SpleefError
 from evalspleef.spi.gateway import GatewayAdmin, TrialKey
 from evalspleef.spi.runner import AgentRunner, RunnerBudget, ShellTurn, StopReason, TokenUsage
@@ -245,6 +247,7 @@ class _TrialRun:
         self.artifacts: list[Artifact] = []
         self.transcript: list[str] = []
         self.stop_reasons: list[str] = []
+        self.versions: dict[str, Any] | None = None
         self.preflight_log: list[dict[str, Any]] = []
         self.placements: list[dict[str, str]] = []
         self.announced: set[tuple[str, float]] = set()
@@ -324,6 +327,7 @@ class _TrialRun:
             expires_at=_iso(owner.clock.now() + self.budget.max_wall_clock_s + KEY_EXPIRY_BUFFER_S),
         )
         self.agent_runner = owner.runner_factory(trial)
+        self.versions = self._trial_versions(self.agent_runner).to_dict()
         await self._advance(
             "start",
             EventType.TRIAL_STARTED,
@@ -333,6 +337,7 @@ class _TrialRun:
                 "endpoint_id": self.setup.endpoint.endpoint_id,
                 "key_id": self.key.key_id,
                 "key_expires_at": self.key.expires_at,
+                "versions": self.versions,
             },
         )
         await self.agent_runner.start(
@@ -1017,8 +1022,36 @@ class _TrialRun:
             )
         )
 
+    def _trial_versions(self, shell: AgentRunner) -> TrialVersions:
+        """What this trial runs against (PRD FR-MOD-09), recorded when the agent starts."""
+        known = {f.name for f in fields(TrialVersions)}
+        seed = {key: value for key, value in self.setup.versions.items() if key in known}
+        pack = self.setup.pack
+        modes = shell.supported_modes
+        template = self.trial.template
+        values: dict[str, Any] = {
+            "model_version": self.trial.model,
+            "freeze_hash": "unfrozen",
+            **seed,
+            "task_version": pack.version,
+            "shell_version": f"{shell.name}@{shell.version}",
+            "image_digest": template.digest,
+            "rubric_version": pack.rubric.rubric_version,
+            "grader_version": f"evalspleef-core@{package_version('evalspleef-core')}",
+            "endpoint_id": self.setup.endpoint.endpoint_id,
+            "sandbox_adapter": self.owner.providers.sandbox_instance(
+                self.agent.provider_instance
+            ).name,
+            "provider_instance": self.agent.provider_instance,
+            "template_digest": template.digest,
+            "runner_mode": next(iter(modes)) if len(modes) == 1 else None,
+        }
+        return TrialVersions(**values)
+
     def _record_dict(self) -> dict[str, Any]:
         record = self.machine.record
+        if self.versions is not None:
+            record.extensions["versions"] = dict(self.versions)
         verifier = self.leases.verifier
         record.extensions["flow"] = {
             "agent_lease_id": self.agent.lease_id,

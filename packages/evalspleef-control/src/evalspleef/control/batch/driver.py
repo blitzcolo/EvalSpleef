@@ -328,8 +328,22 @@ class BatchDriver:
     def _ts(self) -> str:
         return _iso(self._now())
 
-    def _row(self, trial: PlannedTrial, state: TrialState, validity: Validity) -> TrialRow:
+    def _row(
+        self,
+        trial: PlannedTrial,
+        state: TrialState,
+        validity: Validity,
+        versions: Mapping[str, Any] | None = None,
+    ) -> TrialRow:
         created_at, retry_of = self._meta[trial.trial_id]
+        extensions: dict[str, Any] = {
+            "freeze_hash": self._freeze.version_matrix_hash,
+            "attempt": trial.attempt,
+            "retry_of": retry_of,
+            "endpoint_id": trial.endpoint_id,
+        }
+        if versions is not None:
+            extensions["versions"] = dict(versions)
         return TrialRow(
             trial_id=trial.trial_id,
             batch_id=trial.batch_id,
@@ -343,12 +357,7 @@ class BatchDriver:
             cell=trial.cell_id,
             epoch=trial.epoch,
             idx=trial.index,
-            extensions={
-                "freeze_hash": self._freeze.version_matrix_hash,
-                "attempt": trial.attempt,
-                "retry_of": retry_of,
-                "endpoint_id": trial.endpoint_id,
-            },
+            extensions=extensions,
         )
 
     async def _create_record(self, trial: PlannedTrial, *, retry_of: str | None) -> None:
@@ -427,6 +436,13 @@ class BatchDriver:
         events = await self._events.read(self._plan.batch_id, trial_id=trial.trial_id)
         return replay_trial_machine(events, trial_id=trial.trial_id).state
 
+    async def _started_versions(self, trial: PlannedTrial) -> Mapping[str, Any] | None:
+        """``trial.versions`` as the executor recorded it when the agent started, if it did."""
+        events = await self._events.read(self._plan.batch_id, trial_id=trial.trial_id)
+        started = [e for e in events if e.type is EventType.TRIAL_STARTED]
+        versions = started[-1].payload.get("versions") if started else None
+        return versions if isinstance(versions, Mapping) else None
+
     async def _finish(
         self, trial: PlannedTrial, outcome: TrialOutcome, retry: RetryDecision | None
     ) -> None:
@@ -440,7 +456,8 @@ class BatchDriver:
             record = self._record_of(trial, outcome)
             grades = list(record.get("grades") or ())
             state = await self._projected_state(trial)
-            await self._trials.upsert(self._row(trial, state, Validity.VALID))
+            versions = await self._started_versions(trial)
+            await self._trials.upsert(self._row(trial, state, Validity.VALID, versions))
             for position, grade in enumerate(grades, start=1):
                 await self._grades.insert(
                     GradeRow(
@@ -461,7 +478,8 @@ class BatchDriver:
             )
         elif outcome.status == "paused_manual":
             state = await self._projected_state(trial)
-            await self._trials.upsert(self._row(trial, state, Validity.MANUAL))
+            versions = await self._started_versions(trial)
+            await self._trials.upsert(self._row(trial, state, Validity.MANUAL, versions))
         else:
             state = await self._settle_invalid(
                 trial,
@@ -472,7 +490,8 @@ class BatchDriver:
                     "next_trial_id": retry.next_trial_id if retry is not None else None,
                 },
             )
-            await self._trials.upsert(self._row(trial, state, Validity.INVALID))
+            versions = await self._started_versions(trial)
+            await self._trials.upsert(self._row(trial, state, Validity.INVALID, versions))
 
     def _skipped_result(self, cell: PlannedCell) -> TrialResult:
         """Placeholder so a skipped cell shows up in the report as Skip(<reason>)."""

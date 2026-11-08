@@ -1368,6 +1368,7 @@ async def _batch_run(
             gateway_url=gateway_url,
             judges=await ctx.build_judges(batch_config, gateway_url),
             target_family=(await ctx.model_registry.resolve(batch_config.models[0])).family,
+            versions_by_endpoint=await ctx.trial_version_seeds(plan, freeze),
         )
         judges_note = ", ".join(sorted(batch_config.judges))
         if judges_note:

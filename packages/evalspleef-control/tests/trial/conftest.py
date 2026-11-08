@@ -311,6 +311,7 @@ async def harness_factory(
         leak_checker: LeakChecker | None = None,
         writer_factory: Callable[[TaskPack], FeedbackWriter] | None = None,
         registry: CanaryRegistry | None = None,
+        setup_versions: Mapping[str, Any] | None = None,
     ) -> Harness:
         task_pack = default_pack()
         if budget:
@@ -353,7 +354,7 @@ async def harness_factory(
 
         def resolve(planned: PlannedTrial) -> TrialSetup:
             endpoint = ModelEndpoint("ep_demo_00000000", "ep_demo_00000000", "http://gw.test/v1")
-            return TrialSetup(task_pack, endpoint)
+            return TrialSetup(task_pack, endpoint, versions=dict(setup_versions or {}))
 
         kwargs: dict[str, Any] = {}
         if writer_factory is not None:

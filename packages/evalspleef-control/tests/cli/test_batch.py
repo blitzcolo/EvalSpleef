@@ -8,6 +8,7 @@ report shape), not model quality.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -83,3 +84,20 @@ def test_batch_run_and_report(
     assert events_file.is_file()
     lines = [json.loads(line) for line in events_file.read_text(encoding="utf-8").splitlines()]
     assert any(line["type"] == "trial.created" for line in lines)
+
+    # trial.versions is recorded when the agent starts and copied onto the trial row.
+    started = [line for line in lines if line["type"] == "trial.started"]
+    assert len(started) == 1
+    versions = started[0]["payload"]["versions"]
+    assert versions["model_version"] == "demo@1"
+    assert versions["model_source"] == "vendor"
+    assert versions["deployment_adapter"] == "openai-compatible"
+    assert versions["freeze_hash"].startswith("sha256:")
+    assert versions["gateway_version"]
+    assert versions["probe_report_id"]
+    assert versions["endpoint_base_url_hash"].startswith("sha256:")
+    assert versions["shell_version"].startswith("scripted@")
+    assert versions["sandbox_adapter"] and versions["provider_instance"]
+    with sqlite3.connect(Path(env).parent / "store.sqlite3") as db:
+        (row_extensions,) = db.execute("SELECT extensions FROM trial").fetchone()
+    assert json.loads(row_extensions)["versions"] == versions

@@ -28,6 +28,7 @@ placeholder is a usage error.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -40,6 +41,7 @@ from typing import Any, Literal
 from evalspleef.control.batch import (
     BatchPlan,
     BatchPlanner,
+    FreezeRecord,
     ModelPlanInput,
     PlannedTrial,
     TaskPlanInput,
@@ -366,6 +368,7 @@ class _BridgedProvider(SandboxProvider):
 
     def __init__(self, inner: SandboxProvider, profile: IsolationProfile) -> None:
         super().__init__(inner.instance, {}, inner.secrets)
+        self.name = inner.name  # the adapter name recorded in trial.versions
         self._inner = inner
         self._profile = profile
 
@@ -683,6 +686,50 @@ class AppContext:
             )
         return clients
 
+    async def trial_version_seeds(
+        self, plan: BatchPlan, freeze: FreezeRecord
+    ) -> dict[str, dict[str, Any]]:
+        """Model- and batch-level ``trial.versions`` fields for each endpoint of ``plan``.
+
+        Resolved once when the batch runs, from the registered model spec, the
+        endpoint handle, its frozen probe report and the freeze record (PRD
+        FR-MOD-09, rule 8 of AGENTS.md: record reproducibility fields at creation).
+        """
+        manager = self.endpoint_manager()
+        seeds: dict[str, dict[str, Any]] = {}
+        for cell in plan.runnable_cells:
+            endpoint_id = cell.model.endpoint_id
+            if endpoint_id is None or endpoint_id in seeds:
+                continue
+            handle = await manager.get(endpoint_id)
+            spec, source = handle.model, handle.model.source
+            hf = source if isinstance(source, HFSource) else None
+            report_id = freeze.probe_report_ids.get(endpoint_id)
+            report = await self.probe_reports.get(report_id) if report_id else None
+            effective = report.capabilities.get("context_tokens_effective") if report else None
+            seeds[endpoint_id] = {
+                "model_version": f"{spec.slug}@{spec.spec_version}"
+                + (f"+{hf.revision}" if hf else ""),
+                "model_source": "huggingface" if hf else "vendor",
+                "hf_repo": hf.repo if hf else None,
+                "hf_revision": hf.revision if hf else None,
+                "hf_mirror_repo": hf.mirror_repo if hf else None,
+                "deployment_adapter": spec.deployment.adapter,
+                "deployment_id": handle.observed.get("deployment_id")
+                or handle.external_ids.get("novita_endpoint_id")
+                or handle.external_ids.get("instance_id"),
+                "endpoint_base_url_hash": (
+                    "sha256:" + hashlib.sha256(handle.base_url.encode()).hexdigest()
+                    if handle.base_url
+                    else None
+                ),
+                "probe_report_id": report_id,
+                "context_length_effective": effective if isinstance(effective, int) else None,
+                "gateway_version": freeze.gateway_version,
+                "freeze_hash": freeze.version_matrix_hash,
+            }
+        return seeds
+
     def make_trial_runner(
         self,
         *,
@@ -690,6 +737,7 @@ class AppContext:
         transcript_dir: Path | None = None,
         judges: Mapping[str, JudgeClient] | None = None,
         target_family: str = "",
+        versions_by_endpoint: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> TrialRunner:
         """The real TrialExecutor: packs from the task directory, runners from entry points."""
         # Sandboxes with a read-only rootfs and no /verify mount (the docker
@@ -719,6 +767,7 @@ class AppContext:
                     model_alias=public_name(trial.endpoint_id),
                     gateway_url=runner_gateway_url,
                 ),
+                versions=(versions_by_endpoint or {}).get(trial.endpoint_id, {}),
             )
 
         def runner_factory(trial: PlannedTrial) -> AgentRunner:

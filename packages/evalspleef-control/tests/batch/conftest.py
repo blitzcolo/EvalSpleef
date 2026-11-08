@@ -110,6 +110,11 @@ SCORED_PATH = (
 )
 
 
+def fake_versions(trial: PlannedTrial) -> dict[str, str]:
+    """The trial.versions a fake executor records on its start event."""
+    return {"task_version": "1.0.0", "model_version": f"{trial.model}@1", "shell_version": "t@1"}
+
+
 class FakeExecutor:
     """A ``TrialExecutor`` that opens the verifier, then scores, raises or blocks on a gate.
 
@@ -152,7 +157,10 @@ class FakeExecutor:
                         type=event_type,
                         actor="fake-executor",
                         trial_id=trial.trial_id,
-                        payload={"transition": {"event": event, "from": before, "to": after}},
+                        payload={
+                            "transition": {"event": event, "from": before, "to": after},
+                            **({"versions": fake_versions(trial)} if event == "start" else {}),
+                        },
                     )
                 )
             return TrialOutcome("scored", record=scored_record(trial.trial_id))

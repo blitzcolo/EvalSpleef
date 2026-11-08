@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from evalspleef.core.grading import HardGate
 from evalspleef.core.models import Budget, EscalationPolicy, Evidence
@@ -41,6 +42,10 @@ class TrialSetup:
 
     pack: TaskPack
     endpoint: ModelEndpoint
+    versions: Mapping[str, Any] = field(default_factory=dict)
+    """Model- and batch-level ``trial.versions`` fields (``TrialVersions`` names), resolved
+    by the control plane when the batch runs: model source and revision, deployment,
+    probe report, gateway version, freeze hash. The runner adds the trial-level fields."""
 
 
 @dataclass(frozen=True)
