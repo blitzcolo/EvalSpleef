@@ -41,6 +41,7 @@ from evalspleef.core.grade_inputs import GradingInputs
 from evalspleef.core.models import (
     Budget,
     BudgetUsage,
+    CheckKind,
     DefectProgress,
     EscalationPolicy,
     FeedbackLevel,
@@ -183,6 +184,52 @@ class _Plan:
     terminal: TerminalDecision | None
     feedback: FeedbackDecision | None
     cannot_continue: bool
+
+
+def verification_events(
+    pack: TaskPack, final: EvaluationResult
+) -> list[tuple[EventType, dict[str, Any]]]:
+    """``hiddentest.result`` and ``judge.verdict`` for a final evaluation (PRD B.8).
+
+    Script items are the hidden tests; ``llm_judge`` items are the judge panel's verdicts.
+    A pack without judge items emits no ``judge.verdict``.
+    """
+    kinds = {item.id: item.kind for item in pack.rubric.items}
+
+    def verdicts(kind: CheckKind) -> list[dict[str, str]]:
+        return [
+            {"item_id": result.item_id, "verdict": str(result.verdict)}
+            for result in final.rubric
+            if kinds.get(result.item_id) is kind
+        ]
+
+    hidden = verdicts(CheckKind.SCRIPT)
+    events: list[tuple[EventType, dict[str, Any]]] = [
+        (
+            EventType.HIDDENTEST_RESULT,
+            {
+                "round": "final",
+                "items": hidden,
+                "passed": sum(1 for item in hidden if item["verdict"] == "pass"),
+                "total": len(hidden),
+            },
+        )
+    ]
+    judged = verdicts(CheckKind.LLM_JUDGE)
+    if judged:
+        events.append(
+            (
+                EventType.JUDGE_VERDICT,
+                {
+                    "round": "final",
+                    "items": judged,
+                    "agreement": final.judge_consistency,
+                    "samples": final.judge_samples,
+                    "cost_usd": final.judge_cost_usd,
+                },
+            )
+        )
+    return events
 
 
 class TrialRunner(TrialExecutor):
@@ -814,6 +861,8 @@ class _TrialRun:
                 "verifier_lease_id": verifier_id,
             },
         )
+        for event_type, payload in verification_events(self.setup.pack, final):
+            await self._emit(event_type, payload)
 
         reasons = list(final.manual_reasons)
         if final.inconclusive_item_ids:

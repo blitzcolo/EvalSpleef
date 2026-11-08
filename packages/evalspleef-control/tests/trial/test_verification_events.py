@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+
+from evalspleef.control.trial.runner import verification_events
+from evalspleef.core.events import EventType
+from evalspleef.core.models import CheckKind
+
+
+def _pack(**kinds: CheckKind) -> Any:
+    items = [SimpleNamespace(id=item_id, kind=kind) for item_id, kind in kinds.items()]
+    return SimpleNamespace(rubric=SimpleNamespace(items=items))
+
+
+def _final(verdicts: dict[str, str], **judge: Any) -> Any:
+    rubric = [SimpleNamespace(item_id=item_id, verdict=v) for item_id, v in verdicts.items()]
+    defaults = {"judge_consistency": None, "judge_samples": 0, "judge_cost_usd": 0.0}
+    return SimpleNamespace(rubric=rubric, **{**defaults, **judge})
+
+
+def test_script_items_are_the_hidden_test_result_and_judge_items_the_verdict() -> None:
+    pack = _pack(
+        R1=CheckKind.SCRIPT, R2=CheckKind.SCRIPT, R3=CheckKind.LLM_JUDGE, R4=CheckKind.AGENT_JUDGE
+    )
+    final = _final(
+        {"R1": "pass", "R2": "fail", "R3": "pass", "R4": "inconclusive"},
+        judge_consistency=0.9,
+        judge_samples=3,
+        judge_cost_usd=0.01,
+    )
+    (hidden_type, hidden), (judge_type, judge) = verification_events(pack, final)
+    assert hidden_type is EventType.HIDDENTEST_RESULT
+    assert hidden["items"] == [
+        {"item_id": "R1", "verdict": "pass"},
+        {"item_id": "R2", "verdict": "fail"},
+    ]
+    assert (hidden["passed"], hidden["total"]) == (1, 2)
+    assert judge_type is EventType.JUDGE_VERDICT
+    assert judge["items"] == [{"item_id": "R3", "verdict": "pass"}]
+    assert (judge["agreement"], judge["samples"], judge["cost_usd"]) == (0.9, 3, 0.01)
+
+
+def test_a_pack_without_judge_items_emits_no_judge_verdict() -> None:
+    events = verification_events(_pack(R1=CheckKind.SCRIPT), _final({"R1": "pass"}))
+    assert [event_type for event_type, _ in events] == [EventType.HIDDENTEST_RESULT]

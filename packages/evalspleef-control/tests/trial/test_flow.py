@@ -30,6 +30,7 @@ HAPPY_EVENTS = [
     "defect.updated",
     "verify.started",
     "hardgate.result",
+    "hiddentest.result",
     "grade.computed",
     "canary.scanned",
 ]
