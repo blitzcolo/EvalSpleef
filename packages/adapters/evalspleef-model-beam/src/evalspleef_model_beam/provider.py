@@ -75,6 +75,7 @@ DEFAULT_MAX_CONCURRENT = 8
 DEFAULT_WAKE_POLL_S = 15.0
 DEFAULT_PROBE_TIMEOUT_S = 90.0
 DEFAULT_STATUS_TIMEOUT_S = 10.0
+DEFAULT_MAX_RESTARTS = 2
 HF_TOKEN_ENV = "HF_TOKEN"
 DEFAULT_FETCH_CPU = 2
 DEFAULT_FETCH_MEMORY = "8Gi"
@@ -277,6 +278,9 @@ class BeamPodProvider(ModelEndpointProvider):
             checks.append(("engine", True, engine))
         except CapabilityNotSupported as exc:
             checks.append(("engine", False, str(exc)))
+        gpu_count = int(spec.deployment.params.get("gpu_count", 1))
+        if gpu_count > 1 and resolved:
+            checks.append(await self._multi_gpu_check(credential_ref, gpu_count))
         try:
             parallel = self._layout(spec)
             checks.append(
@@ -352,6 +356,22 @@ class BeamPodProvider(ModelEndpointProvider):
         )
 
     # -- deploy ------------------------------------------------------------------------------
+
+    async def _multi_gpu_check(self, credential_ref: str, gpu_count: int) -> tuple[str, bool, str]:
+        """Whether the workspace may run ``gpu_count`` GPUs in one container."""
+        client = self._client(credential_ref)
+        workspace = await client.current_workspace()
+        if not workspace.get("multi_gpu_enabled"):
+            return (
+                "multi_gpu",
+                False,
+                "multi-GPU containers are not enabled for this Beam workspace",
+            )
+        limits = await client.workspace_limits(str(workspace.get("external_id") or ""))
+        ceiling = limits.get("max_gpu_count")
+        if isinstance(ceiling, int) and gpu_count > ceiling:
+            return ("multi_gpu", False, f"the workspace allows {ceiling} GPUs per container")
+        return ("multi_gpu", True, f"{gpu_count} GPUs allowed")
 
     def _layout(self, spec: ModelSpec) -> Layout:
         extra = [str(arg) for arg in self._param(spec, "engine_extra_args") or []]
@@ -554,9 +574,28 @@ class BeamPodProvider(ModelEndpointProvider):
             removed = await self._remove_by_name(credential_ref, str(request["name"]))
             reason = (result or {}).get("error") or f"launcher exited {code} without a result"
             tail = self._scrub(stderr.decode(errors="replace"))[-_STDERR_TAIL:]
+            # The SDK prints its own failure (quota, GPU type, image build) to stdout.
+            said = [
+                line.strip()
+                for line in stdout.decode(errors="replace").splitlines()
+                if line.strip() and not line.startswith(launcher.RESULT_PREFIX)
+            ]
+            sdk_tail = self._scrub("\n".join(said))[-_STDERR_TAIL:]
+            # The SDK writes its failure line (quota, GPU type, image build) to stderr and its
+            # progress to stdout; the last stderr line is the reason when there is one.
+            complaints = [line.strip() for line in stderr.decode(errors="replace").splitlines()]
+            complaints = [line for line in complaints if line]
+            last = complaints[-1] if complaints else (said[-1] if said else "")
+            if last:
+                reason = f"{reason}; the SDK said: {self._scrub(last)}"
             raise LaunchFailed(
                 self._scrub(f"Beam deployment of {request['name']} failed: {reason}"),
-                detail={"reason": "launch_failed", "stderr_tail": tail, "removed": removed},
+                detail={
+                    "reason": "launch_failed",
+                    "stderr_tail": tail,
+                    "sdk_output_tail": sdk_tail,
+                    "removed": removed,
+                },
             )
         return result
 
@@ -577,6 +616,12 @@ class BeamPodProvider(ModelEndpointProvider):
         ]
         statuses = sorted(str(item.get("status") or "").upper() for item in containers)
         handle.observed["beam_containers"] = statuses
+        # Beam replaces a container whose engine exits, under a new id. Every id seen since the
+        # engine last served is one start; past the limit the deployment is crash-looping and is
+        # reported FAILED instead of billing as DEPLOYING forever.
+        started = set(handle.observed.get("beam_starts_unserved", ()))
+        started |= {str(item.get("containerId")) for item in containers if item.get("containerId")}
+        serving = False
         if "RUNNING" in statuses:
             assert handle.base_url is not None
             serving = await serves_models(
@@ -585,7 +630,17 @@ class BeamPodProvider(ModelEndpointProvider):
                 timeout_s=float(self.config.get("status_timeout_s", DEFAULT_STATUS_TIMEOUT_S)),
                 transport=self._transport,
             )
-            return EndpointState.READY if serving else EndpointState.DEPLOYING
+        if serving:
+            handle.observed["beam_starts_unserved"] = []
+            return EndpointState.READY
+        handle.observed["beam_starts_unserved"] = sorted(started)
+        restarts = len(started) - max(1, int(handle.observed.get("containers", 1)))
+        limit = int(self.config.get("max_container_restarts", DEFAULT_MAX_RESTARTS))
+        if restarts > limit:
+            handle.observed["failure"] = (
+                f"crash loop: {len(started)} containers started without the engine serving"
+            )
+            return EndpointState.FAILED
         if statuses:
             return EndpointState.DEPLOYING
         if int(handle.observed.get("containers", 1)) == 0:

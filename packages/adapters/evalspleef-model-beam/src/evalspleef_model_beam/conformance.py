@@ -143,6 +143,10 @@ class FakeBeamGateway:
         self.deployments: dict[str, dict[str, Any]] = {}
         self.containers: dict[str, int] = {}
         self.container_status = "RUNNING"
+        self.generation = 0
+        self.multi_gpu_enabled = True
+        self.max_gpu_count = 8
+        """Bumped to simulate Beam replacing crashed containers under new ids."""
         self.calls: list[tuple[str, str, dict[str, Any] | None]] = []
         self.tasks: dict[str, deque[str]] = {}
         """Task id -> statuses answered by successive GETs; the last one repeats."""
@@ -175,7 +179,16 @@ class FakeBeamGateway:
 
     def _rest(self, method: str, path: str) -> httpx.Response:
         if (method, path) == ("GET", "/workspace/current"):
-            return httpx.Response(200, json={"external_id": WORKSPACE_ID, "name": "fake"})
+            return httpx.Response(
+                200,
+                json={
+                    "external_id": WORKSPACE_ID,
+                    "name": "fake",
+                    "multi_gpu_enabled": self.multi_gpu_enabled,
+                },
+            )
+        if (method, path) == ("GET", f"/workspace/{WORKSPACE_ID}/limits"):
+            return httpx.Response(200, json={"max_gpu_count": self.max_gpu_count})
         parts = path.strip("/").split("/")
         if method == "GET" and len(parts) == 3 and parts[:2] == ["task", WORKSPACE_ID]:
             statuses = self.tasks.get(parts[2])
@@ -205,7 +218,7 @@ class FakeBeamGateway:
         if (request.method, path) == ("GET", "/containers"):
             containers = [
                 {
-                    "containerId": f"{deployment_id}-c{index}",
+                    "containerId": f"{deployment_id}-g{self.generation}-c{index}",
                     "deploymentId": deployment_id,
                     "status": self.container_status,
                 }

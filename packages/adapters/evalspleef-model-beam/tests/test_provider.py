@@ -359,3 +359,74 @@ async def test_a_layout_that_does_not_fit_is_refused_before_any_launch(
     with pytest.raises(ParallelismMismatch):
         await provider.plan(spec)
     assert fake_launcher.calls == []
+
+
+# -- crash loops ---------------------------------------------------------------------------------
+
+
+async def test_a_container_that_keeps_restarting_without_serving_is_failed(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, make_spec: SpecFactory
+) -> None:
+    handle = await deployed(provider, make_spec())
+    gateway.container_status = "PENDING"
+    states = []
+    for generation in range(1, 5):
+        gateway.generation = generation
+        states.append(await provider.status(handle))
+    assert states[:2] == [EndpointState.DEPLOYING, EndpointState.DEPLOYING]
+    assert states[-1] is EndpointState.FAILED
+    assert "crash loop" in handle.observed["failure"]
+
+
+async def test_serving_resets_the_restart_count(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, make_spec: SpecFactory
+) -> None:
+    handle = await deployed(provider, make_spec())
+    for generation in range(1, 6):
+        gateway.generation = generation
+        gateway.container_status = "PENDING"
+        assert await provider.status(handle) is EndpointState.DEPLOYING
+        gateway.container_status = "RUNNING"
+        assert await provider.status(handle) is EndpointState.READY
+
+
+async def test_a_failed_launch_reports_what_the_sdk_printed(
+    gateway: FakeBeamGateway, make_spec: SpecFactory
+) -> None:
+    async def refused(
+        argv: Sequence[str], stdin: bytes, env: Mapping[str, str], cwd: str, timeout_s: float
+    ) -> tuple[int, bytes, bytes]:
+        result = (
+            RESULT_PREFIX
+            + '{"ok": false, "error": "the Beam SDK reported that the deployment failed"}'
+        )
+        said = f"=> Preparing image\n{result}\n"
+        return 1, said.encode(), f"✗ Multi-GPU is not enabled for token {TOKEN}\n".encode()
+
+    provider = BeamPodProvider(
+        "acme",
+        {"api_key_ref": TOKEN_REF, "image": IMAGE},
+        DictSecretResolver({TOKEN_REF: TOKEN}),
+        launch_runner=refused,
+        api_transport=gateway.transport(),
+    )
+    with pytest.raises(LaunchFailed) as caught:
+        await deployed(provider, make_spec(gpu_count=2))
+    assert "Multi-GPU is not enabled" in str(caught.value)
+    assert TOKEN not in str(caught.value) and TOKEN not in caught.value.detail["sdk_output_tail"]
+    assert "Preparing image" in caught.value.detail["sdk_output_tail"]
+
+
+async def test_validate_refuses_multi_gpu_when_the_workspace_does_not_allow_it(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, make_spec: SpecFactory
+) -> None:
+    def multi_gpu(report_checks: tuple[tuple[str, bool, str], ...]) -> bool | None:
+        return next((ok for check_id, ok, _ in report_checks if check_id == "multi_gpu"), None)
+
+    assert multi_gpu((await provider.validate(make_spec())).checks) is None
+    assert multi_gpu((await provider.validate(make_spec(gpu_count=2))).checks) is True
+    gateway.max_gpu_count = 2
+    assert multi_gpu((await provider.validate(make_spec(gpu_count=4))).checks) is False
+    gateway.multi_gpu_enabled = False
+    report = await provider.validate(make_spec(gpu_count=2))
+    assert multi_gpu(report.checks) is False and not report.ok

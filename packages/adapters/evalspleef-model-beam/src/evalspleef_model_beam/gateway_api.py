@@ -127,8 +127,14 @@ class BeamGatewayClient:
     async def stop_container(self, container_id: str) -> None:
         await self._request("POST", f"/containers/{container_id}/stop")
 
+    async def current_workspace(self) -> dict[str, Any]:
+        return await self._request("GET", "/workspace/current", rest=True)
+
+    async def workspace_limits(self, workspace_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/workspace/{workspace_id}/limits", rest=True)
+
     async def current_workspace_id(self) -> str:
-        payload = await self._request("GET", "/workspace/current", rest=True)
+        payload = await self.current_workspace()
         workspace_id = payload.get("external_id")
         if not isinstance(workspace_id, str) or not workspace_id:
             raise EndpointUnavailable(
