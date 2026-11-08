@@ -1624,6 +1624,7 @@ async def _batch_report(
                 "state": row.state,
                 "validity": row.validity,
                 "grades": [dict(grade.payload) for grade in grade_rows],
+                "extensions": dict(row.extensions or {}),
             }
             results.append(TrialResult.from_record(record))
         try:

@@ -144,6 +144,8 @@ def test_full_batch_on_local_docker(e2e: Any) -> None:
     report = json.loads(result.stdout)
     assert report["batch_id"] == BATCH_ID
     assert len(report["cells"]) == 6, f"expected 6 cells, got {len(report['cells'])}"
+    # Both agents are priced "assumed:" in models.yaml; the leaderboard says so per column.
+    assert report["cost_bases"] == {"fake-empty-agent": "assumed", "fake-ref-agent": "assumed"}
     cells = {cell["cell_id"]: cell for cell in report["cells"]}
 
     grades = _grade_rows(harness.store_path)

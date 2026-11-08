@@ -412,6 +412,7 @@ class BatchDriver:
         state: TrialState,
         validity: Validity,
         versions: Mapping[str, Any] | None = None,
+        cost_basis: str | None = None,
     ) -> TrialRow:
         created_at, retry_of = self._meta[trial.trial_id]
         extensions: dict[str, Any] = {
@@ -422,6 +423,8 @@ class BatchDriver:
         }
         if versions is not None:
             extensions["versions"] = dict(versions)
+        if cost_basis is not None:
+            extensions["cost_basis"] = cost_basis
         return TrialRow(
             trial_id=trial.trial_id,
             batch_id=trial.batch_id,
@@ -561,7 +564,8 @@ class BatchDriver:
             grades = list(record.get("grades") or ())
             state = await self._projected_state(trial)
             versions = await self._started_versions(trial)
-            await self._trials.upsert(self._row(trial, state, Validity.VALID, versions))
+            basis = (record.get("extensions") or {}).get("cost_basis")
+            await self._trials.upsert(self._row(trial, state, Validity.VALID, versions, basis))
             for position, grade in enumerate(grades, start=1):
                 await self._grades.insert(
                     GradeRow(
