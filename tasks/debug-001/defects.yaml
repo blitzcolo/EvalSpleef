@@ -161,7 +161,7 @@ items:
       source_command: python3 hidden-tests/mutate.py /tmp/fixed
       redactions: [hidden-tests]
     detect:
-      source: agent_judge
+      source: llm_judge
       check_ids: [R10]
     evidence_required: [diff_hunk]
     tags: [anti-cheat]

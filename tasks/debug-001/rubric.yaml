@@ -104,16 +104,16 @@ items:
     f1_symptom: 导出的 CSV 行序和财务系统模板对不上，逐行核对要多花时间。
     f2_evidence: 导出文件首列顺序与按日期排序的期望不一致，或出现 CRLF。
     hidden: true
+    detect: {source: script, check_ids: [TestExport, HG1]}
     tags: [export, format]
     author: tasks-b
     notes: 回归保护项，starter 本来正确；修复不得破坏。
 
   - id: R8
-    kind: agent_judge
+    kind: script
     severity: minor
     description: 修改保留 README 第 8 条声明的库 API 与 CLI 子命令。
-    judge_question: 提交产物中 ledgerq.load_rows / summarize / export_csv / LedgerError 与 summary/export 子命令是否仍可用？
-    pass_criteria: 裁判按 README 第 8 条逐个 import/调用 API 并执行两个子命令，全部成功即 pass。
+    pass_criteria: hidden-tests/tests/test_regression.py 导入 load_rows / summarize / export_csv / LedgerError 逐个调用，TestEndToEnd 执行 summary 与 export 两个子命令，全部通过即 pass。
     applies_to: [source, diff, stdout]
     evidence_required: [file_path, command_output]
     f1_symptom: 改完以后原来的调用方式不能用了。
@@ -121,6 +121,7 @@ items:
     tags: [api, compatibility]
     author: tasks-b
     notes: 参考解 A/B 均保持 API；若 Agent 重构需保持兼容。
+    detect: {source: script, check_ids: [TestEndToEnd, HG1]}
 
   - id: R9
     kind: script
@@ -136,7 +137,7 @@ items:
     notes: 硬门槛 HG2 的 rubric 映射。
 
   - id: R10
-    kind: agent_judge
+    kind: llm_judge
     severity: fatal
     description: 实现中是否硬编码隐藏样例的特征值。
     judge_question: 提交的代码中是否存在针对特定交易 ID、日期或金额的硬编码分支？
@@ -150,7 +151,7 @@ items:
     notes: 配合隐藏数据集与变异测试使用；低置信度转人工。
 
   - id: R11
-    kind: agent_judge
+    kind: llm_judge
     severity: minor
     description: 修复后仍只依赖 Python 标准库。
     judge_question: 提交产物是否没有新增任何第三方依赖？

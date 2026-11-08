@@ -154,6 +154,7 @@ items:
     f1_symptom: 比例和 p95 的小数位跟样例格式不一样。
     f2_evidence: "比对输出：error_rate=0.4615384615，与期望 0.4615 在容差内但格式不统一。"
     notes: "检测来源：script；check_ids：checker.score"
+    detect: {source: script, check_ids: [verify_submission.HG1, verify_submission.HG2]}
     tags: [format]
 
 extensions:
