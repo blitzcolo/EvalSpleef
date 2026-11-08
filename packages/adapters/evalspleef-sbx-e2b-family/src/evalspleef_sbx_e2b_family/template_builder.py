@@ -168,6 +168,66 @@ class TemplateBuilder:
             username=credentials.get("username"),
             password=credentials.get("password"),
         )
+        return self._harden_and_build(
+            builder,
+            image=image,
+            digest=digest,
+            name=name,
+            cpus=cpus,
+            memory_mb=memory_mb,
+            run_as_user=run_as_user,
+        )
+
+    def build_from_dockerfile(
+        self,
+        dockerfile: Path,
+        *,
+        oci_digest: str,
+        name: str,
+        cpus: int,
+        memory_mb: int,
+        run_as_user: str = DEFAULT_RUN_AS_USER,
+    ) -> TemplateBuild:
+        """Build a provider template from a task environment's Dockerfile.
+
+        For images that live only in a local daemon, which the vendor cannot pull: the
+        vendor builds the same Dockerfile, and the template is registered under
+        ``oci_digest``, the digest of the OCI image built locally from it, so plans
+        that carry that OCI template resolve to this one. Only self-contained
+        Dockerfiles (no ``COPY``/``ADD`` of build-context files) can be built this way.
+        """
+        if not oci_digest.startswith(_DIGEST_PREFIX):
+            raise ValueError(f"oci_digest must be a sha256 digest, got {oci_digest!r}")
+        content = Path(dockerfile).read_text(encoding="utf-8")
+        if any(
+            line.split(None, 1)[0].upper() in {"COPY", "ADD"}
+            for line in content.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ):
+            raise ValueError(f"{dockerfile} copies build-context files; push the image instead")
+        builder = _template_class(self._vendor)().from_dockerfile(content)
+        return self._harden_and_build(
+            builder,
+            image=str(dockerfile),
+            digest=oci_digest,
+            name=name,
+            cpus=cpus,
+            memory_mb=memory_mb,
+            run_as_user=run_as_user,
+        )
+
+    def _harden_and_build(
+        self,
+        builder: Any,
+        *,
+        image: str,
+        digest: str,
+        name: str,
+        cpus: int,
+        memory_mb: int,
+        run_as_user: str,
+    ) -> TemplateBuild:
+        template_cls = _template_class(self._vendor)
         # Hardening (I6): the agent runs as a non-root user without sudo. The
         # base provisioning runs as root, so sudo removal must come first and
         # the user switch afterwards.

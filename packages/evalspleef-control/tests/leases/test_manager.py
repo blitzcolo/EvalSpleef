@@ -11,7 +11,7 @@ from evalspleef.control.leases import LeaseInvariantError
 from evalspleef.core.events import EventType
 from evalspleef.spi.caps import NetMode, OSFamily
 from evalspleef.spi.errors import CapabilityNotSupported
-from evalspleef.spi.sandbox import NetworkPolicy, Sandbox, SandboxSpec
+from evalspleef.spi.sandbox import NetworkPolicy, Sandbox, SandboxSpec, TemplateRef
 from evalspleef.testing.mock_sandbox import MockSandbox, MockSandboxProvider
 
 BATCH = "2026-11-b1"
@@ -45,6 +45,29 @@ async def test_provision_labels_ttl_row_and_events(env, request_for) -> None:
     provisioned = (await env.events_of(EventType.SANDBOX_PROVISIONED))[0]
     assert provisioned.payload["lease_id"] == leased.lease_id
     assert provisioned.payload["sandbox_id"] == leased.sandbox.id
+    await env.manager.teardown(leased)
+
+
+async def test_provision_boots_the_carrier_template_and_records_it(env, request_for) -> None:
+    calls: list[tuple[TemplateRef, str]] = []
+
+    def carrier(template: TemplateRef, instance: str) -> TemplateRef:
+        calls.append((template, instance))
+        return TemplateRef(kind="novita_template", ref="tpl-123", digest=template.digest)
+
+    request = request_for()
+    leased = await env.make_manager(templates=carrier).provision(request)
+
+    assert calls == [(request.template, "docker-a")]
+    booted = mock_sandbox(leased.sandbox).spec.template
+    assert (booted.kind, booted.ref, booted.digest) == (
+        "novita_template",
+        "tpl-123",
+        request.template.digest,
+    )
+    row = await env.leases.get(leased.lease_id)
+    assert row is not None
+    assert (row.template_kind, row.template_ref) == ("novita_template", "tpl-123")
     await env.manager.teardown(leased)
 
 

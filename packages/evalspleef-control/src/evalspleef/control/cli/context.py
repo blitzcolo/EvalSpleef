@@ -106,6 +106,7 @@ from evalspleef.spi.sandbox import (
     SandboxCapabilities,
     SandboxProvider,
     SandboxSpec,
+    TemplateKind,
     TemplateRef,
 )
 
@@ -212,6 +213,13 @@ def build_secret_resolver(environ: Mapping[str, str]) -> CompositeResolver:
     if vault_url and vault_token:
         resolvers.append(VaultKv2Resolver(vault_url, vault_token))
     return CompositeResolver(resolvers)
+
+
+#: Template kinds of the vendor templates the Template Builder records (TECH-DESIGN 7.6).
+_VENDOR_TEMPLATE_KINDS: dict[str, TemplateKind] = {
+    "novita": "novita_template",
+    "e2b": "e2b_template",
+}
 
 
 def price_for_spec(spec: ModelSpec) -> PriceSpec:
@@ -622,7 +630,9 @@ class AppContext:
         return self._probe_runner
 
     def lease_manager(self) -> LeaseManager:
-        return LeaseManager(self.providers, self.lease_rows, self.events)
+        return LeaseManager(
+            self.providers, self.lease_rows, self.events, templates=self.carrier_template
+        )
 
     def planner(self) -> BatchPlanner:
         return BatchPlanner(StaticMatcher(self.providers))
@@ -904,6 +914,25 @@ class AppContext:
                 "and record it in the template registry"
             )
         return TemplateRef(kind="oci", ref=ref, digest=digest)
+
+    def carrier_template(self, template: TemplateRef, instance: str) -> TemplateRef:
+        """The template ``instance`` boots for an OCI ``template`` (TECH-DESIGN 7.6).
+
+        The Template Builder records vendor templates under the registry's ``templates``
+        section, keyed by the OCI digest they were built from and the provider instance.
+        Without an entry the OCI template is returned and the provider decides whether
+        it can boot it (an E2B-family provider rejects it with a kind mismatch).
+        """
+        built = self._template_registry().get("templates", {}).get(template.digest, {})
+        entry = built.get(instance) if isinstance(built, Mapping) else None
+        if not isinstance(entry, Mapping) or not entry.get("template_id"):
+            return template
+        kind = _VENDOR_TEMPLATE_KINDS.get(str(entry.get("vendor", "")))
+        if kind is None:
+            raise UsageError(
+                f"template registry entry for {instance} names unknown vendor {entry.get('vendor')!r}"
+            )
+        return TemplateRef(kind=kind, ref=str(entry["template_id"]), digest=template.digest)
 
     def _template_registry(self) -> Mapping[str, Any]:
         path = self.settings.templates_registry

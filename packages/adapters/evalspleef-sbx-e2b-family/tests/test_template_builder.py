@@ -48,6 +48,10 @@ def _install_fake_template_class(monkeypatch: pytest.MonkeyPatch, log, captured_
         def from_image(self, image: str, **kwargs: object) -> _FakeTemplateBuilder:
             return self._builder.from_image(image, **kwargs)
 
+        def from_dockerfile(self, content: str) -> _FakeTemplateBuilder:
+            log.append(("from_dockerfile", (content,), {}))
+            return self._builder
+
         @staticmethod
         def build(builder: object, name: str, **kwargs: object) -> _FakeBuildInfo:
             captured_build["builder"] = builder
@@ -106,6 +110,47 @@ def test_build_records_registry_mapping(monkeypatch: pytest.MonkeyPatch, tmp_pat
     record = on_disk["templates"][result.digest]["novita-sandbox"]
     assert record["template_id"] == "tpl-built-1"
     assert record["vendor"] == "novita"
+
+
+def test_build_from_dockerfile_registers_under_the_local_digest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    log: list[tuple[str, tuple, dict]] = []
+    captured_build: dict = {}
+    _install_fake_template_class(monkeypatch, log, captured_build)
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM python:3.12-slim\nRUN true\nUSER agent\n", encoding="utf-8")
+    registry = TemplateRegistry(tmp_path / "registry.json")
+    builder = TemplateBuilder(registry, vendor="novita", provider="novita")
+    local = "sha256:" + "12" * 32
+
+    result = builder.build_from_dockerfile(
+        dockerfile, oci_digest=local, name="logic-001", cpus=2, memory_mb=2048
+    )
+
+    assert [entry[0] for entry in log] == ["from_dockerfile", "run_cmd", "set_user", "run_cmd"]
+    assert log[0][1] == (dockerfile.read_text(encoding="utf-8"),)
+    assert (result.digest, result.template_id) == (local, "tpl-built-1")
+    assert registry.lookup(local, "novita") == "tpl-built-1"
+
+
+@pytest.mark.parametrize(
+    ("content", "digest"),
+    [
+        ("FROM python:3.12-slim\nCOPY app /app\n", "sha256:" + "12" * 32),
+        ("FROM python:3.12-slim\n", "llm-eval/logic-001:local"),
+    ],
+)
+def test_build_from_dockerfile_refuses_context_files_and_unpinned_digests(
+    tmp_path: Path, content: str, digest: str
+) -> None:
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(content, encoding="utf-8")
+    builder = TemplateBuilder(TemplateRegistry(tmp_path / "r.json"), vendor="novita", provider="n")
+    with pytest.raises(ValueError):
+        builder.build_from_dockerfile(
+            dockerfile, oci_digest=digest, name="x", cpus=1, memory_mb=512
+        )
 
 
 def test_registry_lookup_miss(tmp_path: Path) -> None:

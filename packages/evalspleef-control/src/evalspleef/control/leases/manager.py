@@ -151,8 +151,12 @@ class LeaseManager:
         reap_interval_s: float = REAP_INTERVAL_S,
         default_ttl_s: int = 3600,
         orphan_grace_s: int = 600,
+        templates: Callable[[TemplateRef, str], TemplateRef] | None = None,
     ) -> None:
+        """``templates`` maps a plan's OCI template to the one a provider instance boots
+        (TECH-DESIGN 7.6); without it every instance gets the plan's template."""
         self._providers = providers
+        self._templates = templates
         self._leases = leases
         self._events = events
         self._now = now
@@ -214,9 +218,9 @@ class LeaseManager:
                     batch_id=request.batch_id,
                     trial_id=request.trial_id,
                     role=request.role,
-                    template_kind=request.template.kind,
-                    template_ref=request.template.ref,
-                    template_digest=request.template.digest,
+                    template_kind=spec.template.kind,
+                    template_ref=spec.template.ref,
+                    template_digest=spec.template.digest,
                     created_at=leased.created_at,
                     provider_instance=request.instance,
                     host_id=request.host_id,
@@ -283,7 +287,11 @@ class LeaseManager:
             role=request.role,
             os=requirements.os,
             arch=arches[0],
-            template=request.template,
+            template=(
+                self._templates(request.template, request.instance)
+                if self._templates is not None
+                else request.template
+            ),
             resources=Resources(
                 cpus=requirements.cpus,
                 memory_mb=requirements.memory_mb,
