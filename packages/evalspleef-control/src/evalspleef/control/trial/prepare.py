@@ -11,11 +11,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import shutil
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from evalspleef.core.canary import CanaryPlacement, build_placements, inject_comment
@@ -47,6 +48,8 @@ _PATH_TOKEN = re.compile(r"[\w.\-]+(?:/[\w.\-]+)*")
 _HAS_EXTENSION = re.compile(r"\.[A-Za-z][A-Za-z0-9]*$")
 _PLACEMENT_HEADING = re.compile(r"写入位置|埋点位置|placements?|injection", re.IGNORECASE)
 _NEW_FILE = re.compile(r"新增|new file|\(new\)", re.IGNORECASE)
+_HIDDEN_FILE = re.compile(r"^\.[\w.\-]+$")
+_HASH_MANIFEST_NAMES = ("hashes.json", "locks.sha256", "locks.json")
 _HTML_SUFFIXES = frozenset({".md", ".html", ".htm", ".xml", ".svg"})
 _SLASH_SUFFIXES = frozenset(
     {".js", ".mjs", ".ts", ".tsx", ".jsx", ".go", ".java", ".kt", ".c", ".cc", ".cpp", ".h"}
@@ -135,8 +138,11 @@ def parse_canary_targets(manifest: str, stage: Path) -> list[tuple[str, bool]]:
     """Workspace files named in the placement table of ``canary.md``: ``(path, create)``.
 
     Existing starter files are injected in place; files marked as new in their table row are
-    created. Anything that is not a file of the workspace (instruction text, result store) is
-    skipped, as are the paths the manifest forbids (``tests/``, ``hidden-tests/``, ``answers/``).
+    created. A hidden dotfile the pack declares as a placement may be absent from the starter
+    workspace (for example ``.env.example``); it is created, since the placement table is the
+    pack's declaration of where the token lives. Anything that is not a file of the workspace
+    (instruction text, result store) is skipped, as are the paths the manifest forbids
+    (``tests/``, ``hidden-tests/``, ``answers/``).
     """
     targets: list[tuple[str, bool]] = []
     for line in _placement_lines(manifest):
@@ -150,9 +156,81 @@ def parse_canary_targets(manifest: str, stage: Path) -> list[tuple[str, bool]]:
             if not _HAS_EXTENSION.search(candidate):
                 continue
             relative = _resolve_target(candidate, stage, creating)
+            if relative is None and not creating:
+                stripped = candidate
+                for prefix in _PREFIXES[1:]:
+                    if candidate.startswith(prefix):
+                        stripped = candidate[len(prefix) :]
+                if _HIDDEN_FILE.match(stripped):
+                    parts = stripped.split("/")
+                    if ".." not in parts and parts[0] not in _EXCLUDED_ROOTS:
+                        relative = stripped
+                        creating = True  # a declared placement absent from the starter is created
             if relative is not None and all(relative != known for known, _ in targets):
                 targets.append((relative, creating and not (stage / relative).exists()))
     return targets
+
+
+def _manifest_locked_paths(manifest: Path) -> set[str]:
+    """Workspace-relative paths locked by one hash manifest.
+
+    ``hashes.json`` keys are hidden-tests-relative (``../workspace/x`` reaches into the
+    candidate tree); ``locks.sha256``/``locks.json`` paths are candidate-root-relative.
+    Kept in sync with :func:`evalspleef.control.observe.verifier._locked_local_path`.
+    """
+    entries: list[str] = []
+    if manifest.suffix == ".json":
+        try:
+            document = json.loads(manifest.read_text(encoding="utf-8"))
+        except ValueError:
+            return set()
+        if isinstance(document, dict):
+            files = document.get("locked_files", document)
+            if isinstance(files, dict):
+                entries = [str(relative) for relative in files]
+    else:
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            digest, _, relative = line.partition(" ")
+            relative = relative.strip()
+            if digest.strip() and relative:
+                entries.append(relative)
+    locked: set[str] = set()
+    for relative in entries:
+        posix = PurePosixPath(relative.replace("\\", "/"))
+        if posix.is_absolute() or not posix.parts:
+            continue
+        via_hidden = PurePosixPath(os.path.normpath(str(PurePosixPath("hidden-tests") / posix)))
+        if via_hidden.parts and via_hidden.parts[0] == "workspace":
+            locked.add(via_hidden.relative_to("workspace").as_posix())
+        elif ".." not in posix.parts:
+            locked.add(posix.as_posix())
+    return locked
+
+
+def lock_protected_paths(pack: TaskPack) -> frozenset[str]:
+    """Workspace-relative paths that must never carry a canary token.
+
+    A canary write changes the file's bytes, which the pack's hidden tests detect as a
+    broken hash lock (I12) or a failed integrity gate, so hash-locked inputs and the
+    pack's declared protected paths are excluded from canary placement.
+    """
+    protected: set[str] = set()
+    workspace = pack.metadata.get("workspace")
+    if isinstance(workspace, Mapping):
+        raw = workspace.get("protected_paths")
+        if isinstance(raw, list):
+            protected |= {str(item).strip("/") for item in raw if str(item).strip("/")}
+    for name in _HASH_MANIFEST_NAMES:
+        manifest = pack.root / "hidden-tests" / name
+        if manifest.is_file():
+            protected |= _manifest_locked_paths(manifest)
+            break
+    return frozenset(protected)
+
+
+def _is_lock_protected(relative: str, protected: frozenset[str]) -> bool:
+    path = PurePosixPath(relative)
+    return any(relative == item or PurePosixPath(item) in path.parents for item in protected)
 
 
 def _inject(path: Path, token: str) -> str | None:
@@ -215,8 +293,14 @@ def stage_workspace(
     manifest_file = pack.file("canary.md")
     manifest = manifest_file.read_text(encoding="utf-8") if manifest_file.is_file() else ""
 
+    # A canary write rewrites the file's bytes; hash-locked inputs (I12) and the
+    # pack's protected paths must stay untouched, so they are never placements.
+    protected = lock_protected_paths(pack)
+
     placed: list[tuple[str, str]] = []
     for relative, create in parse_canary_targets(manifest, stage):
+        if _is_lock_protected(relative, protected):
+            continue
         target = stage / relative
         if create:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -225,8 +309,11 @@ def stage_workspace(
         elif (kind := _inject(target, token)) is not None:
             placed.append((relative, kind))
     if not placed:
-        # No machine-readable placement: fall back to a marker line in the first entry file.
+        # No machine-readable placement: fall back to a marker line in the first
+        # entry file that is not hash-locked.
         for relative in _entry_candidates(stage, workspace.entry_files):
+            if _is_lock_protected(relative, protected):
+                continue
             if (kind := _inject(stage / relative, token)) is not None:
                 placed.append((relative, kind))
                 break
