@@ -421,8 +421,9 @@ def evaluate_terminal(
 def event_path_for_terminal(machine: TrialMachine, decision: TerminalDecision) -> tuple[str, ...]:
     """返回从当前状态走到 decision.terminal_state 需要的事件序列。
 
-    只覆盖 docs/02 §4.2 明示的路径；observing/awaiting_feedback 直接作废
-    不在转移表中，调用方必须先走 failed_infra 或事后审计路径。
+    Only the docs/02 section 4.2 paths are used. observing and awaiting_feedback have
+    no direct way to invalid, so they first end the observation (``finish``: it cannot
+    continue) and then fail through verifying, the way a verification failure does.
     """
     state = machine.state
     if decision.terminal_state == TrialState.SCORED:
@@ -441,6 +442,8 @@ def event_path_for_terminal(machine: TrialMachine, decision: TerminalDecision) -
         return ("invalidate",)
     if state in (TrialState.LEASED, TrialState.RUNNING, TrialState.VERIFYING):
         return ("fail_infra", "invalidate")
+    if state in (TrialState.OBSERVING, TrialState.AWAITING_FEEDBACK):
+        return ("finish", "fail_infra", "invalidate")
     if state == TrialState.SCORED:
         return ("invalidate_post_hoc",)
     if state == TrialState.FAILED_INFRA:

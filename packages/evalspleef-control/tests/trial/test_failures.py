@@ -178,13 +178,29 @@ async def test_evaluator_failure_while_observing_is_mapped_and_torn_down(
     outcome = await h.run()
 
     assert outcome.status == "failed_infra"
-    # observing has no failed_infra transition in the table: the log stops at the last legal one
+    # observing has no failed_infra transition: the observation ends, then fails from verifying
     assert legal(await h.log()) == [
         ("start", "leased", "running"),
         ("stop", "running", "observing"),
+        ("finish", "observing", "verifying"),
+        ("fail_infra", "verifying", "failed_infra"),
     ]
     with pytest.raises(TrialKeyRejected, match="revoked"):
         h.gateway.authenticate(h.scripted.trial_key)
+
+
+async def test_unretryable_failure_while_observing_ends_invalid(
+    harness_factory: Any, rnd: Any, legal: Any
+) -> None:
+    h = await harness_factory(rounds=[rnd()], evaluator=RaisingEvaluator(ValueError("bad rubric")))
+    outcome = await h.run()
+
+    assert outcome.status == "invalid"
+    assert legal(await h.log())[-3:] == [
+        ("finish", "observing", "verifying"),
+        ("fail_infra", "verifying", "failed_infra"),
+        ("invalidate", "failed_infra", "invalid"),
+    ]
 
 
 # -- identity hygiene ----------------------------------------------------------------------------

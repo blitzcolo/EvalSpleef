@@ -938,10 +938,19 @@ class _TrialRun:
             "disposition": verdict.disposition,
             "outcome": verdict.status,
         }
+        # observing and awaiting_feedback have no failed_infra transition in the table: the
+        # observation cannot continue, so it ends and the trial fails from verifying.
+        if (
+            verdict.status == "failed_infra"
+            and not self.machine.can("fail_infra")
+            and self.machine.can("finish")
+        ):
+            await self._advance(
+                "finish", EventType.INCIDENT_OPENED, {**payload, "kind": "observation_aborted"}
+            )
         if verdict.status == "failed_infra" and self.machine.can("fail_infra"):
             await self._advance("fail_infra", EventType.INCIDENT_OPENED, payload)
         else:
-            # observing and awaiting_feedback have no failed_infra transition in the table.
             await self._emit(EventType.INCIDENT_OPENED, payload)
             if verdict.status == "invalid":
                 await self._invalidate(reason)

@@ -182,6 +182,16 @@ class TerminalPriorityTest(unittest.TestCase):
         apply_terminal(machine, decision)
         self.assertEqual(machine.state, TrialState.INVALID)
 
+    def test_apply_terminal_invalid_from_observation(self):
+        decision = evaluate_terminal(isolation_failed=True)
+        for prefix in (("lease", "start", "stop"), ("lease", "start", "stop", "needs_feedback")):
+            machine = TrialMachine(TRIAL_ID)
+            for event in prefix:
+                machine.apply(event)
+            apply_terminal(machine, decision)
+            self.assertEqual(machine.state, TrialState.INVALID)
+            self.assertEqual(machine.validity, Validity.INVALID)
+
     def test_apply_terminal_verifying_path(self):
         machine = TrialMachine(TRIAL_ID)
         for event in ("lease", "start", "stop"):
