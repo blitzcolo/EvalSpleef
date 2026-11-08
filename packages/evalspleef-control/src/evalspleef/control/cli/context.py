@@ -764,6 +764,7 @@ class AppContext:
                 "model_version": f"{spec.slug}@{spec.spec_version}"
                 + (f"+{hf.revision}" if hf else ""),
                 "model_source": "huggingface" if hf else "vendor",
+                "cost_basis": price_for_spec(spec).basis,
                 "hf_repo": hf.repo if hf else None,
                 "hf_revision": hf.revision if hf else None,
                 "hf_mirror_repo": hf.mirror_repo if hf else None,

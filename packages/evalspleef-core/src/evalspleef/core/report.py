@@ -115,6 +115,9 @@ class TrialResult:
             format_violation = "format_violation" in flags
             raw_cost = grade.get("cost")
             raw_basis = record.get("cost_basis")
+            extensions = record.get("extensions")
+            if raw_basis is None and isinstance(extensions, Mapping):
+                raw_basis = extensions.get("cost_basis")
             if raw_basis is None and isinstance(raw_cost, Mapping):
                 raw_basis = raw_cost.get("basis")
             cost_basis = None if raw_basis is None else CostBasis(str(raw_basis))
@@ -496,7 +499,27 @@ class BatchReport:
             "trial_count": len(self.trials),
             "cell_count": len(cells),
             "review_queue": [cell.cell_id for cell in self.review_queue],
+            "cost_bases": self.cost_bases(),
             "cells": [cell.to_dict() for cell in cells],
+        }
+
+    def cost_bases(self) -> dict[str, str | None]:
+        """Leaderboard column -> the cost basis of its scored cells (PRD FR-RPT-3).
+
+        ``None`` when a column's cells carry no basis or disagree, so a figure is never
+        shown under a basis it does not have.
+        """
+        cells = self.build_cells()
+        multi_shell = len({cell.shell for cell in cells}) > 1
+        seen: dict[str, set[CostBasis | None]] = {}
+        for cell in cells:
+            if cell.status != CellStatus.SCORED:
+                continue
+            label = f"{cell.model}/{cell.shell}" if multi_shell else cell.model
+            seen.setdefault(label, set()).add(cell.cost_basis)
+        return {
+            label: str(next(iter(bases))) if len(bases) == 1 and None not in bases else None
+            for label, bases in sorted(seen.items())
         }
 
     def _table(self) -> list[str]:
@@ -553,6 +576,12 @@ class BatchReport:
             lines.append(f"- 生成时间：{self.generated_at}")
         lines.extend(["", "## 榜单", ""])
         lines.extend(self._table())
+        bases = self.cost_bases()
+        if bases:
+            lines.extend(["", "## 费用口径", ""])
+            lines.extend(f"- {label}：{basis or '未知或混合'}" for label, basis in bases.items())
+            if len({basis for basis in bases.values() if basis is not None}) > 1:
+                lines.extend(["", "> 各列费用口径不同，不可直接比较（PRD FR-RPT-3）。"])
         if self.review_queue:
             lines.extend(["", "## 人工复核队列", ""])
             for cell in self.review_queue:

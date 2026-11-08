@@ -15,7 +15,7 @@ from evalspleef.core.cost import (
     price_usage,
 )
 from evalspleef.core.models import CellStatus, Tier
-from evalspleef.core.report import Cell, TrialResult, aggregate_cell, format_cell
+from evalspleef.core.report import BatchReport, Cell, TrialResult, aggregate_cell, format_cell
 
 TABLE = PriceTable(
     version="2026-11-official",
@@ -213,3 +213,45 @@ def test_aggregate_cell_drops_conflicting_basis() -> None:
     cell = aggregate_cell([first, second])
     assert cell.cost_basis is None
     assert cell.provenance is None
+
+
+def _scored(trial_id: str, basis: str) -> TrialResult:
+    """A scored trial whose basis travels in ``extensions``, the way the runner records it."""
+    return TrialResult.from_record(
+        {
+            "trial_id": trial_id,
+            "state": "scored",
+            "validity": "valid",
+            "extensions": {"cost_basis": basis},
+            "grades": [
+                {
+                    "tier": "A",
+                    "penalty": 1,
+                    "cost": {"agent": 1.0},
+                    "status": "final",
+                    "counted_in_leaderboard": True,
+                    "flags": [],
+                }
+            ],
+        }
+    )
+
+
+def test_report_labels_each_column_with_its_cost_basis() -> None:
+    cells = [
+        ("web-001", "api-model", "api"),
+        ("web-001", "self-hosted", "ref-price"),
+        ("web-002", "self-hosted", "ref-price"),
+        ("web-001", "mixed", "api"),
+        ("web-002", "mixed", "assumed"),
+    ]
+    report = BatchReport(
+        batch_id="2026-11-b1",
+        trials=tuple(
+            _scored(f"{task}.{model}.terminus.e{epoch}.t01", basis)
+            for task, model, basis in cells
+            for epoch in (1, 2)
+        ),
+    )
+    assert report.cost_bases() == {"api-model": "api", "mixed": None, "self-hosted": "ref-price"}
+    assert report.to_dict()["cost_bases"] == report.cost_bases()

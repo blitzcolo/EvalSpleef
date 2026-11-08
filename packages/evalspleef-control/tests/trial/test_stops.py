@@ -295,3 +295,11 @@ async def test_an_agent_that_keeps_beating_is_not_judged_hung(
     kinds = [e.payload.get("kind") for e in await h.of_type("incident.opened")]
     assert "agent_hung" not in kinds
     assert len(runner._received) == 1
+
+
+async def test_the_trial_record_carries_the_cost_basis_of_its_route(harness_factory: Any) -> None:
+    h = await harness_factory(setup_versions={"cost_basis": "ref-price"})
+
+    outcome = await h.run()
+
+    assert outcome.record["extensions"]["cost_basis"] == "ref-price"

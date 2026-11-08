@@ -1209,6 +1209,10 @@ class _TrialRun:
         record = self.machine.record
         if self.versions is not None:
             record.extensions["versions"] = dict(self.versions)
+        basis = self.setup.versions.get("cost_basis")
+        if basis is not None:
+            # The price basis of the agent's route, so the report labels the cost (FR-RPT-3).
+            record.extensions["cost_basis"] = str(basis)
         verifier = self.leases.verifier
         record.extensions["flow"] = {
             "agent_lease_id": self.agent.lease_id,
