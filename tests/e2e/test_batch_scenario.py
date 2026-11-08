@@ -136,7 +136,10 @@ def test_full_batch_on_local_docker(e2e: Any) -> None:
     (REPORTS / "batch-report.md").write_text(result.stdout, encoding="utf-8")
 
     # -- 6. report + grade assertions ------------------------------------------------
-    result = harness.run_cli("batch-report", "batch", "report", "--json", *harness.options())
+    release = harness.store_path.parent / "release"
+    result = harness.run_cli(
+        "batch-report", "batch", "report", "--json", "--release", str(release), *harness.options()
+    )
     assert result.returncode == 0, result.stderr[-2000:]
     report = json.loads(result.stdout)
     assert report["batch_id"] == BATCH_ID
@@ -160,6 +163,24 @@ def test_full_batch_on_local_docker(e2e: Any) -> None:
         assert versions["sandbox_adapter"] == "docker"
         assert versions["deployment_adapter"] == "openai-compatible"
         assert versions["freeze_hash"].startswith("sha256:")
+
+    # The release package (FR-RPT-2/4) drills every cell down to its sources.
+    drilldown = json.loads((release / "drilldown.json").read_text(encoding="utf-8"))
+    assert len(drilldown) == 6
+    for entry in drilldown:
+        assert entry["deployment_adapter"] == "openai-compatible"
+        assert entry["sandbox_adapter"] == "docker"
+        assert entry["declared_isolation"] == "L1"
+        assert entry["cost_basis"] == "assumed"
+        assert len(entry["trials"]) == EPOCHS
+    probes = json.loads((release / "probes.json").read_text(encoding="utf-8"))
+    assert len(probes) == 2 and all(p["total"] > 0 for p in probes.values())
+    manifest = json.loads((release / "versions.json").read_text(encoding="utf-8"))
+    assert len(manifest["trials"]) == TRIALS and manifest["freeze"]["batch_id"] == BATCH_ID
+    assert "## local-docker (docker)" in (release / "isolation.md").read_text(encoding="utf-8")
+    costs = json.loads((release / "costs.json").read_text(encoding="utf-8"))
+    assert {kind["kind"] for kind in costs["kinds"]} == {"tokens", "gpu", "sandbox", "infra"}
+    assert (release / "leaderboard.md").is_file() and (release / "judges.json").is_file()
     trials_of_cell: dict[str, list[str]] = {}
     for trial_id in grades:
         parts = parse_trial_id(trial_id)

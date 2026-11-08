@@ -26,10 +26,12 @@ import typer
 
 from evalspleef.control.batch import BatchDriver, BatchRunResult, build_freeze_record, freeze_guards
 from evalspleef.control.batch.operations import OperationRefused, TrialOperations
+from evalspleef.control.batch.release import ReleaseInputs, build_release
 from evalspleef.control.config import ConfigError
 from evalspleef.control.endpoints import make_endpoint_id, probe_failures
 from evalspleef.control.events import verify_projection
 from evalspleef.control.ledger import CostLedger
+from evalspleef.control.store.rows import GradeRow
 from evalspleef.control.taskpack import lint_task_pack_dir
 from evalspleef.core.batch import BatchGuardFailed
 from evalspleef.core.report import BatchReport, TrialResult
@@ -1436,6 +1438,9 @@ async def _batch_run(
         return EXIT_SUCCESS
 
 
+_RELEASE_OPT = typer.Option(
+    None, "--release", help="also write the release package (drill-down, manifests) here"
+)
 _NOVITA_BILL_OPT = typer.Option(
     None, "--novita-bill", help="Novita billing JSON to import before reconciling"
 )
@@ -1505,6 +1510,7 @@ def batch_report(
     events_url: str | None = _EVENTS_OPT,
     state_dir: Path | None = _STATE_OPT,
     as_json: bool = _JSON_OPT,
+    release: Path | None = _RELEASE_OPT,
 ) -> None:
     """Aggregate the stored trial results into the batch report."""
     _run(
@@ -1518,8 +1524,19 @@ def batch_report(
             events_url,
             state_dir,
             as_json,
+            release,
         )
     )
+
+
+def _write_release(directory: Path, files: Mapping[str, str]) -> list[Path]:
+    directory.mkdir(parents=True, exist_ok=True)
+    written = []
+    for name, content in sorted(files.items()):
+        path = directory / name
+        path.write_text(content, encoding="utf-8")
+        written.append(path)
+    return written
 
 
 async def _batch_report(
@@ -1532,6 +1549,7 @@ async def _batch_report(
     events_url: str | None,
     state_dir: Path | None,
     as_json: bool,
+    release: Path | None = None,
 ) -> int:
     from datetime import UTC, datetime
 
@@ -1542,8 +1560,11 @@ async def _batch_report(
         batch_config = ctx.load_batch_config()
         batch_id = batch_config.batch
         results: list[TrialResult] = []
-        for row in await ctx.trials.list_by_batch(batch_id):
+        trial_rows = await ctx.trials.list_by_batch(batch_id)
+        grades_by_trial: dict[str, list[GradeRow]] = {}
+        for row in trial_rows:
             grade_rows = await ctx.grades.list_by_trial(row.trial_id)
+            grades_by_trial[row.trial_id] = grade_rows
             record: Mapping[str, Any] = {
                 "trial_id": row.trial_id,
                 "state": row.state,
@@ -1566,6 +1587,33 @@ async def _batch_report(
             _emit_json(report.to_dict())
         else:
             typer.echo(report.to_markdown())
+        if release is not None:
+            freeze = ctx.load_stored_freeze(batch_id)
+            probe_rows = {}
+            for report_id in ((freeze or {}).get("probe_report_ids") or {}).values():
+                probe_row = await ctx.probe_reports.get(str(report_id))
+                if probe_row is not None:
+                    probe_rows[str(report_id)] = probe_row
+            specs = {}
+            for slug in sorted({row.model for row in trial_rows}):
+                spec = await ctx.model_registry.get_latest(slug)
+                if spec is not None:
+                    specs[slug] = spec
+            files = build_release(
+                ReleaseInputs(
+                    report=report,
+                    trials=trial_rows,
+                    grades=grades_by_trial,
+                    events=await ctx.events.read(batch_id),
+                    freeze=freeze,
+                    probe_reports=probe_rows,
+                    models=specs,
+                    judges=list(batch_config.judges),
+                    costs=await CostLedger(ctx.db).reconcile(batch_id),
+                )
+            )
+            for path in _write_release(release, files):
+                typer.echo(f"release: {path}", err=True)
         return EXIT_SUCCESS
 
 
