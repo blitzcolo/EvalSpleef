@@ -9,6 +9,7 @@ is recorded per request and charged against the trial key's budget.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import AsyncIterator
 from typing import Any, Literal
 
@@ -165,8 +166,29 @@ async def _admit(
     round_: int,
     flavor: Flavor,
 ) -> BudgetProjection | Response:
-    """Budget admission: reserve the projection, or answer 429 with the budget code."""
+    """Rate and budget admission: reserve the projection, or answer 429 with the reason."""
     projection = projection_for(entry.route, entry, body)
+    wait_s = await state.admit_rate(model, entry.route, projection.tokens)
+    if wait_s is not None:
+        await _record_usage(
+            state,
+            key=key,
+            entry=entry,
+            model=model,
+            round_=round_,
+            usage=None,
+            latency_ms=0,
+            status_code=429,
+            cold_start_ms=0,
+            charge=False,
+        )
+        return _error_response(
+            flavor,
+            429,
+            "rate_limited",
+            f"route {model} is over its rpm/tpm limit; retry in {wait_s:.0f} s",
+            {"retry-after": str(max(1, math.ceil(wait_s)))},
+        )
     violation = await state.check_budget(key, projection)
     if violation is None:
         return projection

@@ -97,6 +97,8 @@ def add_route(
         extra_headers=raw.get("extra_headers", {}),
         provider_lock=ProviderLock(**lock) if lock else None,
         cold_start_window_s=raw.get("cold_start_window_s", 0),
+        rpm=raw.get("rpm"),
+        tpm=raw.get("tpm"),
     )
     state.upsert_route(name, route)
 
@@ -431,6 +433,62 @@ async def test_a_mid_stream_failure_reaches_anthropic_clients_as_an_error_event(
     assert json.loads(last[6:])["error"]["type"] == "api_error"
     usage = await state.usage_for("trial-ep1")
     assert [u.status_code for u in usage] == [504]
+
+
+async def _chat_status(
+    client: httpx.AsyncClient, secret: str, max_tokens: int = 10
+) -> httpx.Response:
+    return await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "ep_ep1",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": max_tokens,
+        },
+        headers=auth(secret),
+    )
+
+
+async def test_route_rpm_is_enforced_by_the_gateway_and_never_sent_upstream(
+    state: GatewayState,
+) -> None:
+    from evalspleef.testing.clock import FakeClock
+
+    clock = FakeClock(start=1000.0)
+    state.clock = clock
+    forwarded: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        forwarded.append(json.loads(request.content))
+        return httpx.Response(200, json=canned_chat())
+
+    add_route(state, overrides={"rpm": 2})
+    secret = await issue(state)
+    async with client_for(state, handler) as client:
+        assert (await _chat_status(client, secret)).status_code == 200
+        clock.advance(10.0)
+        assert (await _chat_status(client, secret)).status_code == 200
+        limited = await _chat_status(client, secret)
+        assert limited.status_code == 429
+        assert limited.json()["error"]["code"] == "rate_limited"
+        assert limited.headers["retry-after"] == "50"
+        clock.advance(50.0)
+        assert (await _chat_status(client, secret)).status_code == 200
+    assert len(forwarded) == 3
+    assert all("rpm" not in body and "tpm" not in body for body in forwarded)
+    usage = await state.usage_for("trial-ep1")
+    assert [u.status_code for u in usage] == [200, 200, 429, 200]
+
+
+async def test_route_tpm_counts_projected_tokens(state: GatewayState) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=canned_chat())
+
+    add_route(state, overrides={"tpm": 150})
+    secret = await issue(state)
+    async with client_for(state, handler) as client:
+        assert (await _chat_status(client, secret, max_tokens=100)).status_code == 200
+        assert (await _chat_status(client, secret, max_tokens=100)).status_code == 429
 
 
 # -- budgets --------------------------------------------------------------------------

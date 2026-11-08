@@ -109,6 +109,8 @@ class HttpGatewayAdmin(GatewayAdmin):
                 else None
             ),
             cold_start_window_s=route.cold_start_window_s,
+            rpm=route.rpm,
+            tpm=route.tpm,
         )
         response = await self._client.put(
             f"{self._base_url}/admin/routes/{name}", json=body.model_dump(), headers=self._headers()

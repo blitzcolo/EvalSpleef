@@ -75,6 +75,20 @@ async def test_route_and_price_management(
     assert response.status_code == 404
 
 
+async def test_route_rate_limits_survive_the_admin_api(
+    state: GatewayState, admin_client: httpx.AsyncClient
+) -> None:
+    body = {**TEST_ROUTE, "rpm": 30, "tpm": 50_000}
+    response = await admin_client.put("/admin/routes/ep_ep1", json=body, headers=ADMIN)
+    assert response.status_code == 200
+    entry = state.route_entry("ep_ep1")
+    assert entry is not None and (entry.route.rpm, entry.route.tpm) == (30, 50_000)
+    bad = await admin_client.put(
+        "/admin/routes/ep_ep2", json={**TEST_ROUTE, "rpm": 0}, headers=ADMIN
+    )
+    assert bad.status_code == 422
+
+
 async def test_issue_and_revoke_key(state: GatewayState, admin_client: httpx.AsyncClient) -> None:
     body = {
         "trial_id": "trial-1",

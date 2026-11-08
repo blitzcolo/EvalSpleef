@@ -37,6 +37,8 @@ class RouteIn(BaseModel):
     extra_headers: dict[str, str] = Field(default_factory=dict)
     provider_lock: ProviderLockIn | None = None
     cold_start_window_s: int = 0
+    rpm: int | None = Field(default=None, ge=1)
+    tpm: int | None = Field(default=None, ge=1)
 
     def to_route(self) -> UpstreamRoute:
         return UpstreamRoute(
@@ -55,6 +57,8 @@ class RouteIn(BaseModel):
                 else None
             ),
             cold_start_window_s=self.cold_start_window_s,
+            rpm=self.rpm,
+            tpm=self.tpm,
         )
 
 

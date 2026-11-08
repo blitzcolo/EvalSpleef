@@ -73,6 +73,8 @@ class HttpGatewayAdmin(GatewayAdmin):
                 else {"response_field": lock.response_field, "pattern": lock.pattern}
             ),
             "cold_start_window_s": route.cold_start_window_s,
+            "rpm": route.rpm,
+            "tpm": route.tpm,
         }
 
     async def version(self) -> str:

@@ -319,7 +319,8 @@ async def test_upstream_route_carries_lock_limits_and_headers() -> None:
     assert route.model == "fake-model"
     assert route.protocol == "chat_completions"
     assert route.api_key_ref == _SECRET_REF
-    assert route.default_params == {"temperature": 0, "rpm": 60, "tpm": 1000}
+    assert route.default_params == {"temperature": 0}
+    assert (route.rpm, route.tpm) == (60, 1000)
     assert route.extra_headers == {"X-Eval": "spleef"}
     assert route.provider_lock == ProviderLock(response_field="provider", pattern="^novita$")
     assert route.cold_start_window_s == 30

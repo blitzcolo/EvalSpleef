@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets as secrets_mod
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -32,6 +33,8 @@ from .store import KeyStore, UsageStore
 from .store import StoredKey as StoredKey
 
 GATEWAY_VERSION = "0.1.0"
+RATE_WINDOW_S = 60.0
+"""Window of the per-route rpm/tpm limits."""
 
 COLD_START_HEADER = "x-spleef-cold-start-ms"
 STOP_REASON_HEADER = "x-spleef-stop-reason"
@@ -173,6 +176,8 @@ class GatewayState:
         self._key_locks: dict[str, asyncio.Lock] = {}
         self._key_locks_guard = asyncio.Lock()
         self._in_flight: dict[str, BudgetProjection] = {}
+        self._rate_windows: dict[str, deque[tuple[float, int]]] = {}
+        self._rate_lock = asyncio.Lock()
         self._closed = False
 
     # -- lifecycle -------------------------------------------------------------
@@ -273,6 +278,27 @@ class GatewayState:
                 lock = asyncio.Lock()
                 self._key_locks[key_id] = lock
             return lock
+
+    async def admit_rate(self, name: str, route: UpstreamRoute, tokens: int) -> float | None:
+        """Admit one request against the route's rpm/tpm over the last 60 s.
+
+        Returns None when admitted (and counts it), else the seconds until the oldest counted
+        request leaves the window.
+        """
+        if route.rpm is None and route.tpm is None:
+            return None
+        async with self._rate_lock:
+            now = self.clock.now()
+            window = self._rate_windows.setdefault(name, deque())
+            while window and window[0][0] <= now - RATE_WINDOW_S:
+                window.popleft()
+            over_rpm = route.rpm is not None and len(window) >= route.rpm
+            used = sum(counted for _, counted in window)
+            over_tpm = route.tpm is not None and window and used + tokens > route.tpm
+            if over_rpm or over_tpm:
+                return max(0.0, window[0][0] + RATE_WINDOW_S - now)
+            window.append((now, tokens))
+            return None
 
     async def check_budget(self, key: StoredKey, projection: BudgetProjection) -> str | None:
         """Admission check under the key's lock; reserves the projection while in flight.

@@ -410,9 +410,7 @@ class OpenAICompatibleProvider(ModelEndpointProvider):
         if handle.base_url is None:
             raise EndpointUnavailable(f"endpoint {handle.endpoint_id} has no base_url")
         default_params = _mapping(self.config.get("default_params"))
-        for limit in ("rpm", "tpm"):
-            if limit in self.config:
-                default_params[limit] = self.config[limit]
+        rpm, tpm = self.config.get("rpm"), self.config.get("tpm")
         return UpstreamRoute(
             api_base=handle.base_url,
             model=handle.upstream_model or handle.model.slug,
@@ -422,4 +420,6 @@ class OpenAICompatibleProvider(ModelEndpointProvider):
             extra_headers=self._extra_headers(),
             provider_lock=self._provider_lock(),
             cold_start_window_s=int(self.config.get("cold_start_window_s", 0)),
+            rpm=None if rpm is None else int(rpm),
+            tpm=None if tpm is None else int(tpm),
         )

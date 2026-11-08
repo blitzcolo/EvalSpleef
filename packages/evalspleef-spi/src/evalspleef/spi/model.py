@@ -140,6 +140,10 @@ class UpstreamRoute:
     provider_lock: ProviderLock | None = None
     cold_start_window_s: int = 0
     """When above zero the gateway retries 503 and connect timeouts for this many seconds (endpoint wake-up)."""
+    rpm: int | None = None
+    """Requests per minute the gateway admits to this route; never sent upstream."""
+    tpm: int | None = None
+    """Tokens per minute (projected input plus max output) the gateway admits to this route."""
 
 
 class ModelEndpointProvider(ABC):
