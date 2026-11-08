@@ -249,24 +249,29 @@ def parse_hash_manifest(path: Path) -> tuple[HashLockEntry, ...]:
     return tuple(entries)
 
 
-def _locked_local_path(relative: str, tree: Path) -> Path | None:
-    """Map a manifest key onto the sanitised export tree, or ``None`` when verifier-side.
+def locked_candidate_path(relative: str) -> PurePosixPath | None:
+    """The candidate-relative path a manifest key locks, or ``None`` when it stays verifier-side.
 
     ``hashes.json`` keys are hidden-tests-relative, so ``../workspace/x`` resolves to
-    the candidate's ``workspace/x`` — the file the agent could have touched. Plain
-    keys (``locks.sha256``/``locks.json``) are candidate-root-relative. Keys that stay
+    the candidate's ``x`` — the file the agent could have touched. Plain keys
+    (``locks.sha256``/``locks.json``) are candidate-root-relative. Keys that stay
     verifier-side (the hidden test files themselves, which travel from the pack and
-    never from the agent) have no candidate copy and are not lock-checked here.
+    never from the agent) have no candidate copy.
     """
     posix = PurePosixPath(relative.replace("\\", "/"))
     if posix.is_absolute() or not posix.parts:
         return None
     via_hidden = PurePosixPath(os.path.normpath(str(PurePosixPath("hidden-tests") / posix)))
     if via_hidden.parts and via_hidden.parts[0] == "workspace":
-        return tree.joinpath(*via_hidden.parts[1:])
+        return PurePosixPath(*via_hidden.parts[1:])
     if ".." in posix.parts:
         return None
-    return tree.joinpath(*posix.parts)
+    return posix
+
+
+def _locked_local_path(relative: str, tree: Path) -> Path | None:
+    candidate = locked_candidate_path(relative)
+    return None if candidate is None else tree.joinpath(*candidate.parts)
 
 
 def check_hash_locks(

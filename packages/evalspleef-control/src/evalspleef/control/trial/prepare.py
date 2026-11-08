@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 import re
 import shutil
 from collections.abc import Mapping, Sequence
@@ -23,6 +22,7 @@ from evalspleef.core.canary import CanaryPlacement, build_placements, inject_com
 from evalspleef.spi.isolation import IsolationProfile
 from evalspleef.spi.sandbox import Sandbox
 
+from ..observe.verifier import VerificationError, locked_candidate_path, parse_hash_manifest
 from ..taskpack.models import TaskPack
 from .errors import CanaryInjectionError, IdentityHygieneError
 from .types import WorkspacePaths
@@ -172,39 +172,13 @@ def parse_canary_targets(manifest: str, stage: Path) -> list[tuple[str, bool]]:
 
 
 def _manifest_locked_paths(manifest: Path) -> set[str]:
-    """Workspace-relative paths locked by one hash manifest.
-
-    ``hashes.json`` keys are hidden-tests-relative (``../workspace/x`` reaches into the
-    candidate tree); ``locks.sha256``/``locks.json`` paths are candidate-root-relative.
-    Kept in sync with :func:`evalspleef.control.observe.verifier._locked_local_path`.
-    """
-    entries: list[str] = []
-    if manifest.suffix == ".json":
-        try:
-            document = json.loads(manifest.read_text(encoding="utf-8"))
-        except ValueError:
-            return set()
-        if isinstance(document, dict):
-            files = document.get("locked_files", document)
-            if isinstance(files, dict):
-                entries = [str(relative) for relative in files]
-    else:
-        for line in manifest.read_text(encoding="utf-8").splitlines():
-            digest, _, relative = line.partition(" ")
-            relative = relative.strip()
-            if digest.strip() and relative:
-                entries.append(relative)
-    locked: set[str] = set()
-    for relative in entries:
-        posix = PurePosixPath(relative.replace("\\", "/"))
-        if posix.is_absolute() or not posix.parts:
-            continue
-        via_hidden = PurePosixPath(os.path.normpath(str(PurePosixPath("hidden-tests") / posix)))
-        if via_hidden.parts and via_hidden.parts[0] == "workspace":
-            locked.add(via_hidden.relative_to("workspace").as_posix())
-        elif ".." not in posix.parts:
-            locked.add(posix.as_posix())
-    return locked
+    """Workspace-relative paths locked by one hash manifest; a malformed manifest locks none."""
+    try:
+        entries = parse_hash_manifest(manifest)
+    except (VerificationError, ValueError):
+        return set()
+    locked = (locked_candidate_path(entry.relative) for entry in entries)
+    return {path.as_posix() for path in locked if path is not None}
 
 
 def lock_protected_paths(pack: TaskPack) -> frozenset[str]:
