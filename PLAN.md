@@ -141,6 +141,7 @@ These work today and are covered by the evidence above, but they are workarounds
 6. **Duplicated path resolution.** `observe/verifier._locked_local_path` and `trial/prepare._manifest_locked_paths` both resolve hash manifest paths and must be kept in sync.
 7. **Route fallback.** The example `providers.yaml` lists the mock sandbox after Docker, and an unpinned run used it for 4 of 12 trials. The end-to-end pins its routes to `local-docker`.
 8. **Documentation.** `docs/guides/` was not written. The root `README.md`, 20 package READMEs and the specs under `docs/` stand in.
+9. **Hyper-V test double.** The adapter writes a pid file such as `/tmp/spleef-<id>.pid` in the guest for every timed command so the timeout path can kill the process tree. The test double runs guest commands as host processes, so those few-byte files land in the host's `/tmp` and no test removes them. A real guest is destroyed with its pid files.
 
 ## Defects found by the checks, and fixed
 
@@ -153,4 +154,5 @@ These work today and are covered by the evidence above, but they are workarounds
 - Six hidden-test scripts used the BSD-only `mktemp -t` and failed inside the Linux image.
 - Rubric items that could never produce a pass signal made every trial pause for a human; fixed in the observer and in three pack files, without weakening the rule that an undecidable item goes to a human.
 - The batch driver left the `grade.rule_id` column empty.
+- The PostgreSQL test fixture removed its container without `--volumes`, leaving one anonymous Docker volume per run (39 found by the final cleanup inventory). Measured before and after: 39 to 40 without the flag, 40 to 40 with it.
 - The example config used one epoch per cell while the spec needs two valid epochs to rank a cell.
