@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import httpx
@@ -351,6 +351,86 @@ async def test_upstream_transport_failure_is_answered_and_recorded(
     assert response.json()["error"]["code"] == code
     usage = await state.usage_for("trial-ep1")
     assert [(u.status_code, u.cost_usd) for u in usage] == [(status, 0.0)]
+
+
+class _BreaksMidStream(httpx.AsyncByteStream):
+    """An upstream body that sends a role and a content chunk, then fails."""
+
+    def __init__(self, failure: httpx.TransportError) -> None:
+        self._failure = failure
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for delta in ({"role": "assistant"}, {"content": "par"}):
+            chunk = {
+                "id": "c",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "fake-model",
+                "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(chunk)}\n\n".encode()
+        raise self._failure
+
+
+@pytest.mark.parametrize(
+    ("failure", "status", "code"),
+    [
+        (httpx.ReadTimeout("slow upstream"), 504, "upstream_timeout"),
+        (httpx.RemoteProtocolError("peer closed"), 502, "upstream_error"),
+    ],
+)
+async def test_a_mid_stream_upstream_failure_ends_with_an_error_event(
+    state: GatewayState, failure: httpx.TransportError, status: int, code: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_BreaksMidStream(failure))
+
+    add_route(state)
+    secret = await issue(state)
+    async with client_for(state, handler) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "ep_ep1",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+            headers=auth(secret),
+        )
+    events = [
+        json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: {")
+    ]
+    assert events[1]["choices"][0]["delta"] == {"content": "par"}
+    assert events[-1]["error"]["code"] == code
+    assert "data: [DONE]" not in response.text
+    usage = await state.usage_for("trial-ep1")
+    assert [u.status_code for u in usage] == [status]
+
+
+async def test_a_mid_stream_failure_reaches_anthropic_clients_as_an_error_event(
+    state: GatewayState,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_BreaksMidStream(httpx.ReadTimeout("slow")))
+
+    add_route(state)
+    secret = await issue(state)
+    async with client_for(state, handler) as client:
+        response = await client.post(
+            "/v1/messages",
+            json={
+                "model": "ep_ep1",
+                "max_tokens": 32,
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            headers={"x-api-key": secret, "anthropic-version": "2023-06-01"},
+        )
+    assert "event: error" in response.text
+    last = [line for line in response.text.splitlines() if line.startswith("data: ")][-1]
+    assert json.loads(last[6:])["error"]["type"] == "api_error"
+    usage = await state.usage_for("trial-ep1")
+    assert [u.status_code for u in usage] == [504]
 
 
 # -- budgets --------------------------------------------------------------------------

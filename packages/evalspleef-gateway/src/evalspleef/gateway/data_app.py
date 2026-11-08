@@ -608,6 +608,28 @@ async def _forward_stream(
     )
 
 
+def _mid_stream_error(
+    kind: Literal["chat", "anthropic", "responses"], exc: httpx.TransportError
+) -> tuple[int, str]:
+    """The status to record and the SSE error event to send when the upstream fails mid-stream.
+
+    The status line has already gone out as 200, so the failure can only reach the client as an
+    error event in the stream's own protocol; the OpenAI SDK raises on a chunk with ``error``.
+    """
+    timed_out = isinstance(exc, httpx.TimeoutException)
+    status = 504 if timed_out else 502
+    code = "upstream_timeout" if timed_out else "upstream_error"
+    message = f"upstream {'timed out' if timed_out else 'connection failed'} mid-stream: {exc!r}"
+    if kind == "anthropic":
+        body = {"type": "error", "error": {"type": "api_error", "message": message}}
+        return status, "event: error\ndata: " + json.dumps(body) + "\n\n"
+    if kind == "responses":
+        body = {"type": "error", "code": code, "message": message}
+        return status, "event: error\ndata: " + json.dumps(body) + "\n\n"
+    body = {"error": {"message": message, "type": "server_error", "code": code}}
+    return status, "\ndata: " + json.dumps(body) + "\n\n"
+
+
 def _upstream_model(chunk: dict[str, Any]) -> str:
     value = chunk.get("model")
     return value if isinstance(value, str) else ""
@@ -641,6 +663,9 @@ def _passthrough_stream(
                     if isinstance(chunk, dict) and isinstance(chunk.get("usage"), dict):
                         usage_holder["usage"] = chunk["usage"]
                 yield line + "\n"
+        except httpx.TransportError as exc:
+            usage_holder["status"], event = _mid_stream_error("chat", exc)
+            yield event
         finally:
             await opened.aclose()
             await _record_usage(
@@ -651,7 +676,7 @@ def _passthrough_stream(
                 round_=round_,
                 usage=usage_holder.get("usage"),
                 latency_ms=_latency_ms(state, started_at),
-                status_code=200,
+                status_code=int(usage_holder.get("status", 200)),
                 cold_start_ms=opened.cold_start_ms,
                 charge=True,
                 upstream_model=upstream_model,
@@ -697,6 +722,12 @@ def _converted_stream(
                     yield event
             for event in converter.finish():
                 yield event
+        except httpx.TransportError as exc:
+            kind: Literal["anthropic", "responses"] = (
+                "anthropic" if converter_type is ChatToAnthropicStream else "responses"
+            )
+            usage_holder["status"], event = _mid_stream_error(kind, exc)
+            yield event
         finally:
             await opened.aclose()
             await _record_usage(
@@ -707,7 +738,7 @@ def _converted_stream(
                 round_=round_,
                 usage=usage_holder.get("usage"),
                 latency_ms=_latency_ms(state, started_at),
-                status_code=200,
+                status_code=int(usage_holder.get("status", 200)),
                 cold_start_ms=opened.cold_start_ms,
                 charge=True,
                 upstream_model=upstream_model,
