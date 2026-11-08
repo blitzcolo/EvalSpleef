@@ -39,9 +39,26 @@ class Image:
         return {{"registry": uri}}
 
 
+class Volume(dict):
+    def __init__(self, name, mount_path):
+        super().__init__(name=name, mount_path=mount_path)
+
+
+class Instance:
+    ok = True
+    container_id = "pod-run-1"
+    task_id = "task-1"
+    error_msg = ""
+
+
 class Pod:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
+
+    def create(self):
+        with open(RECORD, "w") as handle:
+            json.dump({{"kwargs": self.kwargs, "action": "create"}}, handle)
+        return Instance()
 
     def deploy(self, name):
         with open(RECORD, "w") as handle:
@@ -124,3 +141,33 @@ async def test_a_launcher_past_its_deadline_is_killed(tmp_path: Path) -> None:
     with pytest.raises(LaunchFailed) as caught:
         await run_subprocess(argv, b"", {}, str(tmp_path), 0.5)
     assert caught.value.detail["reason"] == "launch_timeout"
+
+
+async def test_the_fetch_action_runs_a_pod_with_the_volume_and_reports_its_task(
+    tmp_path: Path,
+) -> None:
+    sdk_root, record = _fake_sdk(tmp_path)
+    request = {
+        **REQUEST,
+        "action": "fetch",
+        "ports": [],
+        "gpu": "",
+        "gpu_count": 0,
+        "volumes": [{"name": "huggingface_models", "mount_path": "/huggingface_models"}],
+    }
+    code, stdout, _stderr = await run_subprocess(
+        _argv(sdk_root), json.dumps(request).encode(), {}, str(tmp_path), 60.0
+    )
+    assert code == 0
+    assert parse_launch_result(stdout) == {
+        "ok": True,
+        "container_id": "pod-run-1",
+        "task_id": "task-1",
+        "error": "",
+    }
+    seen = json.loads(record.read_text())
+    assert seen["action"] == "create"
+    assert seen["kwargs"]["volumes"] == [
+        {"name": "huggingface_models", "mount_path": "/huggingface_models"}
+    ]
+    assert seen["kwargs"]["authorized"] is True

@@ -40,7 +40,23 @@ HF_TOKEN_REF = "vault://hf/conformance"
 SLUG = "beam-pod-conf"
 IMAGE = "lmsysorg/sglang@sha256:" + "b" * 64
 GATEWAY_PREFIX = "/api/v1/gateway"
+REST_PREFIX = "/api/v1"
+WORKSPACE_ID = "ws-fake"
 _REVISION = "0" * 40
+
+
+class SteppingClock:
+    """A clock whose ``sleep`` moves time forward at once, so polling loops finish instantly."""
+
+    def __init__(self, start: float = 1_000_000.0) -> None:
+        self._now = start
+
+    def now(self) -> float:
+        return self._now
+
+    async def sleep(self, seconds: float) -> None:
+        self._now += seconds
+
 
 _ERROR_BODIES: dict[int, tuple[str, str]] = {
     401: ("invalid_request_error", "invalid_api_key"),
@@ -128,6 +144,10 @@ class FakeBeamGateway:
         self.containers: dict[str, int] = {}
         self.container_status = "RUNNING"
         self.calls: list[tuple[str, str, dict[str, Any] | None]] = []
+        self.tasks: dict[str, deque[str]] = {}
+        """Task id -> statuses answered by successive GETs; the last one repeats."""
+        self.task_statuses: list[str] = ["RUNNING", "COMPLETE"]
+        self.stopped_containers: list[str] = []
         self._counter = 0
 
     def transport(self) -> httpx.MockTransport:
@@ -142,19 +162,44 @@ class FakeBeamGateway:
         self.containers[deployment_id] = 0
         return record
 
+    def start_task(self) -> tuple[str, str]:
+        """What ``Pod.create`` starts: a container and the task that tracks it."""
+        self._counter += 1
+        task_id = f"task-{self._counter}"
+        self.tasks[task_id] = deque(self.task_statuses)
+        return f"pod-run-{self._counter}", task_id
+
     @staticmethod
     def _ok(payload: Mapping[str, Any] | None = None) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, **(payload or {})})
+
+    def _rest(self, method: str, path: str) -> httpx.Response:
+        if (method, path) == ("GET", "/workspace/current"):
+            return httpx.Response(200, json={"external_id": WORKSPACE_ID, "name": "fake"})
+        parts = path.strip("/").split("/")
+        if method == "GET" and len(parts) == 3 and parts[:2] == ["task", WORKSPACE_ID]:
+            statuses = self.tasks.get(parts[2])
+            if statuses is None:
+                return httpx.Response(404, json={"message": "Not Found"})
+            status = statuses.popleft() if len(statuses) > 1 else statuses[0]
+            return httpx.Response(
+                200, json={"id": parts[2], "status": status, "failure_reason": ""}
+            )
+        return httpx.Response(404, json={"message": "Not Found"})
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         body: dict[str, Any] | None = None
         if request.content:
             parsed = json.loads(request.content)
             body = parsed if isinstance(parsed, dict) else None
-        path = request.url.path.removeprefix(GATEWAY_PREFIX)
+        full = request.url.path
+        rest = not full.startswith(GATEWAY_PREFIX)
+        path = full.removeprefix(REST_PREFIX) if rest else full.removeprefix(GATEWAY_PREFIX)
         self.calls.append((request.method, path, body))
         if request.headers.get("authorization") != f"Bearer {self.token}":
             return httpx.Response(401, json={"message": "invalid token"})
+        if rest:
+            return self._rest(request.method, path)
         if (request.method, path) == ("GET", "/deployments"):
             return self._ok({"deployments": list(self.deployments.values())})
         if (request.method, path) == ("GET", "/containers"):
@@ -169,6 +214,9 @@ class FakeBeamGateway:
             ]
             return self._ok({"containers": containers})
         parts = path.strip("/").split("/")
+        if request.method == "POST" and len(parts) == 3 and parts[::2] == ["containers", "stop"]:
+            self.stopped_containers.append(parts[1])
+            return self._ok()
         if len(parts) < 2 or parts[0] != "deployments":
             return httpx.Response(404, json={"message": "no such route"})
         deployment_id = parts[1]
@@ -204,6 +252,27 @@ class FakeBeamSdk:
             def from_registry(uri: str) -> tuple[str, str]:
                 return ("registry", uri)
 
+        class Volume:
+            def __init__(self, *, name: str, mount_path: str) -> None:
+                self.name = name
+                self.mount_path = mount_path
+
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, Volume) and (self.name, self.mount_path) == (
+                    other.name,
+                    other.mount_path,
+                )
+
+            def __hash__(self) -> int:
+                return hash((self.name, self.mount_path))
+
+        class PodInstance:
+            def __init__(self, container_id: str, task_id: str) -> None:
+                self.ok = True
+                self.container_id = container_id
+                self.task_id = task_id
+                self.error_msg = ""
+
         class Pod:
             def __init__(self, **kwargs: Any) -> None:
                 self.kwargs = kwargs
@@ -220,7 +289,13 @@ class FakeBeamSdk:
                     "version": 1,
                 }, True
 
+            def create(self) -> PodInstance:
+                if sdk.fail_with is not None:
+                    raise RuntimeError(sdk.fail_with)
+                return PodInstance(*sdk.gateway.start_task())
+
         self.Image = Image
+        self.Volume = Volume
         self.Pod = Pod
 
 
@@ -237,7 +312,7 @@ class FakeLauncher:
         request = json.loads(stdin)
         self.calls.append({"argv": list(argv), "env": dict(env), "cwd": cwd, "request": request})
         try:
-            result = launcher.deploy(self.sdk, request)
+            result = launcher.run(self.sdk, request)
         except RuntimeError as exc:
             result = {"ok": False, "error": f"RuntimeError: {exc}"}
         stdout = "=> Preparing image\n" + launcher.RESULT_PREFIX + json.dumps(result) + "\n"

@@ -19,6 +19,8 @@ from evalspleef.spi.errors import EndpointUnavailable, SpleefError
 from .errors import AccessForbidden, CredentialRejected, DeploymentNotFound, RequestRejected
 
 DEFAULT_API_BASE = "https://app.beam.cloud/api/v1/gateway"
+DEFAULT_REST_BASE = "https://app.beam.cloud/api/v1"
+"""The workspace REST API (tasks, workspace); unlike the gateway it reports errors by HTTP status."""
 _MESSAGE_CHARS = 200
 
 
@@ -28,12 +30,14 @@ class BeamGatewayClient:
         token: Callable[[], str],
         *,
         api_base: str = DEFAULT_API_BASE,
+        rest_base: str = DEFAULT_REST_BASE,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout_s: float = 30.0,
         hidden: Callable[[], tuple[str, ...]] = lambda: (),
     ) -> None:
         self._token = token
         self._api_base = api_base.rstrip("/")
+        self._rest_base = rest_base.rstrip("/")
         self._transport = transport
         self._timeout_s = timeout_s
         self._hidden = hidden
@@ -46,16 +50,15 @@ class BeamGatewayClient:
         return text[:_MESSAGE_CHARS]
 
     async def _request(
-        self, method: str, path: str, *, body: dict[str, Any] | None = None
+        self, method: str, path: str, *, body: dict[str, Any] | None = None, rest: bool = False
     ) -> dict[str, Any]:
         headers = {"authorization": f"Bearer {self._token()}"}
+        base = self._rest_base if rest else self._api_base
         try:
             async with httpx.AsyncClient(
                 transport=self._transport, timeout=httpx.Timeout(self._timeout_s)
             ) as client:
-                response = await client.request(
-                    method, self._api_base + path, json=body, headers=headers
-                )
+                response = await client.request(method, base + path, json=body, headers=headers)
         except httpx.TransportError as exc:
             raise EndpointUnavailable(
                 f"{method} {path}: {type(exc).__name__}", detail={"reason": "transport"}
@@ -120,3 +123,19 @@ class BeamGatewayClient:
 
     async def delete_deployment(self, deployment_id: str) -> None:
         await self._request("DELETE", f"/deployments/{deployment_id}")
+
+    async def stop_container(self, container_id: str) -> None:
+        await self._request("POST", f"/containers/{container_id}/stop")
+
+    async def current_workspace_id(self) -> str:
+        payload = await self._request("GET", "/workspace/current", rest=True)
+        workspace_id = payload.get("external_id")
+        if not isinstance(workspace_id, str) or not workspace_id:
+            raise EndpointUnavailable(
+                "GET /workspace/current answered without an external_id",
+                detail={"reason": "malformed"},
+            )
+        return workspace_id
+
+    async def get_task(self, workspace_id: str, task_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/task/{workspace_id}/{task_id}", rest=True)

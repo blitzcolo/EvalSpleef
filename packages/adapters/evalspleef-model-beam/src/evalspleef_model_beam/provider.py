@@ -43,7 +43,7 @@ from evalspleef.spi.secrets import SecretResolver
 from . import launcher
 from .clock import Clock, SystemClock
 from .errors import CredentialRejected, DeploymentNotFound, LaunchFailed, PlanInputMissing
-from .gateway_api import DEFAULT_API_BASE, BeamGatewayClient
+from .gateway_api import DEFAULT_API_BASE, DEFAULT_REST_BASE, BeamGatewayClient
 from .inference import (
     DEFAULT_NOT_READY_MARKERS,
     ProbeResult,
@@ -69,6 +69,30 @@ DEFAULT_WAKE_POLL_S = 15.0
 DEFAULT_PROBE_TIMEOUT_S = 90.0
 DEFAULT_STATUS_TIMEOUT_S = 10.0
 HF_TOKEN_ENV = "HF_TOKEN"
+DEFAULT_FETCH_CPU = 2
+DEFAULT_FETCH_MEMORY = "8Gi"
+DEFAULT_FETCH_TIMEOUT_S = 3600
+DEFAULT_FETCH_POLL_S = 10.0
+_TASK_FAILED = frozenset({"ERROR", "CANCELLED", "TIMEOUT"})
+_REPO_PATH = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
+
+# Runs inside the weights Pod (the engine image ships huggingface_hub). snapshot_download into a
+# local directory skips files whose recorded commit already matches, so a cached revision costs
+# only metadata checks while any other content is replaced by the pinned revision. Inputs come in
+# through the environment, never through the command text.
+FETCH_SCRIPT = """
+import os, time
+from huggingface_hub import snapshot_download, __version__
+started = time.time()
+token_env = os.environ.get("SPLEEF_TOKEN_ENV") or "HF_TOKEN"
+path = snapshot_download(
+    repo_id=os.environ["SPLEEF_REPO"],
+    revision=os.environ["SPLEEF_REVISION"],
+    local_dir=os.environ["SPLEEF_DIR"],
+    token=os.environ.get(token_env) or None,
+)
+print("SPLEEF_FETCH_DONE", __version__, round(time.time() - started, 1), path, flush=True)
+"""
 _PASSED_ENV = ("PATH", "HOME", "LANG", "TMPDIR", "SSL_CERT_FILE", "UV_CACHE_DIR")
 _DIGEST_PINNED = re.compile(r"@sha256:[0-9a-f]{64}$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -175,6 +199,7 @@ class BeamPodProvider(ModelEndpointProvider):
         return BeamGatewayClient(
             lambda: self._resolve(credential_ref),
             api_base=str(self.config.get("api_base", DEFAULT_API_BASE)),
+            rest_base=str(self.config.get("rest_base", DEFAULT_REST_BASE)),
             transport=self._api_transport,
             hidden=lambda: tuple(self._hidden),
         )
@@ -266,6 +291,11 @@ class BeamPodProvider(ModelEndpointProvider):
                 except (KeyError, ValueError):
                     token_detail = f"{source.token_ref} does not resolve"
             checks.append(("hf_token", token_ok, token_detail))
+        weights = self._weights(spec)
+        if weights is not None:
+            repo = source.mirror_repo or source.repo
+            safe = bool(_REPO_PATH.match(repo)) and ".." not in repo.split("/")
+            checks.append(("weights_path", safe, f"{repo!r} becomes the directory {weights[2]}"))
         if self.hf_checker is None:
             checks.append(
                 (
@@ -304,20 +334,34 @@ class BeamPodProvider(ModelEndpointProvider):
 
     # -- deploy ------------------------------------------------------------------------------
 
+    def _weights(self, spec: ModelSpec) -> tuple[str, str, str] | None:
+        """``(volume, mount path, weights directory)`` when weights come from a Beam Volume."""
+        volume = self._param(spec, "weights_volume")
+        if not volume:
+            return None
+        source = spec.source
+        assert isinstance(source, HFSource)
+        mount = str(self._param(spec, "weights_mount", f"/{volume}")).rstrip("/")
+        return str(volume), mount, f"{mount}/{source.mirror_repo or source.repo}"
+
     def _engine_args(self, spec: ModelSpec, plan: DeploymentPlan, served_name: str) -> list[str]:
         source = spec.source
         assert isinstance(source, HFSource)
         self._engine(spec)
         context = int(self._param(spec, "context_length", spec.declared_context_tokens))
         extra = self._param(spec, "engine_extra_args") or []
+        weights = self._weights(spec)
+        # From a Volume the engine loads the directory the weights step pinned to the revision.
+        model = (
+            ["--model-path", weights[2]]
+            if weights is not None
+            else ["--model-path", source.mirror_repo or source.repo, "--revision", source.revision]
+        )
         return [
             "python3",
             "-m",
             "sglang.launch_server",
-            "--model-path",
-            source.mirror_repo or source.repo,
-            "--revision",
-            source.revision,
+            *model,
             "--served-model-name",
             served_name,
             "--host",
@@ -341,9 +385,11 @@ class BeamPodProvider(ModelEndpointProvider):
         if not isinstance(source, HFSource):
             raise CapabilityNotSupported("a Beam Pod deployment needs a Hugging Face source")
         env: dict[str, str] = {}
-        if source.token_ref:
+        weights = self._weights(spec)
+        if source.token_ref and weights is None:
             env[HF_TOKEN_ENV] = self._resolve(source.token_ref)
         request: dict[str, Any] = {
+            "action": "deploy",
             "name": deployment_name(spec),
             "image": str(self.config["image"]),
             "entrypoint": self._engine_args(spec, plan, served_name),
@@ -355,10 +401,94 @@ class BeamPodProvider(ModelEndpointProvider):
             "env": env,
             "secrets": [str(name) for name in self._param(spec, "beam_secrets", None) or []],
             "keep_warm_seconds": int(self._param(spec, "keep_warm_s", DEFAULT_KEEP_WARM_S)),
+            "volumes": [] if weights is None else [{"name": weights[0], "mount_path": weights[1]}],
         }
         recorded = dict(request)
         recorded["env"] = {key: "***" for key in env}
         return request, recorded
+
+    def _fetch_request(
+        self, spec: ModelSpec, weights: tuple[str, str, str]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """A CPU-only Pod run that puts the pinned revision into the Volume."""
+        source = spec.source
+        assert isinstance(source, HFSource)
+        volume, mount, directory = weights
+        token_secret = self._param(spec, "hf_token_secret")
+        env = {
+            "SPLEEF_REPO": source.repo,
+            "SPLEEF_REVISION": source.revision,
+            "SPLEEF_DIR": directory,
+            "SPLEEF_TOKEN_ENV": str(token_secret or HF_TOKEN_ENV),
+        }
+        secrets = [str(name) for name in self._param(spec, "beam_secrets", None) or []]
+        if token_secret:
+            secrets.append(str(token_secret))  # the token stays in Beam's secret store
+        elif source.token_ref:
+            env[HF_TOKEN_ENV] = self._resolve(source.token_ref)
+        timeout_s = int(self._param(spec, "fetch_timeout_s", DEFAULT_FETCH_TIMEOUT_S))
+        request: dict[str, Any] = {
+            "action": "fetch",
+            "name": f"{deployment_name(spec)}-weights"[:63],
+            "image": str(self.config.get("fetch_image") or self.config["image"]),
+            "entrypoint": ["python3", "-c", FETCH_SCRIPT],
+            "ports": [],
+            "cpu": self._param(spec, "fetch_cpu", DEFAULT_FETCH_CPU),
+            "memory": str(self._param(spec, "fetch_memory", DEFAULT_FETCH_MEMORY)),
+            "gpu": "",
+            "gpu_count": 0,
+            "env": env,
+            "secrets": secrets,
+            "keep_warm_seconds": timeout_s,
+            "volumes": [{"name": volume, "mount_path": mount}],
+        }
+        recorded = dict(request)
+        recorded["env"] = {
+            key: "***" if key == HF_TOKEN_ENV else value for key, value in env.items()
+        }
+        return request, recorded
+
+    async def _fetch_weights(
+        self, spec: ModelSpec, credential_ref: str, weights: tuple[str, str, str]
+    ) -> dict[str, Any]:
+        """Run the weights Pod to completion; any other end raises ``LaunchFailed``."""
+        request, recorded = self._fetch_request(spec, weights)
+        result = await self._run_launcher(credential_ref, request, required="task_id")
+        client = self._client(credential_ref)
+        workspace_id = await client.current_workspace_id()
+        started = self._clock.now()
+        deadline = started + float(request["keep_warm_seconds"])
+        poll_s = float(self.config.get("fetch_poll_s", DEFAULT_FETCH_POLL_S))
+        record = {
+            "fetch_request": recorded,
+            "fetch_task_id": result["task_id"],
+            "fetch_container_id": result.get("container_id", ""),
+        }
+        while True:
+            task = await client.get_task(workspace_id, str(result["task_id"]))
+            status = str(task.get("status") or "").upper()
+            if status == "COMPLETE":
+                return {**record, "fetch_status": status, "fetch_s": self._clock.now() - started}
+            if status in _TASK_FAILED:
+                raise LaunchFailed(
+                    f"the weights download for {request['name']} ended {status}",
+                    detail={
+                        "reason": "fetch_failed",
+                        "task_status": status,
+                        "failure_reason": self._scrub(str(task.get("failure_reason") or "")),
+                        **record,
+                    },
+                )
+            if self._clock.now() + poll_s > deadline:
+                container_id = str(result.get("container_id") or "")
+                if container_id:
+                    with contextlib.suppress(DeploymentNotFound):
+                        await client.stop_container(container_id)
+                raise LaunchFailed(
+                    f"the weights download for {request['name']} did not finish in time",
+                    detail={"reason": "fetch_timeout", "task_status": status, **record},
+                )
+            await self._clock.sleep(poll_s)
 
     def _scrub(self, text: str) -> str:
         for secret in self._hidden:
@@ -382,7 +512,7 @@ class BeamPodProvider(ModelEndpointProvider):
         return removed
 
     async def _run_launcher(
-        self, credential_ref: str, request: Mapping[str, Any]
+        self, credential_ref: str, request: Mapping[str, Any], *, required: str = "deployment_id"
     ) -> dict[str, Any]:
         token = self._resolve(credential_ref)
         timeout_s = float(self.config.get("launch_timeout_s", DEFAULT_LAUNCH_TIMEOUT_S))
@@ -398,7 +528,7 @@ class BeamPodProvider(ModelEndpointProvider):
                 removed = await self._remove_by_name(credential_ref, str(request["name"]))
                 raise LaunchFailed(str(exc), detail={**exc.detail, "removed": removed}) from exc
         result = parse_launch_result(stdout)
-        if result is None or not result.get("ok") or not result.get("deployment_id"):
+        if result is None or not result.get("ok") or not result.get(required):
             removed = await self._remove_by_name(credential_ref, str(request["name"]))
             reason = (result or {}).get("error") or f"launcher exited {code} without a result"
             tail = self._scrub(stderr.decode(errors="replace"))[-_STDERR_TAIL:]
@@ -444,6 +574,11 @@ class BeamPodProvider(ModelEndpointProvider):
         served_name = spec.slug
         request, recorded = self._launch_request(spec, plan, served_name)
         credential_ref = self._credential_ref(spec)
+        weights = self._weights(spec)
+        fetched: dict[str, Any] = {}
+        if weights is not None:
+            fetched = await self._fetch_weights(spec, credential_ref, weights)
+            fetched.update({"weights_volume": weights[0], "weights_dir": weights[2]})
         result = await self._run_launcher(credential_ref, request)
         invoke_url = str(result.get("invoke_url") or "").rstrip("/")
         if not invoke_url:
@@ -478,6 +613,7 @@ class BeamPodProvider(ModelEndpointProvider):
                 "sdk_requirement": str(self.config.get("sdk_requirement", DEFAULT_SDK_REQUIREMENT)),
                 "min_replicas": plan.replicas_min,
                 "max_replicas": plan.replicas_max,
+                **fetched,
             }
         )
         await self._set_containers(handle, plan.replicas_min)

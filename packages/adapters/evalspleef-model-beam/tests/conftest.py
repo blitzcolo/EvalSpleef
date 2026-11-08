@@ -14,6 +14,7 @@ from evalspleef_model_beam.conformance import (
     FakeBeamSdk,
     FakeHFChecker,
     FakeLauncher,
+    SteppingClock,
 )
 from evalspleef_model_beam.provider import BeamPodProvider
 
@@ -61,6 +62,7 @@ def provider(gateway: FakeBeamGateway, fake_launcher: FakeLauncher) -> BeamPodPr
         "acme",
         {"api_key_ref": TOKEN_REF, "image": IMAGE},
         DictSecretResolver({TOKEN_REF: TOKEN, HF_TOKEN_REF: HF_SECRET}),
+        clock=SteppingClock(),
         launch_runner=fake_launcher,
         api_transport=gateway.transport(),
     )

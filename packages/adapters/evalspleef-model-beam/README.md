@@ -9,7 +9,7 @@ Pod URL with the Beam token as its upstream key.
 
 | Operation | Surface |
 | --- | --- |
-| `deploy` | `launcher.py` in a child process: the Beam SDK (`beam-client`) builds the registry image and runs `Pod(...).deploy(name)`, then `POST /deployments/{id}/scale` starts the planned container count |
+| `deploy` | with `weights_volume` set, first a CPU-only Pod run (`Pod(...).create()`) puts the pinned revision into the Volume and is polled to `COMPLETE` through `GET /api/v1/task/{ws}/{task}`; then `launcher.py` in a child process: the Beam SDK (`beam-client`) builds the registry image and runs `Pod(...).deploy(name)`, then `POST /deployments/{id}/scale` starts the planned container count |
 | `status` | `GET /deployments` and `GET /containers` (gateway REST); a `RUNNING` container is `ready` once `GET <url>/v1/models` answers 200 |
 | `scale` | `POST /deployments/{id}/scale {containers}`; a Pod deployment holds a fixed count, so `max_replicas` is provisioned |
 | `teardown sleep` / `terminate` | scale to 0 / `POST /deployments/{id}/stop` then `DELETE /deployments/{id}` |
@@ -30,6 +30,29 @@ never touches `~/.beam`. The Beam token reaches the child only through `BEAM_TOK
 environment; the request, including the HF token, arrives as JSON on stdin, never in argv. A
 launch that fails or times out removes any deployment of the same name it may have left.
 
+## Weights from a Beam Volume
+
+Set `weights_volume` (for example `huggingface_models`) to keep the weights in a Beam Volume
+instead of downloading them in every GPU container:
+
+1. A CPU-only Pod (`fetch_cpu` 2, `fetch_memory` `8Gi`, the engine image by default) mounts the
+   Volume at `weights_mount` (default `/<volume>`) and runs `huggingface_hub.snapshot_download`
+   for the pinned revision into `<mount>/<repo>`, the layout Beam's dashboard import uses. Files
+   whose recorded commit already matches are skipped, so a cached revision costs only metadata
+   checks; other content is replaced by the pinned revision. Repo, revision and directory reach
+   the Pod through its environment, never through command text. The run must reach `COMPLETE`
+   within `fetch_timeout_s` (3600); an `ERROR`, `CANCELLED` or `TIMEOUT` task, or a run past the
+   deadline (its container is stopped), raises `LaunchFailed` and no GPU Pod is started.
+2. The GPU Pod mounts the same Volume and SGLang loads `--model-path <mount>/<repo>`; it gets no
+   HF token.
+
+The HF token: name a Beam workspace secret in `hf_token_secret` (for example `HUGGINGFACE_TOKEN`,
+which the dashboard import creates) and the token never leaves Beam; otherwise the token from
+`source.token_ref` is passed to the weights Pod only, masked in the record.
+
+Volume storage is not billed yet; the documented planned price is $0.0001 per GB-hour
+(<https://docs.beam.cloud/v2/data/volume.md>), about $1.8 a month for 25 GB.
+
 ## Configuration
 
 Account config (`providers.yaml` `model_accounts.<name>`):
@@ -46,8 +69,11 @@ Deployment params (`models.yaml` `deployment.params`): `gpu` (required, e.g. `RT
 `gpu_count`, `cpu` (8), `memory` (`32Gi`), `min_replicas`/`max_replicas` (1), `max_concurrency`
 (8, becomes `--max-running-requests`), `context_length` (declared context), `keep_warm_s` (1800;
 `-1` keeps containers until stopped), `engine_extra_args` (appended to the SGLang command),
-`beam_secrets` (workspace secrets injected as env). A non-public model's HF token is resolved
-from `source.token_ref` and passed to the Pod as `HF_TOKEN`; it is masked in the recorded request.
+`beam_secrets` (workspace secrets injected as env), and the Volume keys above (`weights_volume`,
+`weights_mount`, `hf_token_secret`, `fetch_cpu`, `fetch_memory`, `fetch_timeout_s`; account config
+may set `fetch_image`, `fetch_poll_s`, `rest_base`). Without a Volume a non-public model's HF
+token is resolved from `source.token_ref` and passed to the GPU Pod as `HF_TOKEN`; it is masked
+in the recorded request.
 
 ## Verification
 

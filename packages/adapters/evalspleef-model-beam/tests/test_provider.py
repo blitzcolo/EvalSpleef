@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 
 import pytest
@@ -22,6 +23,9 @@ from evalspleef.testing.secrets import DictSecretResolver
 HF_SECRET = "hf_secret_value_do_not_leak"
 SHA = "1a2b3c4d" * 5
 SLUG = "qwen38-27b"
+REPO = "evalspleef-conformance/public-model"
+WEIGHTS_DIR = f"/huggingface_models/{REPO}"
+VOLUME = {"weights_volume": "huggingface_models"}
 
 SpecFactory = Callable[..., ModelSpec]
 
@@ -228,3 +232,90 @@ async def test_terminate_stops_and_deletes_and_is_idempotent(
     assert await provider.status(handle) is EndpointState.RETIRED
     await provider.teardown(handle, "terminate")
     assert handle.state is EndpointState.RETIRED
+
+
+# -- weights from a Beam Volume ------------------------------------------------------------------
+
+
+async def test_volume_weights_are_fetched_on_cpu_before_the_gpu_pod_loads_them(
+    provider: BeamPodProvider,
+    fake_launcher: FakeLauncher,
+    sdk: FakeBeamSdk,
+    make_spec: SpecFactory,
+) -> None:
+    spec = make_spec(
+        access="gated", token_ref=HF_TOKEN_REF, hf_token_secret="HUGGINGFACE_TOKEN", **VOLUME
+    )
+    handle = await deployed(provider, spec)
+    fetch, deploy = (call["request"] for call in fake_launcher.calls)
+    assert [fetch["action"], deploy["action"]] == ["fetch", "deploy"]
+    mount = [{"name": "huggingface_models", "mount_path": "/huggingface_models"}]
+    assert fetch["volumes"] == deploy["volumes"] == mount
+    assert (fetch["gpu"], fetch["gpu_count"], fetch["ports"]) == ("", 0, [])
+    assert fetch["env"] == {
+        "SPLEEF_REPO": REPO,
+        "SPLEEF_REVISION": SHA,
+        "SPLEEF_DIR": WEIGHTS_DIR,
+        "SPLEEF_TOKEN_ENV": "HUGGINGFACE_TOKEN",
+    }
+    assert fetch["secrets"] == ["HUGGINGFACE_TOKEN"]
+    assert HF_SECRET not in json.dumps([fetch, deploy])
+    entrypoint = deploy["entrypoint"]
+    assert entrypoint[entrypoint.index("--model-path") + 1] == WEIGHTS_DIR
+    assert "--revision" not in entrypoint
+    assert deploy["env"] == {}
+    assert sdk.pods[1]["volumes"] == [
+        sdk.Volume(name="huggingface_models", mount_path="/huggingface_models")
+    ]
+    assert handle.observed["fetch_status"] == "COMPLETE"
+    assert handle.observed["weights_dir"] == WEIGHTS_DIR
+    assert handle.observed["fetch_s"] == 10.0  # one poll interval: RUNNING, then COMPLETE
+    assert handle.state is EndpointState.READY
+
+
+async def test_without_a_beam_secret_only_the_fetch_pod_gets_the_hf_token(
+    provider: BeamPodProvider, fake_launcher: FakeLauncher, make_spec: SpecFactory
+) -> None:
+    handle = await deployed(provider, make_spec(access="gated", token_ref=HF_TOKEN_REF, **VOLUME))
+    fetch, deploy = (call["request"] for call in fake_launcher.calls)
+    assert fetch["env"]["HF_TOKEN"] == HF_SECRET
+    assert fetch["env"]["SPLEEF_TOKEN_ENV"] == "HF_TOKEN"
+    assert fetch["secrets"] == []
+    assert deploy["env"] == {}
+    assert handle.observed["fetch_request"]["env"]["HF_TOKEN"] == "***"
+    assert HF_SECRET not in repr(handle.observed)
+
+
+async def test_a_failed_weights_download_never_starts_the_gpu_pod(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, sdk: FakeBeamSdk, make_spec: SpecFactory
+) -> None:
+    gateway.task_statuses = ["RUNNING", "ERROR"]
+    with pytest.raises(LaunchFailed) as caught:
+        await deployed(provider, make_spec(**VOLUME))
+    assert caught.value.detail["reason"] == "fetch_failed"
+    assert caught.value.detail["task_status"] == "ERROR"
+    assert len(sdk.pods) == 1
+    assert gateway.deployments == {}
+
+
+async def test_a_weights_download_past_its_deadline_is_stopped(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, sdk: FakeBeamSdk, make_spec: SpecFactory
+) -> None:
+    gateway.task_statuses = ["RUNNING"]
+    with pytest.raises(LaunchFailed) as caught:
+        await deployed(provider, make_spec(fetch_timeout_s=30, **VOLUME))
+    assert caught.value.detail["reason"] == "fetch_timeout"
+    assert gateway.stopped_containers == [caught.value.detail["fetch_container_id"]]
+    assert len(sdk.pods) == 1
+    assert gateway.deployments == {}
+
+
+async def test_validate_refuses_a_repo_that_would_leave_the_volume(
+    provider: BeamPodProvider, make_spec: SpecFactory
+) -> None:
+    from dataclasses import replace
+
+    spec = make_spec(**VOLUME)
+    escaping = replace(spec, source=replace(spec.source, repo="../outside"))
+    report = await provider.validate(escaping)
+    assert ("weights_path", False) in {(check_id, ok) for check_id, ok, _ in report.checks}

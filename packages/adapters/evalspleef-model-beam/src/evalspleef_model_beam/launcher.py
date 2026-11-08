@@ -25,6 +25,10 @@ RESULT_PREFIX = "SPLEEF_BEAM_RESULT "
 def build_pod(sdk: Any, request: Mapping[str, Any]) -> Any:
     """The SDK ``Pod`` for one request. The URL always requires a Beam token."""
     secrets = [str(name) for name in request.get("secrets") or []]
+    volumes = [
+        sdk.Volume(name=str(volume["name"]), mount_path=str(volume["mount_path"]))
+        for volume in request.get("volumes") or []
+    ]
     return sdk.Pod(
         name=str(request["name"]),
         image=sdk.Image.from_registry(str(request["image"])),
@@ -36,6 +40,7 @@ def build_pod(sdk: Any, request: Mapping[str, Any]) -> Any:
         gpu_count=int(request["gpu_count"]),
         env={str(key): str(value) for key, value in dict(request.get("env") or {}).items()},
         secrets=secrets or None,
+        volumes=volumes or None,
         keep_warm_seconds=int(request["keep_warm_seconds"]),
         authorized=True,
     )
@@ -56,10 +61,27 @@ def deploy(sdk: Any, request: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def fetch(sdk: Any, request: Mapping[str, Any]) -> dict[str, Any]:
+    """Start a one-off Pod run (the weights download) and return its container and task ids."""
+    instance = build_pod(sdk, request).create()
+    ok = bool(getattr(instance, "ok", False))
+    return {
+        "ok": ok,
+        "container_id": str(getattr(instance, "container_id", "") or ""),
+        "task_id": str(getattr(instance, "task_id", "") or ""),
+        "error": "" if ok else str(getattr(instance, "error_msg", "") or "the Pod run failed"),
+    }
+
+
+def run(sdk: Any, request: Mapping[str, Any]) -> dict[str, Any]:
+    """Dispatch on ``request['action']``: ``deploy`` (the default) or ``fetch``."""
+    return fetch(sdk, request) if request.get("action") == "fetch" else deploy(sdk, request)
+
+
 def main() -> int:
     request = json.loads(sys.stdin.read())
     try:
-        result = deploy(importlib.import_module("beam"), request)
+        result = run(importlib.import_module("beam"), request)
     except (Exception, SystemExit) as exc:
         # The SDK raises on gRPC failures and calls sys.exit() on fatal terminal errors; both
         # become a failed result the provider turns into a typed error.
