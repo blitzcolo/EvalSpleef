@@ -53,6 +53,7 @@ DEFAULT_HEALTH_PATH = "/health"
 DEFAULT_MAX_CONCURRENT = 16
 DEFAULT_REQUEST_TIMEOUT_S = 600
 DEFAULT_IDLE_TIMEOUT_S = 300
+DEFAULT_SCALE_POLICY: dict[str, Any] = {"type": "queue", "value": 60}
 DEFAULT_WAKE_POLL_S = 15.0
 DEFAULT_PROBE_TIMEOUT_S = 90.0
 
@@ -176,6 +177,18 @@ class NovitaServerlessGpuProvider(ModelEndpointProvider):
     def _param(self, spec: ModelSpec, key: str, default: Any = None) -> Any:
         value = spec.deployment.params.get(key)
         return value if value is not None else self.config.get(key, default)
+
+    def _policy(self, spec: ModelSpec) -> dict[str, Any]:
+        raw = self._param(spec, "scale_policy") or {}
+        policy = dict(DEFAULT_SCALE_POLICY)
+        if isinstance(raw, Mapping):
+            policy.update({key: raw[key] for key in ("type", "value") if key in raw})
+        if policy["type"] not in ("queue", "concurrency"):
+            raise CapabilityNotSupported(
+                f"scale policy {policy['type']!r} is not supported (queue, concurrency)",
+                detail={"scale_policy": policy},
+            )
+        return {"type": str(policy["type"]), "value": int(policy["value"])}
 
     def _engine(self, spec: ModelSpec) -> Engine:
         engine = str(self._param(spec, "engine", "vllm"))
@@ -315,6 +328,9 @@ class NovitaServerlessGpuProvider(ModelEndpointProvider):
                     self.config.get("request_timeout_s", DEFAULT_REQUEST_TIMEOUT_S)
                 ),
             },
+            # Documented as optional, but the live API answers 400 "invalid worker policy"
+            # without it: scale on queue wait time (seconds) unless configured otherwise.
+            "policy": self._policy(spec),
             "health_check": {
                 "path": str(self.config.get("health_path", DEFAULT_HEALTH_PATH)),
                 "port": port,

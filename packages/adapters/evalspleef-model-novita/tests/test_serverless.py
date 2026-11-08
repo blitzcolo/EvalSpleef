@@ -137,6 +137,7 @@ async def test_deploy_posts_the_documented_create_request(
         "request_timeout": 600,
     }
     assert body["health_check"] == {"path": "/health", "port": 8000}
+    assert body["policy"] == {"type": "queue", "value": 60}
     assert body["ports"] == [8000]
     command = body["command"].split()
     assert command[command.index("--model") + 1] == "org/mirror-qwen3-32b-1a2b3c4"
@@ -162,6 +163,17 @@ async def test_deploy_passes_the_disk_and_cuda_floor_when_configured(
     assert body is not None
     worker = body["worker_config"]
     assert (worker["rootfs_size_gb"], worker["min_cuda_version"]) == (80, "12.8")
+
+
+async def test_deploy_sends_the_configured_scale_policy(
+    provider: NovitaServerlessGpuProvider,
+    api: FakeNovitaGpuApi,
+    make_spec: SpecFactory,
+) -> None:
+    await deployed(provider, make_spec(scale_policy={"type": "concurrency", "value": 4}))
+    body = api.calls[0][2]
+    assert body is not None
+    assert body["policy"] == {"type": "concurrency", "value": 4}
 
 
 async def test_deploy_with_the_sglang_engine_sends_the_launcher_command(
