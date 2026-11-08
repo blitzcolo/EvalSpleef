@@ -169,8 +169,16 @@ class DockerProvider(SandboxProvider):
         """Daemon facts used by the scheduler and the host inventory."""
         try:
             version = await self.client().version()
+            info = await self.client().system.info()
         except Exception as exc:
             raise SpleefError(f"docker preflight failed: {exc}") from exc
+        runtimes = sorted(info.get("Runtimes") or {})
+        if self._runtime not in runtimes:
+            # The declared isolation level rests on this runtime (runsc means L2).
+            raise PolicyNotEnforceable(
+                f"docker runtime {self._runtime!r} is not registered with the daemon "
+                f"(available: {', '.join(runtimes) or 'none'})"
+            )
         return {
             "provider": f"{self.name}/{self.instance}",
             "server_version": version.get("Version"),
@@ -388,6 +396,8 @@ class DockerProvider(SandboxProvider):
                 "Init": True,
                 "AutoRemove": False,
                 "Binds": [],
+                # runsc (gVisor) is what the L2 declaration rests on; never fall back.
+                "Runtime": self._runtime,
             },
         }
 

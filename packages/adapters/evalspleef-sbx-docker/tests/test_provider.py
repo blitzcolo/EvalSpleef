@@ -95,6 +95,19 @@ async def test_max_concurrency(spec_factory) -> None:
         await limited.close()
 
 
+async def test_an_unregistered_runtime_is_refused_not_replaced(spec_factory) -> None:
+    """runsc declares L2; on a daemon without it nothing may silently run under runc."""
+    gvisor = DockerProvider("gvisor-test", {"runtime": "no-such-runtime"}, _Secrets())
+    try:
+        with pytest.raises(PolicyNotEnforceable, match="no-such-runtime"):
+            await gvisor.preflight()
+        with pytest.raises(SandboxCreateError):
+            await gvisor.create(spec_factory("runtime-refused"))
+        assert await gvisor.list({"trial": "runtime-refused"}) == []
+    finally:
+        await gvisor.close()
+
+
 async def test_failed_start_leaves_no_container(provider, spec_factory) -> None:
     spec = replace(spec_factory("leak-check"), run_as_user="no-such-user")
     with pytest.raises(SandboxCreateError):
