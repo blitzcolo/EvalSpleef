@@ -244,15 +244,15 @@ Priorities follow PRD section 5 (P0 is needed for the minimal closed loop). "Acc
 
 | AC | State |
 | --- | --- |
-| AC-01 | not met: no real Novita or Hugging Face run; HF freeze also blocked by D5 |
+| AC-01 | not met: no Novita GPU had capacity (serverless workers never left `creating`), so no real Novita or Hugging Face model was served; D5 no longer blocks the HF freeze |
 | AC-02 | partly: gateway budgets proven with a fake upstream; no source or cost-basis annotation on the leaderboard |
-| AC-03 | half: the Docker half runs for real; the Novita half is a fake |
+| AC-03 | partly: the Docker half runs for real; the Novita adapter passes conformance on the real account and packs now map to Novita templates (D10), but no batch has run on a Novita sandbox |
 | AC-04, AC-05 | not met: need a Mac mini with Tart and a Hyper-V host |
 | AC-06 | met for Docker and remote-over-Docker (real) and the five in-repo doubles; the other 14 targets pass against transport fakes written together with their adapters |
 | AC-07 | not met: needs an outside engineer |
 | AC-08 | not met: Harbor not installed |
 | AC-09 | not met: no calibration or regrade-agreement tooling |
-| AC-10 | not met: the cost ledger is not wired |
+| AC-10 | partly: the ledger is booked per trial and `spleef batch costs --novita-bill` reconciles it; costs reach it only since aa24625, and no real Novita bill has been reconciled |
 
 ## Fixes and real-surface runs (2026-11-08)
 
@@ -271,8 +271,15 @@ Priorities follow PRD section 5 (P0 is needed for the minimal closed loop). "Acc
 | Gateway retries upstream 429/5xx with backoff (B.6) | 10a9cdd | mutation: no retries fails 3 tests |
 | e2b family: creates in flight count against max_concurrency | 696ecf3 | mutation: the race lets 3 of 3 through |
 | Novita adapter: commands run in /workspace, `TimeoutException` means lost, templates get /workspace; `novita-live` conformance target | 20b1ba3 | mutation for the cwd default; real conformance below |
+| Gateway answers upstream timeouts and dropped connections with 504/502 instead of an unhandled 500; judge timeouts, 429 and 5xx are `EndpointUnavailable` (retried, not invalid) | 67f92a5 | mutation: both halves fail 9 new cases |
+| Gateway reports the charged cost (`x-spleef-cost`, constant in the SPI); the judge books the gateway charge without a price table | aa24625 | runner against the real gateway app gets 0.0 on the old code, 0.006 on the new |
+| A failure while observing or awaiting feedback ends the observation and fails from verifying (paths docs/02 4.2 already allows), so state and validity agree | e7f8c89 | the old test pinned the stuck state; mutation of core and runner |
+| `batch run` checks the freeze guards before warming or retiring any endpoint | 2e8a566 | mutation: the old code printed `warm` then `retire` for a rejected batch |
+| D10: the lease manager boots the vendor template each instance maps to (registry `templates` section by OCI digest and instance); the Template Builder can build from a self-contained Dockerfile | d995c4a | mutation of the lease manager, the CLI resolver and the builder |
+| Serverless GPU: `rootfs_size_gb`, `min_cuda_version` and a scale `policy` are sent; the live API rejects a create without `policy` (400 "invalid worker policy") although the reference marks it optional | 8861e5d, 156b0fc | mutation; the policy fix was confirmed on the real API |
+| Serverless GPU workers can run SGLang (`engine: sglang`), with per-engine parser names in the family profiles | d47023c | mutation |
 
-D3, D6-D12 and the rest of the unfinished list above remain open.
+D3, D6-D9, D11, D12 and the rest of the unfinished list above remain open.
 
 ### Real surfaces
 
@@ -282,21 +289,22 @@ D3, D6-D12 and the rest of the unfinished list above remain open.
 | DeepSeek API | works; `deepseek-flash`, `deepseek-v4-pro` |
 | Novita Agent Sandbox | works. `novita-live` conformance against the real account: 25 passed, 0 failed, 8 not applicable (no create-failure or expiry injection, no network canary, no GUI or ports). Template built by the Template Builder from `python:3.12-slim` by digest |
 | Novita GPU instances | API authorised; every create (all 6 products, spot and on-demand) answered `INSUFFICIENT_RESOURCE`; none created |
-| Novita Serverless GPU | endpoint create with 0 workers succeeded and was deleted; all serverless products had 0 GPUs available. The repository's serverless adapter sends a snake_case body to `/gpus/v2/endpoints`, which does not match the documented camelCase body at `/gpu-instance/openapi/v1/endpoint/create` (open) |
+| Novita Serverless GPU | The adapter's snake_case body matches the v2 reference for `/gpus/v2/endpoints` (an earlier note here compared it with the v1 camelCase API by mistake). Driven through the real adapter on 2026-11-08: a create without `policy` is rejected (400 "invalid worker policy", fixed in 156b0fc); with it, three sync endpoints on the RTX 5090 product `SL-serverless-3` (nvidia/Qwen3.8-27B-NVFP4 at 482ca0f, SGLang dev and v0.5.23 pinned by digest, 80 GB disk, CUDA 12.8) were created and got a worker each, but every worker stayed in `creating` with an empty log for 8 to 16 minutes. A control endpoint with `python:3.12-slim` stayed in `creating` too, and every serverless and instance GPU product reported 0 available, so the pool had no capacity. No worker ever ran, nothing was billed, every endpoint was deleted. Model serving through a Novita GPU is still not verified |
 | Real probes through the gateway | deepseek-flash 11/14, glm-5.3-flash 10/14, qwen3.8-flash 11/14 after the fixes. Remaining failures: P-06 tool_choice modes, P-07 (DeepSeek rejects json_schema), P-11 seed determinism and stop, P-12 a few rate-limited requests |
 
-Real-model batch on local Docker (batch 2026-11-b2, logic-001, data-001 and debug-001, 2 epochs, targets deepseek-flash via the DeepSeek API and glm-5.3-flash via Novita, judge qwen3.8-flash via Novita, all through the gateway): 25 trials including retries, and the event projection matched all 25 rows. deepseek-flash scored 0/Perfect on both epochs of data-001 and debug-001; glm-5.3-flash reached Perfect on data-001 and debug-001 only on the fourth attempt, so with one valid epoch those cells went to Manual; logic-001 stayed Pending for both models (observation timeouts after 300 s, gateway read timeouts). Real defects this run found, all open:
+Real-model batch on local Docker (batch 2026-11-b2, logic-001, data-001 and debug-001, 2 epochs, targets deepseek-flash via the DeepSeek API and glm-5.3-flash via Novita, judge qwen3.8-flash via Novita, all through the gateway): 25 trials including retries, and the event projection matched all 25 rows. deepseek-flash scored 0/Perfect on both epochs of data-001 and debug-001; glm-5.3-flash reached Perfect on data-001 and debug-001 only on the fourth attempt, so with one valid epoch those cells went to Manual; logic-001 stayed Pending for both models (observation timeouts after 300 s, gateway read timeouts). Real defects this run found, all fixed since (see the table above: 67f92a5, aa24625, e7f8c89):
 
-- The gateway does not catch `httpx.ReadTimeout` from a slow upstream; the request fails and the runner crashes, and a read timeout is classified as `invalid` instead of a retryable provider error.
-- The cost ledger booked 0 USD: the runner records no cost, so the gateway's priced usage never reaches the trial record, the grade cost or the ledger.
+- The gateway did not catch `httpx.ReadTimeout` from a slow upstream; the request failed and the runner crashed, and a judge read timeout was classified as `invalid` instead of a retryable provider error.
+- The cost ledger booked 0 USD: the gateway never sent the `x-spleef-cost` header the runner reads, and judge prices were never passed, so no cost reached the trial record, the grade cost or the ledger. Routes still cost 0 unless models.yaml gives `deployment.params.pricing`.
 - Four trials that failed while observing stayed in `observing` with validity invalid, because the transition table has no path from observing to invalid.
 
 The first live conformance attempt was invalid: the fake target patched the adapter module process-wide, so `novita-live` ran against the in-memory fake. Building the live target without the fake fixed it; only the third run above counts.
 
-New defects found on real surfaces and still open:
+Defects found on real surfaces in that run, fixed since:
 
-- `batch run` retires the endpoints in its `finally` block even when it fails at the freeze guard before any trial, so a retry finds them retired.
-- A batch cannot route a task pack to a Novita sandbox: packs carry OCI templates and the control plane has no OCI-to-Novita template mapping (D10).
+- `batch run` retired the endpoints in its `finally` block even when it failed at the freeze guard before any trial (2e8a566).
+- A batch could not route a task pack to a Novita sandbox: packs carry OCI templates and the control plane had no OCI-to-Novita template mapping (D10, d995c4a). The mapping is tested against fakes; no batch has run on a Novita sandbox yet, and the Template Builder CLI step that fills the registry is a Python call, not a `spleef` command.
+- A streaming response whose upstream times out mid-stream still ends without an error event (the status line is already sent); runners use non-streaming requests, so this only affects streaming clients (open).
 
 ## Defects found by the checks, and fixed
 
