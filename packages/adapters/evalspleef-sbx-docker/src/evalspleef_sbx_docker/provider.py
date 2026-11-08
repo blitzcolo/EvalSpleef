@@ -34,6 +34,7 @@ from evalspleef.spi.errors import (
 )
 from evalspleef.spi.isolation import IsolationProfile
 from evalspleef.spi.sandbox import (
+    Resources,
     Sandbox,
     SandboxCapabilities,
     SandboxProvider,
@@ -73,6 +74,16 @@ class DockerProvider(SandboxProvider):
         self._max_concurrency = _config_int(config, "max_concurrency", 16)
         self._max_lifetime_s = _config_int(config, "max_lifetime_s", 7200)
         self._pids_limit = _config_int(config, "pids_limit", 256)
+        ceilings = {key: config.get(key) for key in ("max_cpus", "max_memory_mb", "max_disk_mb")}
+        self._max_resources: Resources | None = (
+            Resources(
+                cpus=float(ceilings["max_cpus"] or 0) or float("inf"),
+                memory_mb=int(ceilings["max_memory_mb"] or 0) or 2**31,
+                disk_mb=int(ceilings["max_disk_mb"] or 0) or 2**31,
+            )
+            if any(value is not None for value in ceilings.values())
+            else None
+        )
         self._ttl_sweep_interval_s = _config_int(config, "ttl_sweep_interval_s", 30)
         self._engine_url = config.get("engine_url")
         host_machine = platform.machine().lower()
@@ -153,10 +164,10 @@ class DockerProvider(SandboxProvider):
             gpu=False,
             port_expose=False,
             host_mounts=False,
-            enforces_limits=frozenset({"cpu", "memory", "pids"}),
+            enforces_limits=frozenset({"cpu", "memory", "pids", "disk"}),
             max_concurrency=self._max_concurrency,
             max_lifetime_s=self._max_lifetime_s,
-            max_resources=None,
+            max_resources=self._max_resources,
             typical_start_s=1.0,
             reset_cost_s=1.0,
         )
@@ -330,6 +341,27 @@ class DockerProvider(SandboxProvider):
             raise CapabilityNotSupported("docker provider does not support GUI sandboxes")
         if spec.resources.gpus > 0:
             raise CapabilityNotSupported("docker provider does not support GPUs")
+        if spec.max_lifetime_s > self._max_lifetime_s:
+            raise CapabilityNotSupported(
+                f"lifetime {spec.max_lifetime_s} s exceeds this instance's {self._max_lifetime_s} s",
+                detail={"max_lifetime_s": self._max_lifetime_s},
+            )
+        ceiling, wanted = self._max_resources, spec.resources
+        if ceiling is not None:
+            over = [
+                name
+                for name, asked, cap in (
+                    ("cpus", wanted.cpus, ceiling.cpus),
+                    ("memory_mb", wanted.memory_mb, ceiling.memory_mb),
+                    ("disk_mb", wanted.disk_mb, ceiling.disk_mb),
+                )
+                if asked > cap
+            ]
+            if over:
+                raise CapabilityNotSupported(
+                    f"resources over this instance's ceiling: {', '.join(over)}",
+                    detail={"over": over},
+                )
         policy = spec.network
         if policy.mode in (NetMode.DOCS_WHITELIST, NetMode.PACKAGE_MIRROR):
             if not self._egress_network or not policy.via_proxy:
@@ -383,7 +415,8 @@ class DockerProvider(SandboxProvider):
                 "ReadonlyRootfs": True,
                 "Tmpfs": {
                     "/tmp": "rw,nosuid,nodev,mode=1777",
-                    "/workspace": "rw,exec,nosuid,nodev,mode=0777",
+                    # The rootfs is read-only, so the workspace tmpfs is the disk the spec asks for.
+                    "/workspace": f"rw,exec,nosuid,nodev,mode=0777,size={spec.resources.disk_mb}m",
                     home_tmpfs: "rw,exec,nosuid,nodev,mode=0777",
                 },
                 "CapDrop": ["ALL"],

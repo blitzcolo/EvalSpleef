@@ -172,3 +172,20 @@ async def test_isolation_hardening_visible(sandbox) -> None:
     assert int(memory.stdout.strip()) == 512 * 1024 * 1024
     pids = await sandbox.exec(["cat", "/sys/fs/cgroup/pids.max"])
     assert int(pids.stdout.strip()) > 0
+
+
+async def test_the_workspace_holds_no_more_than_the_requested_disk(provider, spec_factory) -> None:
+    from dataclasses import replace
+
+    from evalspleef.spi.sandbox import Resources
+
+    spec = replace(spec_factory("disk-cap"), resources=Resources(cpus=1, memory_mb=512, disk_mb=16))
+    sandbox = await provider.create(spec)
+    try:
+        fits = await sandbox.exec("dd if=/dev/zero of=/workspace/small bs=1M count=8")
+        assert fits.exit_code == 0, fits.stderr
+        over = await sandbox.exec("dd if=/dev/zero of=/workspace/large bs=1M count=32")
+        assert over.exit_code != 0
+        assert b"No space left" in over.stderr
+    finally:
+        await sandbox.destroy()

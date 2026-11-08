@@ -35,7 +35,7 @@ async def test_capabilities(provider) -> None:
     assert caps.snapshot == "none"
     assert not caps.gpu and caps.gui == "none" and not caps.port_expose
     assert not caps.host_mounts and not caps.dynamic_network_policy
-    assert caps.enforces_limits == frozenset({"cpu", "memory", "pids"})
+    assert caps.enforces_limits == frozenset({"cpu", "memory", "pids", "disk"})
     assert caps.max_concurrency == 4
     assert caps.max_lifetime_s == 7200
 
