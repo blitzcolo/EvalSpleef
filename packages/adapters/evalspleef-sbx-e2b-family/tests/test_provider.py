@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from evalspleef_sbx_e2b_family import novita as novita_module
 from evalspleef_sbx_e2b_family import selfhost as selfhost_module
@@ -235,6 +237,30 @@ async def test_concurrency_limit_raises_quota_exceeded(novita_provider, monkeypa
         await first.destroy()
     second = await novita_provider.create(make_spec("conc-c"))
     await second.destroy()
+
+
+async def test_concurrent_creates_cannot_overrun_the_limit(novita_provider, monkeypatch) -> None:
+    """Creates in flight count: a live Novita run created limit + 1 sandboxes without this."""
+    caps = novita_provider.capabilities()
+    monkeypatch.setattr(
+        novita_provider,
+        "_capability_defaults",
+        lambda: caps.__class__(**{**caps.__dict__, "max_concurrency": 2}),
+    )
+    results = await asyncio.gather(
+        *(novita_provider.create(make_spec(f"race-{n}")) for n in range(3)),
+        return_exceptions=True,
+    )
+    created = [r for r in results if not isinstance(r, BaseException)]
+    refused = [r for r in results if isinstance(r, QuotaExceeded)]
+    try:
+        assert (len(created), len(refused)) == (2, 1)
+    finally:
+        for sandbox in created:
+            await sandbox.destroy()
+    # A failed create gives its reservation back.
+    again = await novita_provider.create(make_spec("race-after"))
+    await again.destroy()
 
 
 # -- list / reap ---------------------------------------------------------------------

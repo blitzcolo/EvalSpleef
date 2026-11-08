@@ -42,6 +42,7 @@ import asyncio
 import contextlib
 import io
 import os
+import posixpath
 import re
 import shlex
 import tarfile
@@ -157,6 +158,7 @@ class E2BFamilyProvider(SandboxProvider):
     def __init__(self, instance: str, config: Mapping[str, Any], secrets: SecretResolver) -> None:
         super().__init__(instance, config, secrets)
         self._active: set[E2BFamilySandbox] = set()
+        self._creating = 0
         self._create_lock = asyncio.Lock()
 
     # -- clocks (overridden by test doubles) ---------------------------------
@@ -431,21 +433,26 @@ class E2BFamilyProvider(SandboxProvider):
             raise
         sandbox = self._wrap_handle(handle, spec)
         self._active.add(sandbox)
+        self._release_slot()
         return sandbox
 
     async def _acquire_slot(self, caps: SandboxCapabilities) -> None:
-        if caps.max_concurrency is None:
-            return
+        """Reserve a slot for one create; creates still in flight count against the limit."""
         async with self._create_lock:
-            if len(self._active) >= caps.max_concurrency:
+            if (
+                caps.max_concurrency is not None
+                and len(self._active) + self._creating >= caps.max_concurrency
+            ):
                 raise QuotaExceeded(
                     f"{self.name} instance {self.instance!r} is at its concurrency limit "
                     f"({caps.max_concurrency})",
                     detail={"max_concurrency": caps.max_concurrency},
                 )
+            self._creating += 1
 
     def _release_slot(self) -> None:
-        """Hook point for accounting when a create fails after slot acquisition."""
+        """End a reservation: the create failed, or its sandbox is now counted as active."""
+        self._creating -= 1
 
     def _wrap_handle(self, handle: SdkSandboxHandle, spec: SandboxSpec) -> E2BFamilySandbox:
         return E2BFamilySandbox(self, handle, spec)
@@ -528,6 +535,9 @@ class E2BFamilySandbox(Sandbox):
 
         wrapped = self._wrap_command(cmd, env, user or self.spec.run_as_user)
         exit_exception = self._provider._command_exit_exception()
+        # The SPI fixes paths relative to the workspace; the vendor default is the
+        # user's home, where a live Novita run created and scanned the wrong files.
+        run_cwd = posixpath.join(WORKSPACE, cwd) if cwd else WORKSPACE
         try:
             # Positional arguments mirror `SdkCommands.run`; the SDK runs
             # `/bin/bash -l -c <wrapped>`, and the wrapper performs the
@@ -538,7 +548,7 @@ class E2BFamilySandbox(Sandbox):
                 True,  # background -> returns a handle with pid/wait/kill
                 None,
                 user,
-                cwd,
+                run_cwd,
                 None,
                 None,
                 stdin is not None,
