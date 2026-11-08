@@ -16,8 +16,10 @@ from evalspleef.control.observe.judging import (
     evidence_digest,
 )
 from evalspleef.control.taskpack import TaskPack
+from evalspleef.control.trial import classify_error
 from evalspleef.control.trial.types import Artifact
 from evalspleef.core.judge import JudgeConfigError, MockJudge
+from evalspleef.spi.errors import EndpointUnavailable
 from evalspleef.spi.gateway import PriceSpec
 
 
@@ -62,19 +64,45 @@ def test_gateway_client_posts_chat_completion() -> None:
     assert client.total_input_tokens == 20 and client.total_output_tokens == 10
 
 
-def test_gateway_client_raises_on_gateway_error() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, json={"error": {"message": "boom"}})
-
-    client = GatewayJudgeClient(
+def _judge_client(handler: object) -> GatewayJudgeClient:
+    return GatewayJudgeClient(
         endpoint_id="judge-1",
         gateway_url="http://gw.test/v1",
         provider="vendor-a",
         family="fam-a",
-        transport=httpx.MockTransport(handler),
+        transport=httpx.MockTransport(handler),  # type: ignore[arg-type]
     )
+
+
+def test_gateway_client_raises_on_client_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "bad"}})
+
     with pytest.raises(httpx.HTTPStatusError):
-        client.complete("x")
+        _judge_client(handler).complete("x")
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        lambda request: httpx.Response(500, json={"error": {"message": "boom"}}),
+        lambda request: httpx.Response(504, json={"error": {"code": "upstream_timeout"}}),
+        lambda request: httpx.Response(429, json={"error": {"message": "slow down"}}),
+    ],
+)
+def test_gateway_server_errors_are_retryable_infrastructure(reply: object) -> None:
+    with pytest.raises(EndpointUnavailable) as info:
+        _judge_client(reply).complete("x")
+    assert classify_error(info.value).status == "failed_infra"
+
+
+def test_judge_read_timeout_is_retryable_infrastructure() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("judge too slow", request=request)
+
+    with pytest.raises(EndpointUnavailable) as info:
+        _judge_client(handler).complete("x")
+    assert classify_error(info.value).status == "failed_infra"
 
 
 def test_evidence_digest_uses_sanitised_artifacts_only(tmp_path: Path) -> None:

@@ -320,6 +320,38 @@ async def test_upstream_error_is_relayed_and_recorded(state: GatewayState) -> No
         assert len(usage) == 1 and usage[0].status_code == 400 and usage[0].cost_usd == 0.0
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("failure", "status", "code"),
+    [
+        (httpx.ReadTimeout("slow upstream"), 504, "upstream_timeout"),
+        (httpx.RemoteProtocolError("peer closed"), 502, "upstream_error"),
+    ],
+)
+async def test_upstream_transport_failure_is_answered_and_recorded(
+    state: GatewayState, stream: bool, failure: httpx.TransportError, status: int, code: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise failure
+
+    add_route(state)
+    secret = await issue(state)
+    async with client_for(state, handler) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "ep_ep1",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": stream,
+            },
+            headers=auth(secret),
+        )
+    assert response.status_code == status
+    assert response.json()["error"]["code"] == code
+    usage = await state.usage_for("trial-ep1")
+    assert [(u.status_code, u.cost_usd) for u in usage] == [(status, 0.0)]
+
+
 # -- budgets --------------------------------------------------------------------------
 
 

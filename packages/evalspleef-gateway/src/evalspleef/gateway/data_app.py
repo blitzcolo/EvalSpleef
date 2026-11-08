@@ -357,6 +357,36 @@ def _latency_ms(state: GatewayState, started_at: float) -> int:
     return int((state.clock.now() - started_at) * 1000)
 
 
+async def _transport_failure(
+    state: GatewayState,
+    key: StoredKey,
+    entry: RouteEntry,
+    model: str,
+    round_: int,
+    started_at: float,
+    flavor: Flavor,
+    exc: httpx.TransportError,
+) -> Response:
+    """Answer an upstream that timed out or dropped the connection: 504 or 502, uncharged."""
+    timed_out = isinstance(exc, httpx.TimeoutException)
+    status = 504 if timed_out else 502
+    await _record_usage(
+        state,
+        key=key,
+        entry=entry,
+        model=model,
+        round_=round_,
+        usage=None,
+        latency_ms=_latency_ms(state, started_at),
+        status_code=status,
+        cold_start_ms=0,
+        charge=False,
+    )
+    if timed_out:
+        return _error_response(flavor, 504, "upstream_timeout", f"upstream timed out: {exc!r}")
+    return _error_response(flavor, 502, "upstream_error", f"upstream connection failed: {exc!r}")
+
+
 def _upstream_error_payload(payload: dict[str, Any]) -> tuple[str, str | None]:
     error = payload.get("error")
     if not isinstance(error, dict):
@@ -400,20 +430,8 @@ async def _forward(
         )
     except UpstreamCredentialError as exc:
         return _error_response(flavor, 502, "upstream_error", f"upstream credential: {exc}")
-    except httpx.ConnectTimeout:
-        await _record_usage(
-            state,
-            key=key,
-            entry=entry,
-            model=model,
-            round_=round_,
-            usage=None,
-            latency_ms=_latency_ms(state, started_at),
-            status_code=504,
-            cold_start_ms=0,
-            charge=False,
-        )
-        return _error_response(flavor, 504, "upstream_timeout", "upstream connection timed out")
+    except httpx.TransportError as exc:
+        return await _transport_failure(state, key, entry, model, round_, started_at, flavor, exc)
 
     latency_ms = _latency_ms(state, started_at)
     try:
@@ -512,20 +530,8 @@ async def _forward_stream(
         opened = await open_upstream_stream(state, entry, body, endpoint_id=key.endpoint_id)
     except UpstreamCredentialError as exc:
         return _error_response(flavor, 502, "upstream_error", f"upstream credential: {exc}")
-    except httpx.ConnectTimeout:
-        await _record_usage(
-            state,
-            key=key,
-            entry=entry,
-            model=model,
-            round_=round_,
-            usage=None,
-            latency_ms=_latency_ms(state, started_at),
-            status_code=504,
-            cold_start_ms=0,
-            charge=False,
-        )
-        return _error_response(flavor, 504, "upstream_timeout", "upstream connection timed out")
+    except httpx.TransportError as exc:
+        return await _transport_failure(state, key, entry, model, round_, started_at, flavor, exc)
 
     upstream = opened.response
     if upstream.status_code != 200:

@@ -29,6 +29,7 @@ import httpx
 
 from evalspleef.core.judge import JudgeClient, JudgePanel
 from evalspleef.core.models import CheckKind, RubricItem
+from evalspleef.spi.errors import EndpointUnavailable
 from evalspleef.spi.gateway import PriceSpec
 
 from ..taskpack.models import TaskPack
@@ -133,16 +134,27 @@ class GatewayJudgeClient:
         self._client.close()
 
     def complete(self, prompt: str) -> str:
-        """One-shot chat completion; usage tokens accumulate for cost accounting."""
-        response = self._client.post(
-            CHAT_PATH,
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": self._max_tokens,
-                "temperature": 0.0,
-            },
-        )
+        """One-shot chat completion; usage tokens accumulate for cost accounting.
+
+        A timeout, a dropped connection, a rate limit or a 5xx is a provider failure the
+        batch retries (``EndpointUnavailable``), not a reason to invalidate the trial.
+        """
+        try:
+            response = self._client.post(
+                CHAT_PATH,
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": self._max_tokens,
+                    "temperature": 0.0,
+                },
+            )
+        except httpx.TransportError as exc:
+            raise EndpointUnavailable(f"judge {self.model} request failed: {exc!r}") from exc
+        if response.status_code == 429 or response.status_code >= 500:
+            raise EndpointUnavailable(
+                f"judge {self.model} answered {response.status_code}: {response.text[:200]}"
+            )
         response.raise_for_status()
         body = response.json()
         choices = body.get("choices")
