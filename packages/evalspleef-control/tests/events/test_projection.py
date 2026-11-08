@@ -41,38 +41,70 @@ def make_event(
     )
 
 
+def step(
+    machine: TrialMachine, event_type: EventType, event: str, salt: int, **extra: object
+) -> EventEnvelope:
+    """Apply ``event`` to ``machine`` and return the event the trial runner would append."""
+    before = machine.state
+    after = machine.apply(event)
+    transition = {"event": event, "from": before.value, "to": after.value}
+    return make_event(event_type, payload={"transition": transition, **extra}, salt=salt)
+
+
 def test_projection_equals_live_machine() -> None:
-    """Replay the same transitions through the machine and through events."""
+    """Replay the runner's recorded transitions through the machine and through events."""
     machine = TrialMachine(TRIAL)
     events: list[EventEnvelope] = [make_event(EventType.TRIAL_CREATED, salt=0)]
     transitions = [
         (EventType.TRIAL_LEASED, "lease"),
         (EventType.TRIAL_STARTED, "start"),
         (EventType.AGENT_STOPPED, "stop"),
-        (EventType.FEEDBACK_DECIDED, "needs_feedback"),
+        (EventType.DEFECT_UPDATED, "needs_feedback"),
         (EventType.FEEDBACK_SENT, "deliver"),
         (EventType.AGENT_STOPPED, "stop"),
         (EventType.VERIFY_STARTED, "finish"),
-        (EventType.TRIAL_SCORED, "score"),
+        (EventType.GRADE_COMPUTED, "score"),
     ]
     for salt, (event_type, transition) in enumerate(transitions, start=1):
-        machine.apply(transition)
-        events.append(make_event(event_type, salt=salt))
-    # Events that do not drive the trial state machine are ignored.
+        events.append(step(machine, event_type, transition, salt))
+    # Events without a transition do not drive the trial state machine.
     events.append(make_event(EventType.EVIDENCE_COLLECTED, payload={"path": "/tmp/x"}, salt=99))
 
     assert project_trial_state(events, trial_id=TRIAL) is machine.state
     assert machine.state.value == "scored"
 
 
-def test_projection_uses_payload_transition_override() -> None:
-    """Non-default transitions (e.g. infra failures) are carried in the payload."""
+def test_notices_without_a_transition_do_not_move_the_state() -> None:
+    """The runner also appends feedback decisions, verify notices and the scored notice.
+
+    These carry no transition; treating them as transitions applied ``needs_feedback``,
+    ``finish`` and ``score`` a second time and broke the replay.
+    """
+    machine = TrialMachine(TRIAL)
+    events = [
+        make_event(EventType.TRIAL_CREATED, salt=0),
+        step(machine, EventType.TRIAL_LEASED, "lease", 1),
+        step(machine, EventType.TRIAL_STARTED, "start", 2),
+        step(machine, EventType.AGENT_STOPPED, "stop", 3),
+        step(machine, EventType.DEFECT_UPDATED, "needs_feedback", 4),
+        make_event(EventType.FEEDBACK_DECIDED, payload={"feedback_index": 1}, salt=5),
+        step(machine, EventType.FEEDBACK_SENT, "deliver", 6),
+        step(machine, EventType.AGENT_STOPPED, "stop", 7),
+        step(machine, EventType.VERIFY_STARTED, "finish", 8),
+        make_event(EventType.VERIFY_STARTED, payload={"reason": "retry"}, salt=9),
+        step(machine, EventType.GRADE_COMPUTED, "score", 10),
+        make_event(EventType.TRIAL_SCORED, payload={"tier": "A"}, salt=11),
+    ]
+    assert project_trial_state(events, trial_id=TRIAL).value == "scored"
+
+
+def test_projection_accepts_a_bare_event_name() -> None:
     machine = TrialMachine(TRIAL)
     machine.apply("lease")
     machine.apply("fail_infra")
     events = [
         make_event(EventType.TRIAL_CREATED, salt=0),
-        make_event(EventType.TRIAL_LEASED, salt=1),
+        make_event(EventType.TRIAL_LEASED, payload={"transition": "lease"}, salt=1),
         make_event(EventType.INCIDENT_OPENED, payload={"transition": "fail_infra"}, salt=2),
     ]
     projected = project_trial_state(events, trial_id=TRIAL)
@@ -80,20 +112,33 @@ def test_projection_uses_payload_transition_override() -> None:
     assert projected.value == "failed_infra"
 
 
-def test_projection_of_scored_then_invalidated() -> None:
+def test_projection_of_a_failure_then_invalidation() -> None:
+    """The runner's fail_infra followed by the driver's invalidation replays to invalid."""
     machine = TrialMachine(TRIAL)
-    for transition in ("lease", "start", "stop", "finish", "score"):
-        machine.apply(transition)
-    machine.apply("invalidate_post_hoc")
     events = [
         make_event(EventType.TRIAL_CREATED, salt=0),
-        make_event(EventType.TRIAL_LEASED, salt=1),
-        make_event(EventType.TRIAL_STARTED, salt=2),
-        make_event(EventType.AGENT_STOPPED, salt=3),
-        make_event(EventType.VERIFY_STARTED, salt=4),
-        make_event(EventType.TRIAL_SCORED, salt=5),
-        make_event(EventType.TRIAL_INVALIDATED, salt=6),
+        step(machine, EventType.TRIAL_LEASED, "lease", 1),
+        step(machine, EventType.TRIAL_STARTED, "start", 2),
+        step(machine, EventType.INCIDENT_OPENED, "fail_infra", 3),
+        step(machine, EventType.TRIAL_INVALIDATED, "invalidate", 4, retry=True),
     ]
+    assert project_trial_state(events, trial_id=TRIAL).value == "invalid"
+
+
+def test_projection_of_scored_then_invalidated() -> None:
+    machine = TrialMachine(TRIAL)
+    events = [make_event(EventType.TRIAL_CREATED, salt=0)]
+    path = [
+        (EventType.TRIAL_LEASED, "lease"),
+        (EventType.TRIAL_STARTED, "start"),
+        (EventType.AGENT_STOPPED, "stop"),
+        (EventType.VERIFY_STARTED, "finish"),
+        (EventType.GRADE_COMPUTED, "score"),
+        (EventType.CANARY_SCANNED, "invalidate_post_hoc"),
+    ]
+    for salt, (event_type, transition) in enumerate(path, start=1):
+        events.append(step(machine, event_type, transition, salt))
+    events.append(make_event(EventType.TRIAL_INVALIDATED, payload={"reason": "canary"}, salt=9))
     assert project_trial_state(events, trial_id=TRIAL) is machine.state
     assert machine.state.value == "invalid"
 
@@ -128,21 +173,45 @@ async def test_verify_projection_matches(db: Database, tmp_path) -> None:  # typ
             updated_at=MOMENT.isoformat(),
         )
     )
-    for salt, event_type in enumerate(
+    machine = TrialMachine(TRIAL)
+    await store.append(make_event(EventType.TRIAL_CREATED, salt=0))
+    for salt, (event_type, transition) in enumerate(
         [
-            EventType.TRIAL_CREATED,
-            EventType.TRIAL_LEASED,
-            EventType.TRIAL_STARTED,
-            EventType.AGENT_STOPPED,
-            EventType.VERIFY_STARTED,
-            EventType.TRIAL_SCORED,
-        ]
+            (EventType.TRIAL_LEASED, "lease"),
+            (EventType.TRIAL_STARTED, "start"),
+            (EventType.AGENT_STOPPED, "stop"),
+            (EventType.VERIFY_STARTED, "finish"),
+            (EventType.GRADE_COMPUTED, "score"),
+        ],
+        start=1,
     ):
-        await store.append(make_event(event_type, salt=salt))
+        await store.append(step(machine, event_type, transition, salt))
 
     report = await verify_projection(store, db, batch_id=BATCH)
     assert report.ok
     assert report.checked == 1
+
+
+async def test_verify_projection_reports_a_malformed_transition(db: Database, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    store = JsonlEventStore(tmp_path, fsync=False)
+    await TrialRepository(db).upsert(
+        TrialRow(
+            trial_id=TRIAL,
+            batch_id=BATCH,
+            task_id="web-001",
+            model="demo",
+            shell="shell",
+            state="leased",
+            validity="pending",
+            created_at=MOMENT.isoformat(),
+            updated_at=MOMENT.isoformat(),
+        )
+    )
+    await store.append(make_event(EventType.TRIAL_CREATED, salt=0))
+    await store.append(make_event(EventType.TRIAL_LEASED, payload={"transition": 7}, salt=1))
+    report = await verify_projection(store, db, batch_id=BATCH)
+    assert not report.ok
+    assert report.mismatches[0].error is not None
 
 
 async def test_verify_projection_reports_state_without_events(db: Database, tmp_path) -> None:  # type: ignore[no-untyped-def]

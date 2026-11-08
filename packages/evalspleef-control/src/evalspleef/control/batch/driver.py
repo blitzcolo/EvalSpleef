@@ -22,10 +22,11 @@ from evalspleef.core.batch import BatchMachine, BatchState
 from evalspleef.core.events import EventEnvelope, EventType, new_event_id
 from evalspleef.core.models import TrialState, Validity
 from evalspleef.core.report import BatchReport, TrialResult
+from evalspleef.core.state import IllegalTransition, evaluate_terminal, event_path_for_terminal
 from evalspleef.spi.errors import SpleefError
 from evalspleef.spi.isolation import IsolationProfile
 
-from ..events import EventStore
+from ..events import EventStore, replay_trial_machine
 from ..leases import LeasedSandbox, LeaseManager, LeaseRequest, LeaseRole
 from ..scheduling import (
     CapacityUnavailable,
@@ -386,14 +387,60 @@ class BatchDriver:
             "grades": [],
         }
 
+    async def _settle_invalid(self, trial: PlannedTrial, notice: Mapping[str, Any]) -> TrialState:
+        """Move a failed trial to ``invalid`` with explicit transitions; return its state.
+
+        The trial's state is replayed from the event log (the authority), then
+        the legal path to ``invalid`` is walked one event per transition. A
+        trial left in ``observing`` or ``awaiting_feedback`` has no legal path
+        (appendix B.2); it keeps that state and only the notice is recorded.
+        """
+        machine = replay_trial_machine(
+            await self._events.read(self._plan.batch_id, trial_id=trial.trial_id),
+            trial_id=trial.trial_id,
+        )
+        decision = evaluate_terminal(isolation_failed=True)
+        assert decision is not None
+        path: tuple[str, ...] = ()
+        if machine.state is not TrialState.INVALID:
+            try:
+                path = event_path_for_terminal(machine, decision)
+            except IllegalTransition:
+                path = ()
+        for position, event in enumerate(path):
+            before = machine.state
+            after = machine.apply(event, note=str(notice.get("reason", "")))
+            transition = {"event": event, "from": before.value, "to": after.value}
+            last = position == len(path) - 1
+            await self._emit(
+                EventType.TRIAL_INVALIDATED if last else EventType.INCIDENT_OPENED,
+                trial.trial_id,
+                {"transition": transition, **notice}
+                if last
+                else {"transition": transition, "kind": "settled", "reason": notice.get("reason")},
+            )
+        if not path:
+            await self._emit(EventType.TRIAL_INVALIDATED, trial.trial_id, dict(notice))
+        return machine.state
+
+    async def _projected_state(self, trial: PlannedTrial) -> TrialState:
+        events = await self._events.read(self._plan.batch_id, trial_id=trial.trial_id)
+        return replay_trial_machine(events, trial_id=trial.trial_id).state
+
     async def _finish(
         self, trial: PlannedTrial, outcome: TrialOutcome, retry: RetryDecision | None
     ) -> None:
-        """Project the outcome into the trial row, grade rows and the terminal event."""
+        """Project the outcome into the trial row, grade rows and the terminal event.
+
+        Row states are projections of the event log (AGENTS.md rule 6): the
+        executor records the trial's transitions, and the row takes the state
+        that the log replays to.
+        """
         if outcome.status == "scored":
             record = self._record_of(trial, outcome)
             grades = list(record.get("grades") or ())
-            await self._trials.upsert(self._row(trial, TrialState.SCORED, Validity.VALID))
+            state = await self._projected_state(trial)
+            await self._trials.upsert(self._row(trial, state, Validity.VALID))
             for position, grade in enumerate(grades, start=1):
                 await self._grades.insert(
                     GradeRow(
@@ -413,12 +460,11 @@ class BatchDriver:
                 {"tier": str(grades[-1]["tier"]) if grades else None, "grades": len(grades)},
             )
         elif outcome.status == "paused_manual":
-            await self._trials.upsert(self._row(trial, TrialState.PAUSED_MANUAL, Validity.MANUAL))
+            state = await self._projected_state(trial)
+            await self._trials.upsert(self._row(trial, state, Validity.MANUAL))
         else:
-            await self._trials.upsert(self._row(trial, TrialState.INVALID, Validity.INVALID))
-            await self._emit(
-                EventType.TRIAL_INVALIDATED,
-                trial.trial_id,
+            state = await self._settle_invalid(
+                trial,
                 {
                     "outcome": outcome.status,
                     "reason": outcome.reason,
@@ -426,6 +472,7 @@ class BatchDriver:
                     "next_trial_id": retry.next_trial_id if retry is not None else None,
                 },
             )
+            await self._trials.upsert(self._row(trial, state, Validity.INVALID))
 
     def _skipped_result(self, cell: PlannedCell) -> TrialResult:
         """Placeholder so a skipped cell shows up in the report as Skip(<reason>)."""

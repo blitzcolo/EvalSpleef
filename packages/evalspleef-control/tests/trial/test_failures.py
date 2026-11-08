@@ -88,7 +88,11 @@ async def test_preflight_failure_retries_on_other_instances_then_fails_infra(
     assert results[0].payload["probes"][0]["exit_code"] == 1
     assert "trial.started" not in await h.types()
     assert h.scripted.instruction is None  # the agent never started
-    assert legal(await h.log()) == [("fail_infra", "leased", "failed_infra")]
+    # Standalone, the runner invalidates the failed record itself; a retry is a new trial.
+    assert legal(await h.log()) == [
+        ("fail_infra", "leased", "failed_infra"),
+        ("invalidate", "failed_infra", "invalid"),
+    ]
     assert all(box.destroyed for box in h.sandboxes())
 
 
@@ -132,7 +136,7 @@ async def test_preflight_failure_without_a_replacer_fails_at_once(harness_factor
         (
             SandboxLost("the host vanished"),
             "failed_infra",
-            [("fail_infra", "running", "failed_infra")],
+            [("fail_infra", "running", "failed_infra"), ("invalidate", "failed_infra", "invalid")],
         ),
         (
             RuntimeError("a bug in the shell"),

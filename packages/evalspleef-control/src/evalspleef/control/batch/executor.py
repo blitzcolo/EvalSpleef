@@ -108,7 +108,13 @@ class TrialOutcome:
 
 
 class TrialExecutor(Protocol):
-    """Runs one trial attempt against the leased sandboxes."""
+    """Runs one trial attempt against the leased sandboxes.
+
+    The executor appends one event per state transition it makes, carrying
+    ``payload["transition"] = {"event", "from", "to"}``, starting from
+    ``leased``. The driver replays those events to project the trial row and
+    walks the remaining path to ``invalid`` itself after a failure.
+    """
 
     async def run_trial(self, trial: PlannedTrial, leases: TrialLeases) -> TrialOutcome:
         """Return the outcome, or raise a ``SpleefError``: errors that are retryable or

@@ -232,8 +232,13 @@ class LeaseManager:
                 "ttl_s": leased.ttl_s,
             }
             if request.role == "agent":
+                # The agent lease is the trial's pending -> leased transition.
+                transition = {"event": "lease", "from": "pending", "to": "leased"}
                 await self._emit(
-                    EventType.TRIAL_LEASED, request.batch_id, request.trial_id, payload
+                    EventType.TRIAL_LEASED,
+                    request.batch_id,
+                    request.trial_id,
+                    {"transition": transition, **payload},
                 )
             await self._emit(
                 EventType.SANDBOX_PROVISIONED, request.batch_id, request.trial_id, payload

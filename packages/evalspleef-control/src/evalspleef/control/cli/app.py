@@ -27,6 +27,7 @@ import typer
 from evalspleef.control.batch import BatchDriver, BatchRunResult, build_freeze_record, freeze_guards
 from evalspleef.control.config import ConfigError
 from evalspleef.control.endpoints import make_endpoint_id, probe_failures
+from evalspleef.control.events import verify_projection
 from evalspleef.control.taskpack import lint_task_pack_dir
 from evalspleef.core.batch import BatchGuardFailed
 from evalspleef.core.report import BatchReport, TrialResult
@@ -1414,6 +1415,18 @@ async def _batch_run(
         typer.echo(run_result.report.to_markdown())
         for alert in run_result.alerts:
             typer.secho(f"scheduler alert: {alert}", fg=typer.colors.YELLOW, err=True)
+        # Trial rows are projections of the event log; a row the log does not derive is a bug.
+        projection = await verify_projection(ctx.events, ctx.db, batch_id=plan.batch_id)
+        typer.echo(f"event projection: {projection.checked} trial row(s) checked")
+        if not projection.ok:
+            for mismatch in projection.mismatches:
+                typer.secho(
+                    f"projection mismatch {mismatch.trial_id}: row {mismatch.db_state}, "
+                    f"events {mismatch.event_state} {mismatch.error or ''}".rstrip(),
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+            return EXIT_DOMAIN
         return EXIT_SUCCESS
 
 

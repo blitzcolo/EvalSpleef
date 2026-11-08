@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from evalspleef.control.events import verify_projection
 from evalspleef.control.scheduling import CapacitySpec, HostSpec, next_trial_id
 from evalspleef.core.batch import BatchState, IllegalBatchTransition
 from evalspleef.core.events import EventType
@@ -177,6 +178,28 @@ async def test_provider_create_failure_counts_as_infra_failure(build) -> None:
     rows = {row.trial_id: row for row in await h.trials.list_by_batch(BATCH)}
     assert (rows[ids[0]].state, rows[ids[1]].state) == ("invalid", "scored")
     assert h.scheduler.capacity("docker-a").in_use == 0
+    # The never-leased attempt goes pending -> invalid in the log as well.
+    assert (await verify_projection(h.events, h.db, batch_id=BATCH)).ok
+
+
+async def test_trial_rows_are_projections_of_the_event_log(build) -> None:
+    """Scored, retried and refused trials all replay to their stored row state."""
+    h = await build(n_tasks=3)
+    h.executor.raises["web-001.alpha.terminus.e1.t01"] = SandboxLost("host went away")
+    h.executor.raises["web-002.alpha.terminus.e1.t01"] = CapabilityNotSupported("gpu")
+
+    await h.freeze_and_run()
+
+    rows = {row.trial_id: row.state for row in await h.trials.list_by_batch(BATCH)}
+    assert rows == {
+        "web-001.alpha.terminus.e1.t01": "invalid",
+        "web-001.alpha.terminus.e1.t02": "scored",
+        "web-002.alpha.terminus.e1.t01": "invalid",
+        "web-003.alpha.terminus.e1.t01": "scored",
+    }
+    report = await verify_projection(h.events, h.db, batch_id=BATCH)
+    assert report.checked == 4
+    assert report.ok, report.mismatches
 
 
 async def test_non_infrastructure_errors_are_not_retried(build) -> None:

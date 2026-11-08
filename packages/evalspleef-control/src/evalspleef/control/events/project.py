@@ -10,6 +10,7 @@ reported as a mismatch: state without events is a bug.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from evalspleef.core.events import EventEnvelope, EventType
@@ -21,26 +22,17 @@ from ..store.repos import TrialRepository
 from .base import EventStore
 
 __all__ = [
+    "MalformedTransition",
     "ProjectionMismatch",
     "ProjectionReport",
     "project_trial_state",
+    "replay_trial_machine",
     "verify_projection",
 ]
 
-#: Default mapping from event type to trial state machine transition. Events
-#: not listed here (round bookkeeping, evidence, canary scans, endpoint and
-#: host lifecycle, ...) leave the trial state unchanged. A recorded event may
-#: override the default by carrying ``payload["transition"]`` with the machine
-#: event name.
-_EVENT_TRANSITIONS: dict[EventType, str] = {
-    EventType.TRIAL_LEASED: "lease",
-    EventType.TRIAL_STARTED: "start",
-    EventType.AGENT_STOPPED: "stop",
-    EventType.FEEDBACK_DECIDED: "needs_feedback",
-    EventType.FEEDBACK_SENT: "deliver",
-    EventType.VERIFY_STARTED: "finish",
-    EventType.TRIAL_SCORED: "score",
-}
+
+class MalformedTransition(ValueError):
+    """An event's ``payload["transition"]`` is neither a machine event name nor a record of one."""
 
 
 def project_trial_state(
@@ -48,7 +40,22 @@ def project_trial_state(
     *,
     trial_id: str | None = None,
 ) -> TrialState:
-    """Replay ``events`` through :class:`TrialMachine` and return the state.
+    """Replay ``events`` through :class:`TrialMachine` and return the state."""
+    return replay_trial_machine(events, trial_id=trial_id).state
+
+
+def replay_trial_machine(
+    events: list[EventEnvelope] | tuple[EventEnvelope, ...],
+    *,
+    trial_id: str | None = None,
+) -> TrialMachine:
+    """Replay ``events`` through a fresh :class:`TrialMachine` and return it.
+
+    Only events that carry an explicit ``payload["transition"]`` change the
+    state: either the machine event name or the ``{"event", "from", "to"}``
+    record the trial runner writes. Every other event (round bookkeeping,
+    evidence, canary scans, terminal notices, endpoint and host lifecycle) is
+    informational, so one state change is carried by exactly one event.
 
     Args:
         events: The trial's events in storage (ascending sequence) order.
@@ -59,6 +66,7 @@ def project_trial_state(
     Raises:
         IllegalTransition: the log holds a transition the machine rejects
             (corrupt or out-of-order history).
+        MalformedTransition: an event's transition field has an unknown shape.
     """
     machine: TrialMachine | None = None
     resolved_trial_id = trial_id
@@ -73,25 +81,23 @@ def project_trial_state(
         if machine is None:
             # History that starts mid-lifecycle: replay from the pending state.
             machine = TrialMachine(resolved_trial_id)
-        transition = _transition_for(event, machine)
+        transition = _transition_for(event)
         if transition is None:
             continue
         machine.apply(transition, note=str(event.type))
-    if machine is None:
-        return TrialState.PENDING
-    return machine.state
+    return machine if machine is not None else TrialMachine(resolved_trial_id or "")
 
 
-def _transition_for(event: EventEnvelope, machine: TrialMachine) -> str | None:
-    """Resolve the machine transition recorded by ``event``, or None."""
-    payload_transition = event.payload.get("transition") if event.payload else None
-    if isinstance(payload_transition, str):
-        return payload_transition
-    if event.type is EventType.TRIAL_INVALIDATED:
-        # A scored trial is invalidated post hoc; every other state uses the
-        # direct invalidate path (docs/02 §4.2).
-        return "invalidate_post_hoc" if machine.state is TrialState.SCORED else "invalidate"
-    return _EVENT_TRANSITIONS.get(event.type)
+def _transition_for(event: EventEnvelope) -> str | None:
+    """The machine event recorded by ``event``, or None for an informational event."""
+    recorded = event.payload.get("transition") if event.payload else None
+    if recorded is None:
+        return None
+    if isinstance(recorded, str):
+        return recorded
+    if isinstance(recorded, Mapping) and isinstance(recorded.get("event"), str):
+        return str(recorded["event"])
+    raise MalformedTransition(f"event {event.event_id} carries transition {recorded!r}")
 
 
 @dataclass(frozen=True)
@@ -144,7 +150,7 @@ async def verify_projection(store: EventStore, db: Database, *, batch_id: str) -
             continue
         try:
             projected = project_trial_state(trial_events, trial_id=row.trial_id)
-        except IllegalTransition as exc:
+        except (IllegalTransition, MalformedTransition) as exc:
             mismatches.append(
                 ProjectionMismatch(
                     trial_id=row.trial_id,

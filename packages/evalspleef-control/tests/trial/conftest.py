@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from evalspleef.control.batch.executor import LeaseHandle, PlannedTrial, TrialLeases, TrialOutcome
-from evalspleef.control.events import JsonlEventStore
+from evalspleef.control.events import JsonlEventStore, project_trial_state
 from evalspleef.control.taskpack import TaskPack, load_task_pack
 from evalspleef.control.trial import (
     EvaluationResult,
@@ -24,7 +24,7 @@ from evalspleef.control.trial import (
 )
 from evalspleef.control.trial.testing import ScriptedEvaluator, make_result
 from evalspleef.core.canary import CanaryRegistry
-from evalspleef.core.events import EventEnvelope
+from evalspleef.core.events import EventEnvelope, EventType
 from evalspleef.core.feedback import ALLOWED_FIELDS, FeedbackDecision, LeakChecker, RegexLeakChecker
 from evalspleef.core.models import FeedbackLevel, Severity, TrialState
 from evalspleef.core.state import LEGAL_TRANSITIONS
@@ -160,8 +160,34 @@ class Harness:
         return [box for provider in self.providers.values() for box in provider.created_sandboxes()]
 
 
+def _lease_prefix(trial_id: str) -> list[EventEnvelope]:
+    """The events the driver and the lease manager append before the runner starts."""
+    common = {"ts": "2026-11-07T00:00:00Z", "batch_id": BATCH, "trial_id": trial_id}
+    lease = {"event": "lease", "from": "pending", "to": "leased"}
+    return [
+        EventEnvelope(
+            event_id="ev_prefix_created",
+            type=EventType.TRIAL_CREATED,
+            actor="driver",
+            payload={},
+            **common,
+        ),
+        EventEnvelope(
+            event_id="ev_prefix_leased",
+            type=EventType.TRIAL_LEASED,
+            actor="lease-manager",
+            payload={"transition": lease},
+            **common,
+        ),
+    ]
+
+
 def assert_legal_transitions(events: Sequence[EventEnvelope]) -> list[tuple[str, str, str]]:
-    """Every transition in the log is in the legal table and follows the previous one."""
+    """Every transition in the log is in the legal table and follows the previous one.
+
+    The production projection (``project_trial_state``) must replay the same
+    log, behind the lease events, to the state the last transition reached.
+    """
     seen: list[tuple[str, str, str]] = []
     position = TrialState.LEASED
     for event in events:
@@ -174,6 +200,10 @@ def assert_legal_transitions(events: Sequence[EventEnvelope]) -> list[tuple[str,
         assert LEGAL_TRANSITIONS[source].get(transition["event"]) is target, transition
         position = target
         seen.append((transition["event"], source.value, target.value))
+    if events:
+        trial_id = events[0].trial_id or TRIAL_ID
+        projected = project_trial_state([*_lease_prefix(trial_id), *events], trial_id=trial_id)
+        assert projected is position, f"the event log projects to {projected}, not {position}"
     return seen
 
 

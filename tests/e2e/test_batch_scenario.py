@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from evalspleef.core.models import TrialState, parse_trial_id
+from evalspleef.core.models import parse_trial_id
 from evalspleef.core.state import IllegalTransition, TrialMachine
 
 REPORTS = Path(__file__).resolve().parents[2] / ".omo" / "reports" / "e2e"
@@ -65,7 +65,8 @@ def _replay_legal(events: list[dict[str, Any]]) -> None:
             by_trial.setdefault(trial_id, []).append(event)
     assert by_trial, "no trial events recorded"
     for trial_id, trial_events in sorted(by_trial.items()):
-        machine = TrialMachine(trial_id, state=TrialState.LEASED)
+        # The lease manager records pending -> leased, so the replay starts at pending.
+        machine = TrialMachine(trial_id)
         transitions = 0
         for event in trial_events:
             payload = event.get("payload")
@@ -130,6 +131,8 @@ def test_full_batch_on_local_docker(e2e: Any) -> None:
     result = harness.run_cli("batch-run", "batch", "run", *harness.options())
     assert result.returncode == 0, result.stderr[-2000:]
     assert "批次报告" in result.stdout
+    # batch run exits non-zero on any trial row the event log does not derive.
+    assert f"event projection: {TRIALS} trial row(s) checked" in result.stdout
     (REPORTS / "batch-report.md").write_text(result.stdout, encoding="utf-8")
 
     # -- 6. report + grade assertions ------------------------------------------------

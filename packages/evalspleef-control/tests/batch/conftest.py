@@ -101,10 +101,24 @@ def scored_record(
     }
 
 
-class FakeExecutor:
-    """A ``TrialExecutor`` that opens the verifier, then scores, raises or blocks on a gate."""
+#: The transitions a real trial runner records for a first-round pass, from ``leased``.
+SCORED_PATH = (
+    (EventType.TRIAL_STARTED, "start", "leased", "running"),
+    (EventType.AGENT_STOPPED, "stop", "running", "observing"),
+    (EventType.VERIFY_STARTED, "finish", "observing", "verifying"),
+    (EventType.GRADE_COMPUTED, "score", "verifying", "scored"),
+)
 
-    def __init__(self) -> None:
+
+class FakeExecutor:
+    """A ``TrialExecutor`` that opens the verifier, then scores, raises or blocks on a gate.
+
+    Like the real runner it records each transition it makes as an event, so
+    the driver's projection of the trial row has the same input as in production.
+    """
+
+    def __init__(self, events: EventStore) -> None:
+        self.events = events
         self.running = 0
         self.peak = 0
         self.calls: list[str] = []
@@ -129,6 +143,18 @@ class FakeExecutor:
                 raise self.raises[trial.trial_id]
             verifier = await leases.open_verifier()
             self.leases_seen[trial.trial_id] = (leases.agent.lease_id, verifier.lease_id)
+            for event_type, event, before, after in SCORED_PATH:
+                await self.events.append(
+                    EventEnvelope(
+                        event_id=f"ev_{trial.trial_id}_{event}",
+                        ts="2026-11-07T12:00:00Z",
+                        batch_id=trial.batch_id,
+                        type=event_type,
+                        actor="fake-executor",
+                        trial_id=trial.trial_id,
+                        payload={"transition": {"event": event, "from": before, "to": after}},
+                    )
+                )
             return TrialOutcome("scored", record=scored_record(trial.trial_id))
         finally:
             self.running -= 1
@@ -299,7 +325,7 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
         manager = LeaseManager(
             directory, lease_rows, events, now=lambda: NOW, new_id=lambda: f"{next(counter):04d}"
         )
-        executor = FakeExecutor()
+        executor = FakeExecutor(events)
         trials = TrialRepository(db)
         grades = GradeRepository(db)
         driver = BatchDriver(

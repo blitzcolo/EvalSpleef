@@ -16,9 +16,11 @@ from .base import EventStore, EventStoreClosed, EventStoreError
 from .factory import open_event_store
 from .jsonl import JsonlEventStore
 from .project import (
+    MalformedTransition,
     ProjectionMismatch,
     ProjectionReport,
     project_trial_state,
+    replay_trial_machine,
     verify_projection,
 )
 from .sql import SqlEventStore
@@ -28,10 +30,12 @@ __all__ = [
     "EventStoreClosed",
     "EventStoreError",
     "JsonlEventStore",
+    "MalformedTransition",
     "ProjectionMismatch",
     "ProjectionReport",
     "SqlEventStore",
     "open_event_store",
     "project_trial_state",
+    "replay_trial_machine",
     "verify_projection",
 ]

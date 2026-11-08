@@ -929,14 +929,15 @@ class _TrialRun:
             if verdict.status == "invalid":
                 await self._invalidate(reason)
         if self.owner.owns_terminal_events:
-            await self._emit(
-                EventType.TRIAL_INVALIDATED,
-                {
-                    "outcome": verdict.status,
-                    "reason": reason,
-                    "retry": verdict.status == "failed_infra",
-                },
-            )
+            notice = {
+                "outcome": verdict.status,
+                "reason": reason,
+                "retry": verdict.status == "failed_infra",
+            }
+            if self.machine.can("invalidate"):
+                await self._advance("invalidate", EventType.TRIAL_INVALIDATED, notice)
+            else:
+                await self._emit(EventType.TRIAL_INVALIDATED, notice)
         return TrialOutcome(verdict.status, reason=reason)
 
     async def _invalidate(self, reason: str) -> None:
