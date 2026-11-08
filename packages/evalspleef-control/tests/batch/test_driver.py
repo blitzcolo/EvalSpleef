@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from evalspleef.control.events import verify_projection
-from evalspleef.control.ledger import CostKind, CostLedger
+from evalspleef.control.ledger import CostEntry, CostKind, CostLedger
 from evalspleef.control.scheduling import CapacitySpec, HostSpec, next_trial_id
 from evalspleef.core.batch import BatchState, IllegalBatchTransition
 from evalspleef.core.events import EventType
@@ -336,3 +336,46 @@ async def test_sandboxes_are_destroyed_and_the_slot_freed_when_the_executor_cras
     leases = await h.lease_rows.list_by_trial(TRIAL)
     assert leases
     assert all(lease.destroyed_at is not None for lease in leases)
+
+
+async def _book(h, amount_usd: float) -> None:
+    await CostLedger(h.db).record(
+        CostEntry(
+            entry_id="earlier:tokens",
+            batch_id=BATCH,
+            kind=CostKind.TOKENS,
+            source="runner",
+            amount_usd=amount_usd,
+            quantity=0.0,
+            unit="tokens",
+            period="2026-11",
+        )
+    )
+
+
+async def test_a_trial_that_would_overrun_the_booked_batch_budget_is_not_dispatched(build) -> None:
+    h = await build(budget_cap=30.0)  # one trial, 15 USD cap: fits the cap at freeze
+    await _book(h, 20.0)
+
+    await h.freeze_and_run()
+
+    assert h.executor.calls == []
+    rows = {row.trial_id: (row.state, row.validity) for row in await h.trials.list_by_batch(BATCH)}
+    assert rows == {TRIAL: ("invalid", "invalid")}
+    [stop] = await h.events_of(EventType.BUDGET_THRESHOLD)
+    assert (stop.trial_id, stop.payload["used"], stop.payload["limit"]) == (TRIAL, 20.0, 30.0)
+    invalidated = await h.events_of(EventType.TRIAL_INVALIDATED)
+    assert [e.payload["retry"] for e in invalidated] == [False]
+
+
+async def test_trials_in_flight_count_against_the_batch_budget_at_dispatch(build) -> None:
+    h = await build(n_tasks=2, budget_cap=30.0)  # two 15 USD trials fit exactly at freeze
+    await _book(h, 10.0)  # leaves room for one worst case, not two
+
+    await h.freeze_and_run()
+
+    assert len(h.executor.calls) == 1
+    states = sorted(row.state for row in await h.trials.list_by_batch(BATCH))
+    assert states == ["invalid", "scored"]
+    [stop] = await h.events_of(EventType.BUDGET_THRESHOLD)
+    assert stop.payload["used"] == 25.0

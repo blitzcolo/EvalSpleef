@@ -125,6 +125,10 @@ class BatchDriver:
         self._meta: dict[str, tuple[str, str | None]] = {}
         """Trial id -> (created_at, retry_of)."""
         self._host_losses: list[HostLoss] = []
+        self._trial_cap_usd = {cell.cell_id: cell.task.max_cost_usd for cell in plan.cells}
+        self._in_flight_usd: dict[str, float] = {}
+        """Trial id -> worst-case spend of an admitted trial whose cost is not booked yet."""
+        self._admission = asyncio.Lock()
 
     @property
     def state(self) -> BatchState:
@@ -259,6 +263,9 @@ class BatchDriver:
             self._scheduler.cancel(ticket)
             raise
         try:
+            refusal = await self._admit(trial)
+            if refusal is not None:
+                return refusal
             return await self._run_leased(trial, reservation)
         except SpleefError as exc:
             reason = f"{type(exc).__name__}: {exc.message}"
@@ -268,6 +275,43 @@ class BatchDriver:
         finally:
             # Sandboxes are already destroyed by now, so the provider quota is free again.
             self._scheduler.release(reservation)
+
+    async def _admit(self, trial: PlannedTrial) -> TrialOutcome | None:
+        """Check the batch budget before a trial starts (PRD B.5); a refusal when it would not fit.
+
+        Booked spend plus the worst case of every admitted, unbooked trial plus this
+        trial's cost cap must stay within the batch cap. Retries are the usual way past
+        the freeze-time estimate; a refused trial is not retried.
+        """
+        cap = self._plan.budget.cap_usd
+        if cap is None:
+            return None
+        trial_cap = self._trial_cap_usd[trial.cell_id]
+        async with self._admission:
+            spent = 0.0 if self._ledger is None else await self._ledger.total_usd(trial.batch_id)
+            committed = spent + sum(self._in_flight_usd.values())
+            if committed + trial_cap <= cap:
+                self._in_flight_usd[trial.trial_id] = trial_cap
+                return None
+        await self._emit(
+            EventType.BUDGET_THRESHOLD,
+            trial.trial_id,
+            {
+                "dimension": "batch_usd",
+                "threshold": 1.0,
+                "used": committed,
+                "limit": cap,
+                "requested": trial_cap,
+                "action": "stop_dispatch",
+            },
+        )
+        return TrialOutcome(
+            "invalid",
+            reason=(
+                f"BatchBudgetExhausted: {committed:.2f} USD committed plus this trial's "
+                f"{trial_cap:.2f} USD cap exceeds the batch cap {cap:.2f} USD"
+            ),
+        )
 
     async def _run_leased(self, trial: PlannedTrial, reservation: Reservation) -> TrialOutcome:
         async with AsyncExitStack() as stack:
@@ -479,6 +523,8 @@ class BatchDriver:
         that the log replays to.
         """
         await self._record_cost(trial, outcome)
+        # Booked now (or nothing to book), so the worst-case reservation is no longer needed.
+        self._in_flight_usd.pop(trial.trial_id, None)
         if outcome.status == "scored":
             record = self._record_of(trial, outcome)
             grades = list(record.get("grades") or ())
