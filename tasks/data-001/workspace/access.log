@@ -1,0 +1,50 @@
+2026-11-03T02:54:04Z 172.16.0.5 POST /api/search 404 936ms
+{"ts":"2026-11-03T21:01:32Z","client":"10.0.1.8","method":"GET","path":"/api/products","status":503,"dur_ms":507.8}
+{"ts":"2026-11-03T16:57:20Z","client":"10.0.1.8","method":"PUT","path":"/api/products","status":502,"dur_ms":275.7}
+10.0.0.7 - - [04/Nov/2026:06:23:00 +0000] "PUT /api/login HTTP/1.1" 302 119ms rid=r-83415
+{"ts":"2026-11-03T03:57:51Z","client":"10.0.1.8","method":"DELETE","path":"/api/cart","status":204,"dur_ms":869.9,"rid":"r-77334"}
+{"ts":"2026-11-03T14:25:53Z","client":"10.0.0.3","method":"POST","path":"/api/orders","status":502,"dur_ms":345.8}
+2026-11-03T03:34:18Z 172.16.0.5 GET /api/search 200 290ms rid=r-83415
+10.0.0.9 - - [03/Nov/2026:19:50:06 +0000] "GET /api/login HTTP/1.1" 400 322ms
+172.16.0.5 - - [05/Nov/2026:23:50:23 +0000] "DELETE /api/cart HTTP/1.1" 500 543ms
+10.0.1.2 - - [03/Nov/2026:04:25:23 +0000] "DELETE /api/health HTTP/1.1" 500 353ms
+{"ts":"2026-11-03T23:10:36Z","client":"10.0.1.8","method":"GET","path":"/api/users","status":503,"dur_ms":275.1,"rid":"r-35231"}
+2026-13-40T25:61:61Z 172.16.0.5 GET /api/cart 200 195ms
+172.16.0.5 - - [04/Nov/2026:23:52:00 +0000] "POST /api/cart HTTP/1.1" 502 0.395s
+2026-11-04T04:29:39Z 10.0.0.7 DELETE /api/search 200 438ms
+10.0.0.9 - - [04/Nov/2026:03:29:56 +0000] "POST /api/orders HTTP/1.1" 500 0.508s
+10.0.1.8 - - [03/Nov/2026:21:43:46 +0000] "PUT /api/orders HTTP/1.1" 200 0.192s
+2026-11-04T15:41:16Z 172.16.0.4 DELETE /api/cart 201 898ms
+2026-11-03T05:54:30Z 10.0.1.8 GET /api/search 200 fast
+{"ts":"2026-11-03T03:04:04Z","client":"192.168.1.20","method":"PUT","path":"/api/health","status":204,"dur_ms":502.5}
+{"ts":"2026-11-05T10:08:03Z","client":"10.0.1.2","method":"POST","path":"/api/health","status":502,"dur_ms":337.3}
+{"ts":"2026-11-04T04:42:36Z","client":"172.16.0.4","method":"DELETE","path":"/api/users","status":204,"dur_ms":120.2}
+2026-11-04T19:23:55Z 10.0.0.7 PUT /api/health 200 471ms
+192.168.1.20 - - [05/Nov/2026:13:05:08 +0000] "POST /api/orders HTTP/1.1" 503 95ms rid=r-19856
+2026-11-05T06:09:21Z 192.168.1.20 GET /api/orders 200 fast
+2026-11-05T23:16:49Z 10.0.0.3 POST /api/health 404 941ms
+{"ts":"2026-11-04T11:32:26Z","client":"10.0.0.9","method":"POST","path":"/api/health","status":502,"dur_ms":921.2}
+2026-11-05T07:55:21Z 10.0.1.2 GET /api/cart 200 fast
+{"ts":"2026-11-05T23:42:59Z","client":"10.0.0.7","method":"GET","path":"/api/cart","status":503,"dur_ms":675.6}
+{"ts":"2026-11-03T17:17:02Z","client":"10.0.0.3","method":"POST","path":"/api/search","status":200,"dur_ms":693.1}
+192.168.1.20 - - [05/Nov/2026:10:13:00 +0000] "POST /api/users HTTP/1.1" 204 0.377s
+2026-11-04T06:56:18Z 192.168.1.20 GET /api/login 200 87ms rid=r-54178
+2026-11-03T04:34:46Z 192.168.1.20 POST /api/cart 302 295ms
+{"ts":"2026-11-03T18:38:17Z","client":"172.16.0.4","method":"DELETE","path":"/api/cart","status":201,"dur_ms":109.5}
+2026-11-04T20:56:28Z 192.168.1.20 DELETE /api/health 201 902ms
+{"ts":"2026-11-04T14:05:14Z","client":"10.0.1.8","method":"POST","path":"/api/health","status":503,"dur_ms":175.0}
+2026-11-04T10:38:45Z 172.16.0.5 GET /api/login 200 183ms rid=r-54178
+10.0.0.9 - - [03/Nov/2026:14:23:14 +0000] "DELETE /api/health HTTP/1.1" 500 397ms rid=r-67135
+2026-11-03T08:26:16Z 10.0.0.3 POST /api/products 500 351ms
+10.0.0.9 - - [04/Nov/2026:18:49:00 +0000] "PUT /api/orders HTTP/1.1" 503 541ms
+172.16.0.5 - - [05/Nov/2026:00:55:42 +0000] "GET /api/search HTTP/1.1" 302 293ms
+{"ts":"2026-11-03T21:50:55Z","client":"172.16.0.5","method":"POST","path":"/api/health","status":502,"dur_ms":740.9}
+10.0.1.8 - - [04/Nov/2026:17:52:34 +0000] "PUT /api/search HTTP/1.1" 201 415ms
+2026-11-03T21:49:02Z 172.16.0.4 GET /api/login 400 817ms
+10.0.0.9 - - [04/Nov/2026:11:28:14 +0000] "GET /api/search HTTP/1.1" 404 720ms
+2026-11-03T04:43:47Z 192.168.1.20 PUT /api/orders 503 0.371s
+{"unterminated": 
+2026-13-40T25:61:61Z 192.168.1.20 GET /api/orders 200 879ms
+2026-11-04T02:58:11Z 10.0.0.3 POST /api/search 999 421ms
+2026-11-03T14:45:46Z 192.168.1.20 GET /api/users 200 fast
+2026-11-05T09:22:06Z 10.0.1.2 GET /api/users 200 111ms rid=r-67135
