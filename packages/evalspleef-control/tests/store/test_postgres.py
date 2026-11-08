@@ -130,7 +130,7 @@ def postgres_url() -> Iterator[str]:
         yield url
     finally:
         subprocess.run(
-            ["docker", "rm", "--force", container],
+            ["docker", "rm", "--force", "--volumes", container],
             capture_output=True,
             timeout=60,
             check=False,
