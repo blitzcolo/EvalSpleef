@@ -455,7 +455,7 @@ async def test_cost_charged_by_the_real_gateway_reaches_the_turn(
     state.set_price("ep_test", PriceSpec(input_per_mtok=2.0, output_per_mtok=8.0))
     key = await state.issue_key(
         trial_id="t1",
-        endpoint_id="test",
+        endpoint_id="ep_test",
         max_budget_usd=10.0,
         max_tokens=1_000_000,
         expires_at="2099-01-01T00:00:00Z",
