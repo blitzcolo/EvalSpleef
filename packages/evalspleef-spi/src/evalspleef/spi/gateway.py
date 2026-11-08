@@ -14,6 +14,9 @@ TOKEN_CAP = "token_cap"
 
 COLD_START_HEADER = "x-spleef-cold-start-ms"
 
+COST_HEADER = "x-spleef-cost"
+"""USD the gateway charged the trial key for one non-streaming response."""
+
 
 @dataclass(frozen=True)
 class PriceSpec:

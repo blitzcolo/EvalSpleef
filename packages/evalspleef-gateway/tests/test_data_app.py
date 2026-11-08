@@ -20,7 +20,7 @@ from evalspleef.gateway.state import (
     hash_secret,
 )
 from evalspleef.gateway.store import MemoryStore
-from evalspleef.spi.gateway import COST_CAP, TOKEN_CAP, PriceSpec
+from evalspleef.spi.gateway import COST_CAP, COST_HEADER, TOKEN_CAP, PriceSpec
 from evalspleef.spi.model import ProviderLock, UpstreamRoute
 from evalspleef.testing.secrets import DictSecretResolver
 
@@ -186,6 +186,7 @@ async def test_chat_non_stream_passthrough_and_usage(state: GatewayState) -> Non
         assert body["model"] == "fake-model"
         assert body["choices"][0]["message"]["content"] == "fake reply"
         assert "x-spleef-gateway-version" in response.headers
+        assert float(response.headers[COST_HEADER]) == pytest.approx(0.000015)
 
         usage = await state.usage_for("trial-ep1")
         assert len(usage) == 1

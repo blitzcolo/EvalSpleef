@@ -20,7 +20,7 @@ from evalspleef.control.trial import classify_error
 from evalspleef.control.trial.types import Artifact
 from evalspleef.core.judge import JudgeConfigError, MockJudge
 from evalspleef.spi.errors import EndpointUnavailable
-from evalspleef.spi.gateway import PriceSpec
+from evalspleef.spi.gateway import COST_HEADER, PriceSpec
 
 
 class _Recorder:
@@ -72,6 +72,29 @@ def _judge_client(handler: object) -> GatewayJudgeClient:
         family="fam-a",
         transport=httpx.MockTransport(handler),  # type: ignore[arg-type]
     )
+
+
+def test_gateway_client_and_step_book_the_gateway_charge(pack_factory, tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = {
+            "choices": [{"message": {"content": json.dumps({"verdict": True})}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+        return httpx.Response(200, json=body, headers={COST_HEADER: "0.25"})
+
+    client = _judge_client(handler)
+    client.complete("x")
+    client.complete("y")
+    assert client.total_cost_usd == pytest.approx(0.5)
+
+    pack: TaskPack = pack_factory("logic-001")
+    export = WorkspaceExport(tree=tmp_path, artifacts=(), issues=(), file_count=0, total_bytes=0)
+    judge_items = len([item for item in pack.rubric.items if item.kind.value == "llm_judge"])
+    charged = _judge_client(handler)
+    step = JudgeStep({"vendor-a": charged}, target_family="fam-target", allow_single_vendor=True)
+    run = step.run(pack, export, scratch_dir=tmp_path / "judge")
+    # No price table: the run costs what the gateway charged for its 5 samples per item.
+    assert run.cost_usd == pytest.approx(judge_items * 5 * 0.25)
 
 
 def test_gateway_client_raises_on_client_error() -> None:

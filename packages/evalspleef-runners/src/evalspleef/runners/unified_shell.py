@@ -24,6 +24,7 @@ import httpx
 from openai import APIConnectionError, APITimeoutError, AsyncOpenAI, RateLimitError
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 
+from evalspleef.spi.gateway import COST_HEADER
 from evalspleef.spi.runner import AgentRunner, RunnerBudget, ShellTurn, StopReason, TokenUsage
 from evalspleef.spi.sandbox import Sandbox
 
@@ -45,8 +46,7 @@ SYSTEM_PROMPT = (
     "When the task is complete, reply with a short summary of what you did and stop."
 )
 
-# The gateway reports per-request cost in this response header; absent means 0.
-COST_HEADER = "x-spleef-cost"
+# The gateway reports per-request cost in COST_HEADER; absent means 0.
 
 # Caps for tool-level bounds so a model cannot request an unbounded sandbox exec.
 DEFAULT_MAX_TOOL_TIMEOUT_S = 600.0

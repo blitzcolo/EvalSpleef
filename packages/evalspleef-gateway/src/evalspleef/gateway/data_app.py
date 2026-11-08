@@ -16,7 +16,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from evalspleef.spi.gateway import UsageRecord
+from evalspleef.spi.gateway import COST_HEADER, UsageRecord
 
 from .protocols import (
     ChatToAnthropicStream,
@@ -246,8 +246,11 @@ async def _record_usage(
     cold_start_ms: int,
     charge: bool,
     upstream_model: str = "",
-) -> None:
-    """Append the usage record, charge the key on success and emit request.completed."""
+) -> float:
+    """Append the usage record, charge the key on success and emit request.completed.
+
+    Returns the USD charged, which non-streaming responses report in ``COST_HEADER``.
+    """
     counts = _usage_counts(usage)
     cost = (
         compute_cost(
@@ -290,6 +293,7 @@ async def _record_usage(
         latency_ms=latency_ms,
         cold_start_ms=cold_start_ms,
     )
+    return cost
 
 
 # -- request handling -----------------------------------------------------------------
@@ -472,7 +476,7 @@ async def _forward(
         message, code = _upstream_error_payload(payload)
         return _error_response(flavor, upstream.status_code, code, message)
 
-    await _record_usage(
+    cost = await _record_usage(
         state,
         key=key,
         entry=entry,
@@ -491,7 +495,9 @@ async def _forward(
         result = chat_response_to_anthropic(payload, model=model)
     else:
         result = payload
-    headers = {COLD_START_HEADER: str(cold_start_ms)} if cold_start_ms > 0 else None
+    headers = {COST_HEADER: repr(cost)}
+    if cold_start_ms > 0:
+        headers[COLD_START_HEADER] = str(cold_start_ms)
     return JSONResponse(result, status_code=200, headers=headers)
 
 

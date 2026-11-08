@@ -422,6 +422,64 @@ async def test_cost_from_x_spleef_cost_header(
         await runner.stop()
 
 
+async def test_cost_charged_by_the_real_gateway_reaches_the_turn(
+    sandbox: MockSandbox, budget: Any, tmp_path: Path
+) -> None:
+    """The runner books what the gateway data plane charged, not a hand-set header."""
+    from evalspleef.gateway.data_app import create_data_app
+    from evalspleef.gateway.state import GatewayState
+    from evalspleef.gateway.store import MemoryStore
+    from evalspleef.spi.gateway import PriceSpec
+    from evalspleef.spi.model import UpstreamRoute
+    from evalspleef.testing.secrets import DictSecretResolver
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        payload = completion_payload("priced answer", [])
+        payload["usage"] = {"prompt_tokens": 1000, "completion_tokens": 500, "total_tokens": 1500}
+        return httpx.Response(200, json=payload)
+
+    store = MemoryStore()
+    state = GatewayState(
+        key_store=store, usage_store=store, secrets=DictSecretResolver({"vault://up": "k"})
+    )
+    state.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    state.upsert_route(
+        "ep_test",
+        UpstreamRoute(
+            api_base="http://upstream.test/v1",
+            model="up-model",
+            protocol="chat_completions",
+            api_key_ref="vault://up",
+        ),
+    )
+    state.set_price("ep_test", PriceSpec(input_per_mtok=2.0, output_per_mtok=8.0))
+    key = await state.issue_key(
+        trial_id="t1",
+        endpoint_id="test",
+        max_budget_usd=10.0,
+        max_tokens=1_000_000,
+        expires_at="2099-01-01T00:00:00Z",
+    )
+    gateway = httpx.AsyncClient(transport=httpx.ASGITransport(app=create_data_app(state)))
+    async with gateway:
+        runner = UnifiedShellRunner(transcript_dir=tmp_path, http_client=gateway)
+        await runner.start(
+            sandbox,
+            gateway_url="http://gateway.test/v1",
+            trial_key=key.secret,
+            model_alias="ep_test",
+            instruction="do the task",
+            budget=budget,
+        )
+        turn = await runner.send("go", deadline_s=60)
+        await runner.stop()
+
+    # 1000 * $2/M + 500 * $8/M, exactly what the gateway recorded for the trial.
+    assert turn.stop_reason is StopReason.COMPLETED
+    assert turn.cost_usd == pytest.approx(0.006)
+    assert [u.cost_usd for u in await state.usage_for("t1")] == [pytest.approx(0.006)]
+
+
 async def test_conversation_persists_across_send_calls(
     sandbox: MockSandbox, budget: Any, tmp_path: Path
 ) -> None:

@@ -18,6 +18,7 @@ Invariant I15 (per-trial judge isolation):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import uuid
 from collections.abc import Mapping
@@ -30,7 +31,7 @@ import httpx
 from evalspleef.core.judge import JudgeClient, JudgePanel
 from evalspleef.core.models import CheckKind, RubricItem
 from evalspleef.spi.errors import EndpointUnavailable
-from evalspleef.spi.gateway import PriceSpec
+from evalspleef.spi.gateway import COST_HEADER, PriceSpec
 
 from ..taskpack.models import TaskPack
 from ..trial.types import RubricItemResult
@@ -121,10 +122,16 @@ class GatewayJudgeClient:
         self._max_tokens = max_tokens
         self._input_tokens = 0
         self._output_tokens = 0
+        self._cost_usd = 0.0
 
     @property
     def total_input_tokens(self) -> int:
         return self._input_tokens
+
+    @property
+    def total_cost_usd(self) -> float:
+        """What the gateway charged for this client's requests (its ``COST_HEADER``)."""
+        return self._cost_usd
 
     @property
     def total_output_tokens(self) -> int:
@@ -156,6 +163,9 @@ class GatewayJudgeClient:
                 f"judge {self.model} answered {response.status_code}: {response.text[:200]}"
             )
         response.raise_for_status()
+        # A malformed header charges nothing; the ledger reconciles against bills.
+        with contextlib.suppress(ValueError):
+            self._cost_usd += float(response.headers.get(COST_HEADER, "0"))
         body = response.json()
         choices = body.get("choices")
         if not isinstance(choices, list) or not choices:
@@ -300,10 +310,12 @@ class JudgeStep:
         return hashlib.sha256(text.encode("utf-8")).hexdigest(), path
 
     def _cost(self) -> float:
+        """Judge spend: an explicit price table wins, else what the gateway charged."""
         total = 0.0
         for vendor, client in self._clients.items():
             price = self._prices.get(vendor)
             if price is None:
+                total += float(getattr(client, "total_cost_usd", 0.0))
                 continue
             input_tokens = getattr(client, "total_input_tokens", 0)
             output_tokens = getattr(client, "total_output_tokens", 0)
