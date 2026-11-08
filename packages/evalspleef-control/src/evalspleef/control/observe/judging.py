@@ -107,7 +107,7 @@ class GatewayJudgeClient:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.endpoint_id = endpoint_id
-        self.model = f"ep_{endpoint_id}"
+        self.model = endpoint_id
         self.provider = provider
         self.family = family
         self.name = name or self.model

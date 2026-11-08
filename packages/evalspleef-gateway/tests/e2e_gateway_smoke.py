@@ -296,7 +296,7 @@ def _drive(
         headers=admin_headers,
         body={
             "trial_id": "trial-1",
-            "endpoint_id": "demo1",
+            "endpoint_id": "ep_demo1",
             "max_budget_usd": 1.0,
             "max_tokens": 1_000_000,
             "expires_at": EXPIRES_AT,
@@ -367,7 +367,7 @@ def _drive(
         headers=admin_headers,
         body={
             "trial_id": "trial-cost",
-            "endpoint_id": "demo1",
+            "endpoint_id": "ep_demo1",
             "max_budget_usd": 0.000001,
             "max_tokens": 1_000_000,
             "expires_at": EXPIRES_AT,
@@ -391,7 +391,7 @@ def _drive(
         headers=admin_headers,
         body={
             "trial_id": "trial-tokens",
-            "endpoint_id": "demo1",
+            "endpoint_id": "ep_demo1",
             "max_budget_usd": 1.0,
             "max_tokens": 10,
             "expires_at": EXPIRES_AT,
@@ -416,7 +416,7 @@ def _drive(
         headers=admin_headers,
         body={
             "trial_id": "trial-revoked",
-            "endpoint_id": "demo1",
+            "endpoint_id": "ep_demo1",
             "max_budget_usd": 1.0,
             "max_tokens": 1000,
             "expires_at": EXPIRES_AT,
@@ -445,7 +445,7 @@ def _drive(
         headers=admin_headers,
         body={
             "trial_id": "trial-2",
-            "endpoint_id": "demo2",
+            "endpoint_id": "ep_demo2",
             "max_budget_usd": 1.0,
             "max_tokens": 1000,
             "expires_at": EXPIRES_AT,

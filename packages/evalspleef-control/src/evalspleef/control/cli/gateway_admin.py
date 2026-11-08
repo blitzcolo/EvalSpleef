@@ -19,20 +19,7 @@ __all__ = ["HttpGatewayAdmin"]
 
 
 class HttpGatewayAdmin(GatewayAdmin):
-    """Admin client for a gateway process reachable over HTTP.
-
-    Wire convention: the gateway derives the public model name as ``ep_`` +
-    ``endpoint_id`` (``GatewayState.public_name_for_endpoint``), while the SPI
-    endpoint ids already carry the ``ep_`` prefix (``ep_<slug>_<hash>``) and the
-    control plane's ``public_name`` refuses to double-prefix. To bridge the two
-    conventions without changing either package, ``issue_key`` strips one leading
-    ``ep_`` from the endpoint id, so the gateway derives exactly the SPI name.
-    Known cross-package defect; see the control-cli report.
-    """
-
-    @staticmethod
-    def _wire_endpoint_id(endpoint_id: str) -> str:
-        return endpoint_id[len("ep_") :] if endpoint_id.startswith("ep_") else endpoint_id
+    """Admin client for a gateway process reachable over HTTP."""
 
     def __init__(
         self,
@@ -125,7 +112,7 @@ class HttpGatewayAdmin(GatewayAdmin):
     ) -> TrialKey:
         body = {
             "trial_id": trial_id,
-            "endpoint_id": self._wire_endpoint_id(endpoint_id),
+            "endpoint_id": endpoint_id,
             "max_budget_usd": max_budget_usd,
             "max_tokens": max_tokens,
             "expires_at": expires_at,

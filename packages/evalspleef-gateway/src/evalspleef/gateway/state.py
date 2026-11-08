@@ -209,7 +209,8 @@ class GatewayState:
         return self._routes.get(name)
 
     def public_name_for_endpoint(self, endpoint_id: str) -> str:
-        return f"ep_{endpoint_id}"
+        """The model name a trial key may call: the endpoint id itself (``ep_<slug>_<hash>``)."""
+        return endpoint_id
 
     # -- keys --------------------------------------------------------------------
 

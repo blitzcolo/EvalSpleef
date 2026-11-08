@@ -66,9 +66,9 @@ def sse_body(*payloads: dict[str, Any]) -> bytes:
     return (chunks + "data: [DONE]\n\n").encode()
 
 
-async def issue(state: GatewayState, endpoint_id: str = "ep1", **overrides: Any) -> str:
+async def issue(state: GatewayState, endpoint_id: str = "ep_ep1", **overrides: Any) -> str:
     params: dict[str, Any] = {
-        "trial_id": f"trial-{endpoint_id}",
+        "trial_id": f"trial-{endpoint_id.removeprefix('ep_')}",
         "endpoint_id": endpoint_id,
         "max_budget_usd": 100.0,
         "max_tokens": 10_000_000,
@@ -160,7 +160,7 @@ async def test_unknown_model_gets_404(state: GatewayState) -> None:
 async def test_key_bound_to_other_endpoint_gets_403(state: GatewayState) -> None:
     add_route(state)
     add_route(state, "ep_ep2", overrides={"model": "other-model"})
-    secret = await issue(state, endpoint_id="ep1")
+    secret = await issue(state, endpoint_id="ep_ep1")
     async with client_for(state, ok_upstream) as client:
         response = await client.post(
             "/v1/chat/completions",
@@ -533,7 +533,7 @@ async def test_revoked_key_gets_401(state: GatewayState) -> None:
     add_route(state)
     key = await state.issue_key(
         trial_id="trial-ep1",
-        endpoint_id="ep1",
+        endpoint_id="ep_ep1",
         max_budget_usd=1.0,
         max_tokens=100,
         expires_at=EXPIRES_AT,

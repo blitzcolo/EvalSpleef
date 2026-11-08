@@ -44,7 +44,7 @@ class _Recorder:
 def test_gateway_client_posts_chat_completion() -> None:
     recorder = _Recorder([])
     client = GatewayJudgeClient(
-        endpoint_id="judge-1",
+        endpoint_id="ep_judge-1",
         gateway_url="http://gw.test/v1",
         provider="vendor-a",
         family="fam-a",
@@ -66,7 +66,7 @@ def test_gateway_client_posts_chat_completion() -> None:
 
 def _judge_client(handler: object) -> GatewayJudgeClient:
     return GatewayJudgeClient(
-        endpoint_id="judge-1",
+        endpoint_id="ep_judge-1",
         gateway_url="http://gw.test/v1",
         provider="vendor-a",
         family="fam-a",

@@ -92,7 +92,7 @@ async def test_route_rate_limits_survive_the_admin_api(
 async def test_issue_and_revoke_key(state: GatewayState, admin_client: httpx.AsyncClient) -> None:
     body = {
         "trial_id": "trial-1",
-        "endpoint_id": "ep1",
+        "endpoint_id": "ep_ep1",
         "max_budget_usd": 5.0,
         "max_tokens": 1000,
         "expires_at": EXPIRES_AT,
@@ -121,7 +121,7 @@ async def test_usage_and_events_endpoints(
 ) -> None:
     key = await state.issue_key(
         trial_id="trial-1",
-        endpoint_id="ep1",
+        endpoint_id="ep_ep1",
         max_budget_usd=1.0,
         max_tokens=100,
         expires_at=EXPIRES_AT,
@@ -134,7 +134,7 @@ async def test_usage_and_events_endpoints(
             ts="2026-01-01T00:00:00+00:00",
             trial_id="trial-1",
             round=1,
-            endpoint_id="ep1",
+            endpoint_id="ep_ep1",
             upstream_model="fake-model",
             input_tokens=30,
             output_tokens=12,
@@ -175,7 +175,7 @@ async def test_in_process_gateway_admin(state: GatewayState) -> None:
     await admin.set_price("ep_ep1", PriceSpec(input_per_mtok=1.0, output_per_mtok=2.0))
     key = await admin.issue_key(
         trial_id="trial-1",
-        endpoint_id="ep1",
+        endpoint_id="ep_ep1",
         max_budget_usd=1.0,
         max_tokens=100,
         expires_at=EXPIRES_AT,
@@ -198,7 +198,7 @@ async def test_http_gateway_admin_over_asgi(state: GatewayState) -> None:
         await admin.set_price("ep_ep1", PriceSpec(input_per_mtok=1.0, output_per_mtok=2.0))
         key = await admin.issue_key(
             trial_id="trial-1",
-            endpoint_id="ep1",
+            endpoint_id="ep_ep1",
             max_budget_usd=1.0,
             max_tokens=100,
             expires_at=EXPIRES_AT,

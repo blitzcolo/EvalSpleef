@@ -730,7 +730,7 @@ class AppContext:
                 else spec.deployment.adapter
             )
             clients[slug] = GatewayJudgeClient(
-                endpoint_id=endpoint_id.removeprefix("ep_"),  # the client adds the prefix
+                endpoint_id=endpoint_id,
                 gateway_url=judge_gateway_url,
                 provider=vendor,
                 family=spec.family,

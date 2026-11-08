@@ -16,7 +16,7 @@ from .conftest import EXPIRES_AT
 async def _issue(state, **overrides: object):
     params: dict[str, object] = {
         "trial_id": "trial-1",
-        "endpoint_id": "ep1",
+        "endpoint_id": "ep_ep1",
         "max_budget_usd": 1.0,
         "max_tokens": 1000,
         "expires_at": EXPIRES_AT,
