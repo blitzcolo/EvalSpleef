@@ -6,7 +6,7 @@ shells:
   native: {} # per-model native shell overrides, e.g. {claude-sonnet-5: claude-code}
 tasks:
   include: [logic-001, data-001, debug-001] # glob-like patterns over the tasks directory
-epochs: 1 # trials per cell
+epochs: 2 # trials per cell; docs/03 9.9 ranks a cell only with >= 2 valid epochs
 budget:
   max_total_usd: 100 # worst-case cap: plan refuses to freeze above it (FR-FLOW-01)
 endpoint_policy:
