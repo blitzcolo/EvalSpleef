@@ -110,7 +110,11 @@ async def test_postgres_store_roundtrip() -> None:
     database = f"gw_{uuid.uuid4().hex[:12]}"
     password = "spleef-test"
     container = f"spleef-gw-test-{uuid.uuid4().hex[:8]}"
-    # Docker CLI calls block briefly; the container lifetime far exceeds that.
+    # Docker CLI calls block briefly; the container lifetime far exceeds that. The pull gets its
+    # own deadline so a machine without the image does not spend the run's 60 s on it.
+    subprocess.run(  # noqa: ASYNC221
+        ["docker", "pull", "--quiet", "postgres:16"], check=True, capture_output=True, timeout=600
+    )
     subprocess.run(  # noqa: ASYNC221
         [
             "docker",

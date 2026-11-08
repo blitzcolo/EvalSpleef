@@ -31,6 +31,7 @@ from evalspleef.control.store import (
 from evalspleef.control.store.db import PostgresDatabase
 
 POSTGRES_IMAGE = "postgres:16"
+PULL_TIMEOUT_S = 600
 POSTGRES_PASSWORD = "spleef-test"
 READINESS_TIMEOUT_S = 180
 CONNECT_TIMEOUT_S = 5
@@ -85,6 +86,17 @@ def postgres_url() -> Iterator[str]:
     if not available:
         pytest.skip(f"Docker not usable for the PostgreSQL test: {message}")
 
+    # Pull first, under its own deadline: on a machine without the image the pull alone can take
+    # longer than starting the container is allowed to.
+    pull = subprocess.run(
+        ["docker", "pull", "--quiet", POSTGRES_IMAGE],
+        capture_output=True,
+        text=True,
+        timeout=PULL_TIMEOUT_S,
+        check=False,
+    )
+    if pull.returncode != 0:
+        pytest.skip(f"Docker could not pull {POSTGRES_IMAGE}: {pull.stderr.strip()}")
     container = f"evalspleef-pg-test-{uuid.uuid4().hex[:12]}"
     port = _free_port()
     run = subprocess.run(
