@@ -138,7 +138,8 @@ async def _life_lifetime_expiry(target: ConformanceTarget) -> None:
             assert isinstance(expired, SandboxLost), (
                 f"expected SandboxLost after lifetime expiry, got {expired!r}"
             )
-        await provider.reap(labels, older_than_s=0)
+        # No reap here: whatever reclaims an expired sandbox must be the adapter's own TTL
+        # path (vendor timeout, hostd timer, sweep), not this check.
         listed_after = await provider.list(labels)
         assert sandbox.id not in _ids(listed_after), "expired sandbox was not reclaimed"
 

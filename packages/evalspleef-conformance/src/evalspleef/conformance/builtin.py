@@ -96,8 +96,10 @@ def _mock_sandbox_target() -> ConformanceTarget:
         provider.fail_next_creates(count, SandboxCreateError)
 
     async def expire_lifetime() -> None:
-        # Move the fake clock past any lifetime an open_sandbox call can request.
+        # Move the fake clock past any lifetime an open_sandbox call can request, then let
+        # the double's TTL run, as a vendor timeout would.
         clock.advance(10_000)
+        await provider.sweep_expired()
 
     return ConformanceTarget(
         name="mock-sandbox",

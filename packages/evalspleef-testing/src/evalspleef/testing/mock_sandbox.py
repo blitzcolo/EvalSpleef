@@ -550,6 +550,14 @@ class MockSandboxProvider(SandboxProvider):
             if s.alive and _labels_match(s.spec.labels, labels)
         ]
 
+    async def sweep_expired(self) -> int:
+        """The double's own TTL: destroy every instance past its lifetime, like a vendor timeout."""
+        now = self._clock.now()
+        expired = [s for s in self._sandboxes.values() if s.alive and s.expired(now)]
+        for sandbox in expired:
+            await sandbox.destroy()
+        return len(expired)
+
     async def reap(self, labels: Mapping[str, str], older_than_s: int) -> int:
         """Destroy orphans matching ``labels`` that are older than ``older_than_s`` or expired."""
         now = self._clock.now()
