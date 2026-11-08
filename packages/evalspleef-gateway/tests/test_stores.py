@@ -141,7 +141,7 @@ async def test_postgres_store_roundtrip() -> None:
         await _roundtrip(key_store, usage_store)
     finally:
         subprocess.run(  # noqa: ASYNC221
-            ["docker", "rm", "-f", container],
+            ["docker", "rm", "-f", "-v", container],
             capture_output=True,
             timeout=60,
         )
