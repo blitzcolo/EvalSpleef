@@ -88,6 +88,15 @@ async def test_results_reach_the_report_the_grade_table_and_the_freeze_hash(buil
     assert {row.extensions["freeze_hash"] for row in rows} == {result.version_matrix_hash}
 
 
+async def test_the_grade_row_records_the_deciding_rule(build) -> None:
+    h = await build(n_models=2, n_tasks=2, epochs=3)
+
+    await h.freeze_and_run()
+
+    grades = await h.grades.list_by_trial(TRIAL)
+    assert [g.rule_id for g in grades] == ["G-FIXTURE"]
+
+
 async def test_skipped_cells_appear_in_the_report_with_their_reason(build, task_factory) -> None:
     h = await build(tasks=[task_factory("web-001"), task_factory("web-002", gpu=True)], epochs=3)
 

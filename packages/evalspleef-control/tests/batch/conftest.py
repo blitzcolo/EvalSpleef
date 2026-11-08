@@ -95,6 +95,7 @@ def scored_record(
                 "counted_in_leaderboard": True,
                 "cost": {"agent": cost},
                 "flags": [],
+                "decision": {"rule_id": "G-FIXTURE", "rationale": "fixture"},
             }
         ],
     }

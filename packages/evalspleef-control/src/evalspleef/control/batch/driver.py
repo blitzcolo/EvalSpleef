@@ -404,7 +404,7 @@ class BatchDriver:
                         decided_by=str(grade.get("decided_by", "auto")),
                         payload=dict(grade),
                         created_at=self._ts(),
-                        rule_id=grade.get("rule_id"),
+                        rule_id=(grade.get("decision") or {}).get("rule_id"),
                     )
                 )
             await self._emit(
