@@ -1,0 +1,35 @@
+# providers.yaml — sandbox instances, model accounts and routes
+# (TECH-DESIGN section 14.2), trimmed to what runs on this machine.
+#
+# `${NAME}` placeholders are substituted from the process environment when the
+# file is loaded; `spleef config validate` accepts them unset, commands that
+# actually call the endpoint (register/probe/warm/run) require them.
+model_accounts:
+  fake-local: # one account on the openai-compatible adapter
+    adapter: openai-compatible # entry-point name (evalspleef.model_providers group)
+    base_url: "${SPLEEF_FAKE_BASE_URL}" # e2e harness exports the FakeOpenAIServer URL here
+    api_key_ref: "env://SPLEEF_FAKE_API_KEY" # SecretRef: resolved at use, never printed
+
+sandbox_instances:
+  local-docker: # Linux containers on the local Docker daemon (TECH-DESIGN 7.4.2)
+    adapter: docker # entry-point name (evalspleef.sandbox_providers group)
+    config:
+      runtime: runc # runsc (gVisor) would raise the declared isolation to L2
+      # engine_url: unix:///var/run/docker.sock # implied default
+    limits:
+      max_concurrency: 8 # scheduler cap; leave headroom for the verifier sandboxes
+  mock-sandbox: # in-memory double from evalspleef-testing; useful without a daemon
+    adapter: mock-sandbox
+    config: {}
+    limits:
+      max_concurrency: 8
+
+routes: # tried in file order; the first entry whose `when` matches wins (TECH-DESIGN 7.2)
+  - when: {os: linux} # Linux tasks go to real Docker first, the mock as fallback
+    prefer: [local-docker, mock-sandbox]
+  - when: {role: verifier} # verifier sandboxes are always created with network=off
+    prefer: [local-docker, mock-sandbox]
+
+gateway:
+  internal_url: "${SPLEEF_GATEWAY_URL}" # data plane the runners and probes call
+  # public_url is only needed for in-sandbox native shells on cloud sandboxes.

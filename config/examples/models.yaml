@@ -1,0 +1,56 @@
+# models.yaml — model registry entries (TECH-DESIGN section 14.1), runnable on this machine.
+#
+# Every model below is an EXTERNAL OpenAI-compatible endpoint. In the end-to-end
+# harness the endpoint is the repository's FakeOpenAIServer; on a real deployment
+# the same shape points at a vendor API, Novita Serverless or a self-hosted
+# vLLM/SGLang endpoint. Registration validates the entry, probes it through the
+# gateway (P-01..P-15) and freezes the resulting capabilities into the batch.
+models:
+  - slug: fake-ref-agent # immutable model id (PRD appendix A.1: lowercase, hyphenated)
+    spec_version: 1 # bump on any change; a (slug, spec_version) pair is written once
+    family: fake-agent # judge anti-same-source rule (appendix C.5) keys off the family
+    roles: [target] # what the model may be used for: target / judge / user
+    source:
+      type: vendor # not a Hugging Face model: skip HF preflight and mirroring
+      vendor: evalspleef # free-form vendor label, shown on the leaderboard
+      model_id: fake-ref-agent # upstream model name as the provider knows it
+    deployment:
+      adapter: openai-compatible # entry-point name of the model adapter (FR-MOD-04)
+      account: fake-local # a model_accounts entry of providers.yaml
+      params:
+        model: fake-ref-agent # `model` field sent upstream and expected back (probe P-14)
+    declared_context_tokens: 131072 # probe P-09 bisects the real context limit from this
+    declared_max_output_tokens: 4096 # probe P-10 measures the real output limit from this
+    pricing_ref: "assumed:fake-ref-agent@2026-11" # cost basis; basis = assumed (no real price)
+    license: MIT
+    owner: eval-dev
+
+  - slug: fake-empty-agent # the do-nothing agent: finishes immediately without tool calls
+    spec_version: 1
+    family: fake-agent # same family as fake-ref-agent; neither is ever a judge
+    roles: [target]
+    source: {type: vendor, vendor: evalspleef, model_id: fake-empty-agent}
+    deployment:
+      adapter: openai-compatible
+      account: fake-local
+      params: {model: fake-empty-agent}
+    declared_context_tokens: 131072
+    declared_max_output_tokens: 4096
+    pricing_ref: "assumed:fake-empty-agent@2026-11"
+    license: MIT
+    owner: eval-dev
+
+  - slug: fake-judge # a judge-capable endpoint (structured output probe P-07 applies)
+    spec_version: 1
+    family: fake-judge # distinct family: allowed to judge the fake-agent family
+    roles: [judge]
+    source: {type: vendor, vendor: evalspleef, model_id: fake-judge}
+    deployment:
+      adapter: openai-compatible
+      account: fake-local
+      params: {model: fake-judge}
+    declared_context_tokens: 131072
+    declared_max_output_tokens: 4096
+    pricing_ref: "assumed:fake-judge@2026-11"
+    license: MIT
+    owner: eval-dev

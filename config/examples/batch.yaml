@@ -1,0 +1,16 @@
+# batch.yaml — one batch definition (TECH-DESIGN section 14.3), runnable on this machine.
+batch: 2026-11-b1 # batch id shape per PRD appendix A.1: YYYY-MM-bN
+models: [fake-ref-agent, fake-empty-agent] # slugs of models.yaml; fake-judge stays unused
+shells:
+  unified: terminus # the default agent runner (evalspleef.runners entry-point slug)
+  native: {} # per-model native shell overrides, e.g. {claude-sonnet-5: claude-code}
+tasks:
+  include: [logic-001, data-001, debug-001] # glob-like patterns over the tasks directory
+epochs: 1 # trials per cell
+budget:
+  max_total_usd: 100 # worst-case cap: plan refuses to freeze above it (FR-FLOW-01)
+endpoint_policy:
+  warm_before_run: true # wake + health-check every endpoint before the first trial
+  retire_after: terminate # deregister routes when graded (sleep | terminate)
+judges: [fake-judge] # the judge panel for llm_judge rubric items (family must differ)
+pricing_table: "2026-11" # frozen into the batch for cost accounting

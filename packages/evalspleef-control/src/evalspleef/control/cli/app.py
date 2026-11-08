@@ -1,0 +1,1522 @@
+"""The spleef CLI (PRD FR-OPS-01).
+
+Commands: ``config validate``; ``models register|attach|probe|warm|retire|list|tickets``;
+``providers list|check|conformance``; ``hosts list|drain``; ``tasks lint``;
+``batch plan|freeze|run|report``; ``gateway serve``.
+
+Output is plain text tables; ``--json`` switches the list/report commands to JSON.
+Exit codes: 0 success, 1 domain failure, 2 usage or configuration error. Secrets
+(SecretRef values and resolved credentials) are never printed.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import fnmatch
+import json
+import os
+import shutil
+import subprocess
+import sys
+from collections.abc import Coroutine, Mapping, Sequence
+from pathlib import Path
+from typing import Any, cast
+
+import typer
+
+from evalspleef.control.batch import BatchDriver, BatchRunResult, build_freeze_record, freeze_guards
+from evalspleef.control.config import ConfigError
+from evalspleef.control.endpoints import make_endpoint_id, probe_failures
+from evalspleef.control.taskpack import lint_task_pack_dir
+from evalspleef.core.batch import BatchGuardFailed
+from evalspleef.core.report import BatchReport, TrialResult
+from evalspleef.spi.errors import SpleefError
+from evalspleef.spi.model import EndpointState, ModelSpec, TeardownMode
+
+from .context import (
+    AppContext,
+    Settings,
+    StoredEndpointStates,
+    ensure_resolved,
+    load_models_config,
+)
+from .errors import EXIT_DOMAIN, EXIT_SUCCESS, EXIT_USAGE, CliError, DomainError, UsageError
+
+__all__ = ["app", "main"]
+
+app = typer.Typer(
+    name="spleef",
+    help="EvalSpleef control plane CLI (PRD FR-OPS-01).",
+    no_args_is_help=True,
+    add_completion=False,
+)
+config_app = typer.Typer(no_args_is_help=True)
+models_app = typer.Typer(no_args_is_help=True)
+providers_app = typer.Typer(no_args_is_help=True)
+hosts_app = typer.Typer(no_args_is_help=True)
+batch_app = typer.Typer(no_args_is_help=True)
+gateway_app = typer.Typer(no_args_is_help=True)
+app.add_typer(config_app, name="config")
+app.add_typer(models_app, name="models")
+app.add_typer(providers_app, name="providers")
+app.add_typer(hosts_app, name="hosts")
+app.add_typer(batch_app, name="batch")
+app.add_typer(gateway_app, name="gateway")
+
+
+# -- shared options -------------------------------------------------------------
+
+
+def _settings(
+    models: Path,
+    providers: Path | None,
+    batch: Path | None,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+) -> Settings:
+    return Settings.from_options(
+        models=models,
+        providers=providers,
+        batch=batch,
+        tasks_dir=tasks_dir,
+        templates_registry=templates_registry,
+        store_url=store_url,
+        events_url=events_url,
+        state_dir=state_dir,
+    )
+
+
+_MODELS_OPT = typer.Option(Path("config/models.yaml"), "--models", help="models.yaml path")
+_PROVIDERS_OPT = typer.Option(
+    Path("config/providers.yaml"), "--providers", help="providers.yaml path"
+)
+_BATCH_OPT = typer.Option(Path("config/batch.yaml"), "--batch", help="batch.yaml path")
+_TASKS_OPT = typer.Option(Path("tasks"), "--tasks-dir", help="task packs root directory")
+_TEMPLATES_OPT = typer.Option(
+    None,
+    "--templates-registry",
+    help="template registry JSON (default: <tasks-dir>/../templates/registry.json)",
+)
+_STORE_OPT = typer.Option(None, "--store-url", envvar="SPLEEF_STORE_URL", help="result store URL")
+_EVENTS_OPT = typer.Option(None, "--events-url", envvar="SPLEEF_EVENTS_URL", help="event store URL")
+_STATE_OPT = typer.Option(
+    None, "--state-dir", envvar="SPLEEF_STATE_DIR", help="state directory (freeze records)"
+)
+_JSON_OPT = typer.Option(False, "--json", help="print machine-readable JSON")
+_MODEL_FILTER_OPT = typer.Option([], "--model", help="restrict the command to these slugs")
+_INCLUDE_OPT = typer.Option([], "--include", help="glob, default: every pack")
+
+
+# -- output helpers ---------------------------------------------------------------
+
+
+def _emit_table(headers: Sequence[str], rows: Sequence[Sequence[object]]) -> None:
+    text = [[str(cell) for cell in row] for row in rows]
+    widths = [len(str(header)) for header in headers]
+    for row in text:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], len(cell))
+    line = "  ".join(str(header).ljust(widths[index]) for index, header in enumerate(headers))
+    typer.echo(line)
+    typer.echo("  ".join("-" * width for width in widths))
+    for row in text:
+        typer.echo("  ".join(cell.ljust(widths[index]) for index, cell in enumerate(row)))
+
+
+def _emit_json(data: Mapping[str, Any] | Sequence[Mapping[str, Any]]) -> None:
+    typer.echo(json.dumps(data, indent=2, sort_keys=True, default=str))
+
+
+def _run(coro: Coroutine[Any, Any, int]) -> None:
+    """Run a command coroutine and map failures to the CLI exit codes."""
+    try:
+        code = asyncio.run(coro)
+    except CliError as exc:
+        typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(exc.exit_code) from None
+    except ConfigError as exc:
+        typer.secho(f"configuration error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_USAGE) from None
+    except BatchGuardFailed as exc:
+        typer.secho(f"batch guard failed: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DOMAIN) from None
+    except SpleefError as exc:
+        typer.secho(f"error: {exc.message}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DOMAIN) from None
+    raise typer.Exit(code)
+
+
+# -- config ------------------------------------------------------------------------
+
+
+@config_app.command("validate")
+def config_validate(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    batch: Path = _BATCH_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    as_json: bool = _JSON_OPT,
+) -> None:
+    """Validate models.yaml, providers.yaml and batch.yaml plus their cross-references."""
+    _run(
+        _config_validate(
+            models,
+            providers,
+            batch,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            as_json,
+        )
+    )
+
+
+async def _config_validate(
+    models: Path,
+    providers: Path,
+    batch: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    as_json: bool,
+) -> int:
+    settings = _settings(
+        models,
+        providers,
+        batch,
+        tasks_dir,
+        templates_registry,
+        store_url,
+        events_url,
+        state_dir,
+    )
+    async with AppContext(settings) as ctx:
+        specs = load_models_config(models, os.environ)
+        providers_config = ctx.providers_config()
+        batch_config = ctx.load_batch_config()
+        # Instantiating the registry proves every referenced adapter is installed.
+        registry = ctx.provider_registry()
+
+        slugs = [spec.slug for spec in specs]
+        problems: list[str] = []
+        for slug in sorted({slug for slug in slugs if slugs.count(slug) > 1}):
+            problems.append(f"models.yaml: duplicate slug {slug!r}")
+        spec_by_slug = {spec.slug: spec for spec in specs}
+        for spec in specs:
+            if spec.deployment.account not in providers_config.model_accounts:
+                problems.append(
+                    f"models.yaml: {spec.slug}: unknown model account "
+                    f"{spec.deployment.account!r} (providers.yaml model_accounts)"
+                )
+        for slug in batch_config.models:
+            if slug not in spec_by_slug:
+                problems.append(f"batch.yaml: unknown model {slug!r} (not in models.yaml)")
+        for slug in batch_config.judges:
+            if slug not in spec_by_slug:
+                problems.append(f"batch.yaml: unknown judge {slug!r} (not in models.yaml)")
+        runner_slugs = set(registry.runner_classes())
+        shells = {batch_config.shells.unified, *batch_config.shells.native.values()} - {None}
+        for shell in sorted(str(shell) for shell in shells):
+            if shell not in runner_slugs:
+                problems.append(
+                    f"batch.yaml: no agent runner installed for shell {shell!r} "
+                    f"(available: {sorted(runner_slugs)})"
+                )
+        packs = ctx.discover_task_packs(batch_config)
+        if as_json:
+            _emit_json(
+                {
+                    "ok": not problems,
+                    "problems": problems,
+                    "models": slugs,
+                    "sandbox_instances": sorted(providers_config.sandbox_instances),
+                    "model_accounts": sorted(providers_config.model_accounts),
+                    "runners": sorted(runner_slugs),
+                    "tasks": [pack.task_id for pack in packs],
+                    "batch": batch_config.batch,
+                }
+            )
+        else:
+            for problem in problems:
+                typer.secho(f"invalid: {problem}", fg=typer.colors.RED, err=True)
+            typer.echo(f"models:    {len(specs)} ({', '.join(slugs)})")
+            typer.echo(
+                f"providers: {len(providers_config.sandbox_instances)} sandbox instance(s), "
+                f"{len(providers_config.model_accounts)} model account(s)"
+            )
+            typer.echo(f"runners:   {', '.join(sorted(runner_slugs))}")
+            typer.echo(f"tasks:     {len(packs)} pack(s): {', '.join(p.task_id for p in packs)}")
+            typer.echo(f"batch:     {batch_config.batch} ({batch_config.epochs} epoch(s))")
+            typer.echo("config ok" if not problems else "config invalid")
+        return EXIT_SUCCESS if not problems else EXIT_USAGE
+
+
+# -- models ---------------------------------------------------------------------
+
+
+def _select_specs(ctx: AppContext, only: Sequence[str]) -> list[ModelSpec]:
+    specs = ctx.load_model_specs()
+    if not only:
+        return specs
+    by_slug = {spec.slug: spec for spec in specs}
+    missing = [slug for slug in only if slug not in by_slug]
+    if missing:
+        raise UsageError(f"unknown model(s) {missing} in models.yaml")
+    return [by_slug[slug] for slug in only]
+
+
+def _check_account_urls(ctx: AppContext) -> None:
+    """Model accounts must not carry unresolved environment placeholders."""
+    config = ctx.providers_config()
+    for name, account in sorted(config.model_accounts.items()):
+        ensure_resolved(account.base_url, f"model account {name!r} base_url")
+        ensure_resolved(
+            config.gateway.internal_url if config.gateway else None,
+            "providers.yaml gateway.internal_url",
+        )
+
+
+async def _registered_specs(ctx: AppContext, only: Sequence[str]) -> list[ModelSpec]:
+    """Specs from the immutable registry (the source of truth after registration)."""
+    selected = _select_specs(ctx, only)
+    registered: list[ModelSpec] = []
+    for spec in selected:
+        stored = await ctx.model_registry.get(spec.slug, spec.spec_version)
+        if stored is None:
+            raise DomainError(
+                f"model {spec.slug}@{spec.spec_version} is not registered; "
+                f"run 'spleef models register' first"
+            )
+        registered.append(stored)
+    return registered
+
+
+@models_app.command("register")
+def models_register(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    model: list[str] = _MODEL_FILTER_OPT,
+) -> None:
+    """Validate and register each model of models.yaml; deploy or open an operator ticket."""
+    _run(
+        _models_register(
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            model,
+        )
+    )
+
+
+async def _models_register(
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    model: Sequence[str],
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        _check_account_urls(ctx)
+        manager = ctx.endpoint_manager()
+        rejected: list[str] = []
+        for spec in _select_specs(ctx, model):
+            handle = await manager.register(spec)
+            state = handle.state.value
+            typer.echo(f"{spec.slug}@{spec.spec_version}  {handle.endpoint_id}  {state}")
+            if handle.state is EndpointState.REJECTED:
+                rejected.append(spec.slug)
+        if rejected:
+            raise DomainError(f"registration rejected: {', '.join(rejected)}")
+        return EXIT_SUCCESS
+
+
+@models_app.command("attach")
+def models_attach(
+    endpoint_id: str = typer.Option(..., "--endpoint-id"),
+    base_url: str = typer.Option(..., "--base-url"),
+    upstream_model: str = typer.Option(..., "--model", help="upstream model name"),
+    deployment_id: str | None = typer.Option(None, "--deployment-id"),
+    operator: str | None = typer.Option(None, "--operator"),
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """Attach an operator-deployed endpoint (assisted mode), then probe it."""
+    _run(
+        _models_attach(
+            endpoint_id,
+            base_url,
+            upstream_model,
+            deployment_id,
+            operator,
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+        )
+    )
+
+
+async def _models_attach(
+    endpoint_id: str,
+    base_url: str,
+    upstream_model: str,
+    deployment_id: str | None,
+    operator: str | None,
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        manager = ctx.endpoint_manager()
+        operator_input = {"base_url": base_url, "model": upstream_model}
+        if deployment_id:
+            operator_input["deployment_id"] = deployment_id
+        if operator:
+            operator_input["operator"] = operator
+        handle = await manager.attach(endpoint_id, operator_input)
+        report = await manager.latest_report(endpoint_id)
+        failures = (
+            probe_failures(report, handle.model.roles)
+            if report is not None
+            else ["no probe report was produced"]
+        )
+        typer.echo(f"{handle.endpoint_id}  {handle.state.value}")
+        if failures:
+            raise DomainError(f"attach probe failed for {endpoint_id}: {', '.join(failures)}")
+        return EXIT_SUCCESS
+
+
+@models_app.command("probe")
+def models_probe(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    model: list[str] = _MODEL_FILTER_OPT,
+) -> None:
+    """Run the P-01..P-15 capability probe suite through the gateway for each model."""
+    _run(
+        _models_probe(
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            model,
+        )
+    )
+
+
+async def _models_probe(
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    model: Sequence[str],
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        _check_account_urls(ctx)
+        manager = ctx.endpoint_manager()
+        failed: list[str] = []
+        for spec in await _registered_specs(ctx, model):
+            endpoint_id = make_endpoint_id(spec)
+            report = await manager.probe(endpoint_id)
+            passed = sum(1 for check in report.checks if check.passed)
+            failures = probe_failures(report, spec.roles)
+            typer.echo(
+                f"{spec.slug}  {endpoint_id}  probes {passed}/{len(report.checks)} passed"
+                f"  report {report.report_id}"
+            )
+            for check in report.checks:
+                if not check.passed:
+                    typer.echo(f"  FAIL {check.probe_id}: {check.detail}")
+            if failures:
+                failed.append(f"{spec.slug} (required {', '.join(failures)} missing)")
+        if failed:
+            raise DomainError(f"probe failed: {'; '.join(failed)}")
+        return EXIT_SUCCESS
+
+
+@models_app.command("warm")
+def models_warm(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    model: list[str] = _MODEL_FILTER_OPT,
+) -> None:
+    """Wake and health-check each endpoint until it answers through the gateway."""
+    _run(
+        _models_warm(
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            model,
+        )
+    )
+
+
+async def _models_warm(
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    model: Sequence[str],
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        _check_account_urls(ctx)
+        manager = ctx.endpoint_manager()
+        endpoint_ids = [make_endpoint_id(spec) for spec in await _registered_specs(ctx, model)]
+        results = await manager.warm(endpoint_ids, 1)
+        cold: list[str] = []
+        for endpoint_id in endpoint_ids:
+            result = results[endpoint_id]
+            typer.echo(
+                f"{endpoint_id}  {result.state.value}  replicas {result.replicas_required}"
+                + (f"  cold_start {result.cold_start_s:.1f}s" if result.cold_start_s else "")
+            )
+            if result.state is not EndpointState.WARM:
+                cold.append(endpoint_id)
+        if cold:
+            raise DomainError(f"warm failed (not warm): {', '.join(cold)}")
+        return EXIT_SUCCESS
+
+
+@models_app.command("retire")
+def models_retire(
+    policy: str = typer.Option("sleep", "--policy", help="sleep or terminate"),
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    model: list[str] = _MODEL_FILTER_OPT,
+) -> None:
+    """Scale down (sleep) or shut down (terminate) each endpoint after a batch."""
+    if policy not in ("sleep", "terminate"):
+        raise UsageError("--policy must be 'sleep' or 'terminate'")
+    _run(
+        _models_retire(
+            policy,
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            model,
+        )
+    )
+
+
+async def _models_retire(
+    policy: str,
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    model: Sequence[str],
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        manager = ctx.endpoint_manager()
+        for spec in await _registered_specs(ctx, model):
+            endpoint_id = make_endpoint_id(spec)
+            handle = await manager.retire(endpoint_id, policy)  # type: ignore[arg-type]
+            typer.echo(f"{endpoint_id}  {handle.state.value}")
+        return EXIT_SUCCESS
+
+
+@models_app.command("list")
+def models_list(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    as_json: bool = _JSON_OPT,
+) -> None:
+    """List registered model endpoints from the result store."""
+    _run(
+        _models_list(
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            as_json,
+        )
+    )
+
+
+async def _models_list(
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    as_json: bool,
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        rows: list[Mapping[str, Any]] = []
+        for state in EndpointState:
+            for row in await ctx.endpoints.list_by_state(state.value):
+                rows.append(
+                    {
+                        "endpoint_id": row.endpoint_id,
+                        "model": f"{row.model_slug}@{row.model_spec_version}",
+                        "adapter": row.adapter,
+                        "account": row.account,
+                        "state": row.state,
+                        "probe_report": row.observed.get("report_id"),
+                        "created_at": row.created_at,
+                        "retired_at": row.retired_at,
+                    }
+                )
+        rows = sorted(rows, key=lambda row: str(row["endpoint_id"]))
+        if as_json:
+            _emit_json(rows)
+        else:
+            if not rows:
+                typer.echo("no endpoints registered")
+            _emit_table(
+                ["endpoint", "model", "adapter", "account", "state", "probe report"],
+                [
+                    (
+                        row["endpoint_id"],
+                        row["model"],
+                        row["adapter"],
+                        row["account"],
+                        row["state"],
+                        row["probe_report"] or "-",
+                    )
+                    for row in rows
+                ],
+            )
+        return EXIT_SUCCESS
+
+
+@models_app.command("tickets")
+def models_tickets(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    as_json: bool = _JSON_OPT,
+    open_only: bool = typer.Option(True, "--open/--all", help="show only open tickets"),
+) -> None:
+    """List operator tickets (deploy/scale/teardown) of the registered endpoints."""
+    _run(
+        _models_tickets(
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            as_json,
+            open_only,
+        )
+    )
+
+
+async def _models_tickets(
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    as_json: bool,
+    open_only: bool,
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        rows: list[Mapping[str, Any]] = []
+        for state in EndpointState:
+            for endpoint in await ctx.endpoints.list_by_state(state.value):
+                for ticket in await ctx.tickets.list_by_endpoint(endpoint.endpoint_id):
+                    if open_only and ticket.status != "open":
+                        continue
+                    rows.append(
+                        {
+                            "ticket_id": ticket.ticket_id,
+                            "endpoint_id": ticket.endpoint_id,
+                            "kind": ticket.kind,
+                            "status": ticket.status,
+                            "operator": ticket.operator,
+                            "opened_at": ticket.opened_at,
+                        }
+                    )
+        if as_json:
+            _emit_json(rows)
+        else:
+            if not rows:
+                typer.echo("no tickets")
+            _emit_table(
+                ["ticket", "endpoint", "kind", "status", "operator", "opened"],
+                [
+                    (
+                        row["ticket_id"],
+                        row["endpoint_id"],
+                        row["kind"],
+                        row["status"],
+                        row["operator"] or "-",
+                        row["opened_at"],
+                    )
+                    for row in rows
+                ],
+            )
+        return EXIT_SUCCESS
+
+
+# -- providers --------------------------------------------------------------------
+
+
+@providers_app.command("list")
+def providers_list(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    as_json: bool = _JSON_OPT,
+) -> None:
+    """List discovered adapters and configured provider instances."""
+    _run(
+        _providers_list(
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            as_json,
+        )
+    )
+
+
+async def _providers_list(
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    as_json: bool,
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        registry = ctx.provider_registry()
+        config = ctx.providers_config()
+        adapters = {
+            "sandbox": sorted(registry.sandbox_adapters()),
+            "model": sorted(registry.model_adapters()),
+            "runner": sorted(registry.runner_classes()),
+        }
+        instances: list[dict[str, Any]] = []
+        for name in sorted(config.sandbox_instances):
+            instance = config.sandbox_instances[name]
+            caps = registry.capabilities(name)
+            instances.append(
+                {
+                    "instance": name,
+                    "adapter": instance.adapter,
+                    "os": sorted(str(os) for os in caps.os_families),
+                    "arches": sorted(str(arch) for arch in caps.arches),
+                    "isolation": str(caps.isolation),
+                    "net_modes": sorted(str(mode) for mode in caps.net_modes),
+                    "max_concurrency": caps.max_concurrency,
+                    "limits": sorted(instance.limits),
+                }
+            )
+        accounts = [
+            {
+                "account": name,
+                "adapter": account.adapter,
+                "base_url_set": account.base_url is not None,
+            }
+            for name, account in sorted(config.model_accounts.items())
+        ]
+        if as_json:
+            _emit_json(
+                {"adapters": adapters, "sandbox_instances": instances, "model_accounts": accounts}
+            )
+        else:
+            typer.echo(f"sandbox adapters: {', '.join(adapters['sandbox']) or '-'}")
+            typer.echo(f"model adapters:   {', '.join(adapters['model']) or '-'}")
+            typer.echo(f"agent runners:    {', '.join(adapters['runner']) or '-'}")
+            if instances:
+                typer.echo("")
+                _emit_table(
+                    ["instance", "adapter", "os", "arches", "isolation", "net modes"],
+                    [
+                        (
+                            item["instance"],
+                            item["adapter"],
+                            ",".join(item["os"]),
+                            ",".join(item["arches"]),
+                            item["isolation"],
+                            ",".join(item["net_modes"]),
+                        )
+                        for item in instances
+                    ],
+                )
+            if accounts:
+                typer.echo("")
+                _emit_table(
+                    ["account", "adapter", "base_url"],
+                    [
+                        (a["account"], a["adapter"], "set" if a["base_url_set"] else "-")
+                        for a in accounts
+                    ],
+                )
+        return EXIT_SUCCESS
+
+
+@providers_app.command("check")
+def providers_check(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """Preflight every configured sandbox instance and model account."""
+    _run(
+        _providers_check(
+            models, providers, tasks_dir, templates_registry, store_url, events_url, state_dir
+        )
+    )
+
+
+async def _providers_check(
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        registry = ctx.provider_registry()
+        config = ctx.providers_config()
+        failures: list[str] = []
+        for name in sorted(config.sandbox_instances):
+            instance = config.sandbox_instances[name]
+            try:
+                facts = await registry.sandbox_instance(name).preflight()
+            except Exception as exc:
+                failures.append(f"{name}: {exc}")
+                typer.secho(f"FAIL {name} ({instance.adapter}): {exc}", fg=typer.colors.RED)
+                continue
+            typer.echo(
+                f"ok   {name} ({instance.adapter}) "
+                f"server={facts.get('server_version')} arch={facts.get('host_arch')}"
+            )
+        for name in sorted(config.model_accounts):
+            account = config.model_accounts[name]
+            provider = registry.model_provider(name)
+            typer.echo(
+                f"ok   account {name} (adapter {account.adapter}, "
+                f"management {provider.management_mode.value})"
+            )
+        if failures:
+            raise DomainError(f"provider check failed: {'; '.join(failures)}")
+        return EXIT_SUCCESS
+
+
+@providers_app.command("conformance")
+def providers_conformance(
+    ctx: typer.Context,
+    provider: str = typer.Option(..., "--provider", help="conformance target name"),
+) -> None:
+    """Run the conformance kit for one provider (wraps the pytest plugin)."""
+    args = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-p",
+        "evalspleef.conformance.plugin",
+        "--spleef-provider",
+        provider,
+        *ctx.args,
+    ]
+    completed = subprocess.run(args, check=False)
+    if completed.returncode == 0:
+        raise typer.Exit(EXIT_SUCCESS)
+    raise typer.Exit(EXIT_DOMAIN)
+
+
+# -- hosts ------------------------------------------------------------------------
+
+
+@hosts_app.command("list")
+def hosts_list(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    as_json: bool = _JSON_OPT,
+) -> None:
+    """List hosts reported by hostd agents."""
+    _run(
+        _hosts_list(
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            as_json,
+        )
+    )
+
+
+async def _hosts_list(
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    as_json: bool,
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        rows = await ctx.hosts.list_all()
+        if as_json:
+            _emit_json(
+                [
+                    {
+                        "host_id": row.host_id,
+                        "instance": row.instance,
+                        "state": row.state,
+                        "last_heartbeat": row.last_heartbeat,
+                    }
+                    for row in rows
+                ]
+            )
+        else:
+            if not rows:
+                typer.echo("no hosts registered (hostd agents report heartbeats here)")
+            _emit_table(
+                ["host", "instance", "state", "last heartbeat"],
+                [(row.host_id, row.instance, row.state, row.last_heartbeat or "-") for row in rows],
+            )
+        return EXIT_SUCCESS
+
+
+@hosts_app.command("drain")
+def hosts_drain(
+    host_id: str = typer.Option(..., "--host-id"),
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """Mark a host draining: its trials finish, new leases go elsewhere."""
+    _run(
+        _hosts_drain(
+            host_id,
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+        )
+    )
+
+
+async def _hosts_drain(
+    host_id: str,
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+) -> int:
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        row = await ctx.hosts.get(host_id)
+        if row is None:
+            raise DomainError(f"no host {host_id!r}")
+        await ctx.hosts.update_state(host_id, "draining")
+        typer.echo(f"{host_id}  {row.state} -> draining")
+        return EXIT_SUCCESS
+
+
+# -- tasks ------------------------------------------------------------------------
+
+
+@app.command("lint")
+def tasks_lint(
+    tasks_dir: Path = _TASKS_OPT,
+    include: list[str] = _INCLUDE_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """Lint task packs against the pack contract (PRD appendix E.1)."""
+    del store_url, events_url, state_dir  # linting needs no stores
+    _run(_tasks_lint(tasks_dir, include))
+
+
+async def _tasks_lint(tasks_dir: Path, include: Sequence[str]) -> int:
+    failed = await asyncio.to_thread(_lint_packs_on_disk, tasks_dir, include)
+    if failed:
+        raise DomainError("task pack lint failed")
+    return EXIT_SUCCESS
+
+
+def _lint_packs_on_disk(tasks_dir: Path, include: Sequence[str]) -> bool:
+    """Lint every matching pack directory; True when at least one pack has errors."""
+    if not tasks_dir.is_dir():
+        raise UsageError(f"tasks directory not found: {tasks_dir}")
+    patterns = list(include) or ["*"]
+    failed = False
+    for child in sorted(tasks_dir.iterdir()):
+        if not child.is_dir() or child.name.startswith((".", "_")):
+            continue
+        if not any(fnmatch.fnmatchcase(child.name, pattern) for pattern in patterns):
+            continue
+        report = lint_task_pack_dir(child)
+        if report.ok:
+            typer.echo(f"ok   {report.task_id}")
+        else:
+            failed = True
+            for issue in report.issues:
+                color = typer.colors.RED if issue.severity == "error" else typer.colors.YELLOW
+                typer.secho(f"{issue.severity}  {report.task_id}: {issue}", fg=color, err=True)
+    return failed
+
+
+# -- batch ------------------------------------------------------------------------
+
+
+def _plan_row(cell: Any) -> tuple[str, str, str, str, str]:
+    status = cell.skip_reason or "ok"
+    return (
+        cell.cell_id,
+        cell.task.task_id,
+        f"{cell.model.slug}@{cell.model.spec_version}",
+        cell.model.shell,
+        f"{status} ({len(cell.trials)} trial(s))",
+    )
+
+
+@batch_app.command("plan")
+def batch_plan(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    batch: Path = _BATCH_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    as_json: bool = _JSON_OPT,
+) -> None:
+    """Plan the batch: cells, skips with reasons, and the worst-case budget."""
+    _run(
+        _batch_plan(
+            models,
+            providers,
+            batch,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            as_json,
+        )
+    )
+
+
+async def _batch_plan(
+    models: Path,
+    providers: Path,
+    batch: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    as_json: bool,
+) -> int:
+    settings = _settings(
+        models, providers, batch, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        batch_config = ctx.load_batch_config()
+        plan = await ctx.build_plan(batch_config)
+        if as_json:
+            _emit_json(
+                {
+                    "batch_id": plan.batch_id,
+                    "epochs": plan.epochs,
+                    "cells": [
+                        {
+                            "cell_id": cell.cell_id,
+                            "skipped": cell.skipped,
+                            "skip_reason": cell.skip_reason,
+                            "trials": len(cell.trials),
+                        }
+                        for cell in plan.cells
+                    ],
+                    "budget": {
+                        "total_usd": plan.budget.total_usd,
+                        "cap_usd": plan.budget.cap_usd,
+                        "within_cap": plan.budget.within_cap,
+                    },
+                }
+            )
+        else:
+            for cell in plan.cells:
+                typer.echo("\t".join(_plan_row(cell)))
+            cap = f"{plan.budget.cap_usd:.2f}" if plan.budget.cap_usd is not None else "none"
+            typer.echo(
+                f"cells: {len(plan.cells)} runnable, {len(plan.skipped_cells)} skipped; "
+                f"worst-case spend {plan.budget.total_usd:.2f} USD (cap {cap} USD)"
+            )
+        return EXIT_SUCCESS
+
+
+@batch_app.command("freeze")
+def batch_freeze(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    batch: Path = _BATCH_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """Check the FR-FLOW-01 freeze guards and store the version matrix record."""
+    _run(
+        _batch_freeze(
+            models,
+            providers,
+            batch,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+        )
+    )
+
+
+async def _batch_freeze(
+    models: Path,
+    providers: Path,
+    batch: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+) -> int:
+    settings = _settings(
+        models, providers, batch, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        batch_config = ctx.load_batch_config()
+        plan = await ctx.build_plan(batch_config)
+        lint_ok = _lint_packs(ctx, batch_config)
+        freeze = await _freeze_record(ctx, plan, batch_config)
+        guards = freeze_guards(
+            plan, freeze, lint_passed=lint_ok, budget_approved=plan.budget.within_cap
+        )
+        problems = [str(reason) for reason in guards.reasons.values()]
+        if problems or not lint_ok:
+            for problem in problems:
+                typer.secho(f"freeze guard failed: {problem}", fg=typer.colors.RED, err=True)
+            raise DomainError("batch freeze guards are not satisfied")
+        path = ctx.store_freeze(freeze.to_dict())
+        typer.echo(f"batch {plan.batch_id} frozen")
+        typer.echo(f"version matrix hash: {freeze.version_matrix_hash}")
+        typer.echo(f"freeze record: {path}")
+        return EXIT_SUCCESS
+
+
+def _lint_packs(ctx: AppContext, batch_config: Any) -> bool:
+    """Lint every pack of the batch; print issues, return the aggregate verdict."""
+    ok = True
+    for pack in ctx.discover_task_packs(batch_config):
+        report = lint_task_pack_dir(pack.root)
+        for issue in report.issues:
+            if issue.severity == "error":
+                ok = False
+                typer.secho(f"error  {report.task_id}: {issue}", fg=typer.colors.RED, err=True)
+    return ok
+
+
+async def _freeze_record(ctx: AppContext, plan: Any, batch_config: Any) -> Any:
+    """The freeze record of a plan: versions, digests and profiles of its inputs."""
+    from datetime import UTC, datetime
+
+    registry = ctx.provider_registry()
+    runner_classes = ctx.runner_classes()
+    shells = {cell.model.shell for cell in plan.runnable_cells}
+    try:
+        gateway_version = await ctx.gateway_admin().version()
+    except Exception:
+        gateway_version = "unavailable"
+    instances = sorted(
+        {
+            instance
+            for cell in plan.cells
+            for instance in (*cell.match.agent.candidates, *cell.match.verifier.candidates)
+        }
+    )
+    real_profiles = {instance: registry.isolation_profile(instance) for instance in instances}
+    digests = {
+        cell.task.template.ref: {instance: cell.task.template.digest for instance in instances}
+        for cell in plan.runnable_cells
+    }
+    return build_freeze_record(
+        plan,
+        gateway_version=gateway_version,
+        price_table_version=batch_config.pricing_table,
+        runner_versions={
+            shell: getattr(runner_classes.get(shell), "version", "unknown") for shell in shells
+        },
+        template_digests=digests,
+        isolation_profiles=real_profiles,
+        frozen_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+
+
+@batch_app.command("run")
+def batch_run(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    batch: Path = _BATCH_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """Run a frozen batch end to end and print the aggregate report."""
+    _run(
+        _batch_run(
+            models,
+            providers,
+            batch,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+        )
+    )
+
+
+async def _batch_run(
+    models: Path,
+    providers: Path,
+    batch: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+) -> int:
+    settings = _settings(
+        models, providers, batch, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        _check_account_urls(ctx)
+        batch_config = ctx.load_batch_config()
+        plan = await ctx.build_plan(batch_config)
+        gateway_url = ctx.gateway_data_url()
+        lint_ok = _lint_packs(ctx, batch_config)
+        freeze = await _freeze_record(ctx, plan, batch_config)
+        scheduler = await ctx.build_scheduler()
+        for warning in ctx.preflight_warnings:
+            typer.secho(f"warning: {warning}", fg=typer.colors.YELLOW, err=True)
+        if ctx.preflight_bridges:
+            typer.secho(
+                "warning: S5 isolation probes waived for "
+                + ", ".join(ctx.preflight_bridges)
+                + " (the adapters ship prose probe descriptions; see the report)",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+        runner = ctx.make_trial_runner(
+            gateway_url=gateway_url,
+            judges=await ctx.build_judges(batch_config, gateway_url),
+            target_family=(await ctx.model_registry.resolve(batch_config.models[0])).family,
+        )
+        judges_note = ", ".join(sorted(batch_config.judges))
+        if judges_note:
+            typer.echo(f"judge panel: {judges_note}")
+        registry = ctx.provider_registry()
+        profiles = {name: registry.isolation_profile(name) for name in registry.sandbox_instances()}
+        driver = BatchDriver(
+            plan=plan,
+            freeze=freeze,
+            executor=runner,
+            scheduler=scheduler,
+            leases=ctx.lease_manager(),
+            trials=ctx.trials,
+            grades=ctx.grades,
+            events=ctx.events,
+            endpoint_states=StoredEndpointStates(ctx.endpoints),
+            isolation_profiles=profiles,
+        )
+        endpoint_ids = sorted({cell.model.endpoint_id for cell in plan.runnable_cells})
+        manager = ctx.endpoint_manager()
+        if batch_config.endpoint_policy.warm_before_run:
+            warm = await manager.warm(endpoint_ids, 1)
+            for endpoint_id, warm_result in sorted(warm.items()):
+                typer.echo(f"warm {endpoint_id}: {warm_result.state.value}")
+        run_result: BatchRunResult | None = None
+        try:
+            driver.freeze(lint_passed=lint_ok, budget_approved=plan.budget.within_cap)
+            run_result = await driver.run()
+        finally:
+            if batch_config.endpoint_policy.retire_after:
+                policy = cast("TeardownMode", batch_config.endpoint_policy.retire_after)
+                for endpoint_id in endpoint_ids:
+                    try:
+                        handle = await manager.retire(endpoint_id, policy)
+                        typer.echo(f"retire {endpoint_id}: {handle.state.value}")
+                    except SpleefError as exc:
+                        typer.secho(
+                            f"warning: retire {endpoint_id} failed: {exc.message}",
+                            fg=typer.colors.YELLOW,
+                            err=True,
+                        )
+        ctx.store_freeze(freeze.to_dict())
+        assert run_result is not None  # set by driver.run() above
+        typer.echo("")
+        typer.echo(run_result.report.to_markdown())
+        for alert in run_result.alerts:
+            typer.secho(f"scheduler alert: {alert}", fg=typer.colors.YELLOW, err=True)
+        return EXIT_SUCCESS
+
+
+@batch_app.command("report")
+def batch_report(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    batch: Path = _BATCH_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    as_json: bool = _JSON_OPT,
+) -> None:
+    """Aggregate the stored trial results into the batch report."""
+    _run(
+        _batch_report(
+            models,
+            providers,
+            batch,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            as_json,
+        )
+    )
+
+
+async def _batch_report(
+    models: Path,
+    providers: Path,
+    batch: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    as_json: bool,
+) -> int:
+    from datetime import UTC, datetime
+
+    settings = _settings(
+        models, providers, batch, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        batch_config = ctx.load_batch_config()
+        batch_id = batch_config.batch
+        results: list[TrialResult] = []
+        for row in await ctx.trials.list_by_batch(batch_id):
+            grade_rows = await ctx.grades.list_by_trial(row.trial_id)
+            record: Mapping[str, Any] = {
+                "trial_id": row.trial_id,
+                "state": row.state,
+                "validity": row.validity,
+                "grades": [dict(grade.payload) for grade in grade_rows],
+            }
+            results.append(TrialResult.from_record(record))
+        try:
+            plan = await ctx.build_plan(batch_config)
+            skips = plan.skips()
+        except (CliError, SpleefError):
+            skips = {}
+        report = BatchReport(
+            batch_id=batch_id,
+            trials=tuple(results),
+            skips=skips,
+            generated_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        if as_json:
+            _emit_json(report.to_dict())
+        else:
+            typer.echo(report.to_markdown())
+        return EXIT_SUCCESS
+
+
+# -- gateway ----------------------------------------------------------------------
+
+
+@gateway_app.command(
+    "serve",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def gateway_serve(ctx: typer.Context) -> None:
+    """Run the model gateway (delegates to the spleef-gateway console script)."""
+    if shutil.which("spleef-gateway") is None:
+        typer.secho(
+            "error: the 'spleef-gateway' executable is not on PATH",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(EXIT_USAGE)
+    os.execvpe("spleef-gateway", ["spleef-gateway", *ctx.args], os.environ)
+
+
+# -- entry point ------------------------------------------------------------------
+
+
+def main() -> None:
+    app()
+
+
+if __name__ == "__main__":
+    main()
