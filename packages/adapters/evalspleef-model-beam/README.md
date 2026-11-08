@@ -75,6 +75,17 @@ may set `fetch_image`, `fetch_poll_s`, `rest_base`). Without a Volume a non-publ
 token is resolved from `source.token_ref` and passed to the GPU Pod as `HF_TOKEN`; it is masked
 in the recorded request.
 
+## Multi-GPU layouts
+
+`gpu_count` goes up to 8 (one container). Without explicit sizes the adapter adds `--tp-size
+<gpu_count>`. A preset may set the layout itself with `--tp-size`, `--pp-size`, `--dp-size`,
+`--ep-size` and `--enable-dp-attention`; `validate` and `plan` refuse it before any GPU is billed
+unless tp x pp x dp equals the GPU count (with DP attention: tp x pp equals it and dp divides tp)
+and ep divides tp. People choose layouts; the adapter only checks that they fit. `validate` also
+reads the workspace and refuses a multi-GPU launch when the workspace has multi-GPU containers
+disabled or allows fewer GPUs than requested. On 2026-11-08 the workspace used here refused a
+2-GPU container, so multi-GPU layouts are **not verified on a real host**.
+
 ## Verification
 
 `tests/` and the `beam-pod-fake` conformance target run against fakes: an in-memory gateway REST

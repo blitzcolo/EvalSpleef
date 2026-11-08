@@ -15,7 +15,7 @@ presets:
     engine_image: lmsysorg/sglang:latest@sha256:f832b5c39559c9caa900b22ad37c76fcce66470676855c42052102c537812f1f
     engine_args: [--reasoning-parser, qwen3, --tool-call-parser, qwen3_coder,
                   --mem-fraction-static, "0.88", --chunked-prefill-size, "2048"]
-    context_length: 32768
+    context_length: 65536
     max_concurrency: 2
     deployment_params: {cpu: 8, memory: 48Gi, weights_volume: huggingface_models,
                         hf_token_secret: HUGGINGFACE_TOKEN}
@@ -32,3 +32,34 @@ presets:
       - {date: 2026-11-08, result: failed, summary: "--mem-fraction-static 0.80: max_num_reqs=0, engine refused to start"}
       - {date: 2026-11-08, result: partial, summary: "0.88 without chunked prefill: served, but a 16.5K-token prompt ran out of GPU memory"}
       - {date: 2026-11-08, result: ok, summary: "0.88 + chunked prefill 2048, weights from the Volume: ready in 161 s, chat in 6.8 s"}
+      - date: 2026-11-08
+        result: ok
+        summary: >-
+          Context 262144: KV pool 75,515 tokens, at most 2 running requests (Gated DeltaNet state
+          cache, 12 slots). c=1 served 18K-72K-token prompts (2.5-13.9 s, needle found); 84K was
+          refused with HTTP 400, no OOM. c=2 ran 46K and 69K in total concurrently; 93K in total was
+          queued and run one after the other. c=3 always ran 2 and queued 1. No OOM in any case.
+
+  - id: qwen3.8-27b-uncensored-nvfp4/beam-rtx5090x2/sglang-tp2
+    model: orcarouter/Qwen3.8-27B-Uncensored-NVFP4
+    revision: d350e02d82203d5bf07a1e203c997581f235f407
+    adapter: beam-pod
+    hardware: {provider: beam, gpu: RTX5090, gpu_count: 2, vram_gb_per_gpu: 32}
+    engine: sglang
+    engine_image: lmsysorg/sglang:latest@sha256:f832b5c39559c9caa900b22ad37c76fcce66470676855c42052102c537812f1f
+    engine_args: [--reasoning-parser, qwen3, --tool-call-parser, qwen3_coder,
+                  --mem-fraction-static, "0.88", --chunked-prefill-size, "2048", --tp-size, "2"]
+    context_length: 262144
+    max_concurrency: 4
+    deployment_params: {cpu: 16, memory: 60Gi, weights_volume: huggingface_models,
+                        hf_token_secret: HUGGINGFACE_TOKEN}
+    facts:
+      weights_gib: 23.02
+      native_context: 262144
+      kv_tokens_estimated: 850000
+    notes: >-
+      Estimate from the one-GPU run, not measured: about 850K KV tokens in total (2 x 27.6 GB pool,
+      22.7 GB weights, about 2.6 GB overhead per GPU, 32 KB per token). One request stays at the
+      native 262,144 tokens. The RTX 5090 has no NVLink, so the TP all-reduce crosses PCIe.
+    verified:
+      - {date: 2026-11-08, result: failed, summary: "Beam refused: multi-GPU containers are not enabled for this workspace"}
