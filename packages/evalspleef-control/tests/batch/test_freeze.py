@@ -33,6 +33,9 @@ CHANGES: dict[str, Callable[[Any], dict[str, Any]]] = {
         }
     },
     "task_versions": lambda h: {"tasks": [replace(t, version="1.1.0") for t in h.tasks]},
+    "judges": lambda h: {
+        "judges": {"judge-a": {"spec_version": 2, "endpoint_id": "ep_judge-a_1", "family": "f"}}
+    },
 }
 
 

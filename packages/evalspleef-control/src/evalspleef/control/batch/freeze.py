@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from evalspleef.spi.isolation import IsolationProfile
@@ -29,6 +29,7 @@ _MATRIX_FIELDS = (
     "runner_versions",
     "isolation_profiles",
     "task_versions",
+    "judges",
 )
 
 
@@ -69,6 +70,8 @@ class FreezeRecord:
     isolation_profiles: Mapping[str, Mapping[str, Any]]
     """Provider instance -> :func:`profile_summary`."""
     task_versions: Mapping[str, str]
+    judges: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    """Judge model slug -> spec version, endpoint id, family and weights revision."""
     frozen_at: str = ""
 
     def matrix(self) -> dict[str, Any]:
@@ -104,6 +107,7 @@ def build_freeze_record(
     runner_versions: Mapping[str, str],
     template_digests: Mapping[str, Mapping[str, str]],
     isolation_profiles: Mapping[str, IsolationProfile],
+    judges: Mapping[str, Mapping[str, Any]] | None = None,
     frozen_at: str = "",
 ) -> FreezeRecord:
     """Freeze the inputs of the runnable cells of ``plan``.
@@ -141,5 +145,6 @@ def build_freeze_record(
             if instance in isolation_profiles
         },
         task_versions={cell.task.task_id: cell.task.version for cell in cells},
+        judges={slug: dict(judge) for slug, judge in (judges or {}).items()},
         frozen_at=frozen_at,
     )

@@ -1302,6 +1302,16 @@ async def _freeze_record(ctx: AppContext, plan: Any, batch_config: Any) -> Any:
         cell.task.template.ref: {instance: cell.task.template.digest for instance in instances}
         for cell in plan.runnable_cells
     }
+    judges: dict[str, dict[str, Any]] = {}
+    for slug in batch_config.judges:
+        spec = await ctx.model_registry.resolve(slug)
+        source = spec.source
+        judges[slug] = {
+            "spec_version": spec.spec_version,
+            "endpoint_id": make_endpoint_id(spec),
+            "family": spec.family,
+            "revision": getattr(source, "revision", None),
+        }
     return build_freeze_record(
         plan,
         gateway_version=gateway_version,
@@ -1311,6 +1321,7 @@ async def _freeze_record(ctx: AppContext, plan: Any, batch_config: Any) -> Any:
         },
         template_digests=digests,
         isolation_profiles=real_profiles,
+        judges=judges,
         frozen_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
 
