@@ -1396,13 +1396,15 @@ async def _batch_run(
         )
         endpoint_ids = sorted({cell.model.endpoint_id for cell in plan.runnable_cells})
         manager = ctx.endpoint_manager()
+        # The freeze guards run before any endpoint is warmed or retired: a batch that may
+        # not start leaves its endpoints as they were, so it can be fixed and rerun.
+        driver.freeze(lint_passed=lint_ok, budget_approved=plan.budget.within_cap)
         if batch_config.endpoint_policy.warm_before_run:
             warm = await manager.warm(endpoint_ids, 1)
             for endpoint_id, warm_result in sorted(warm.items()):
                 typer.echo(f"warm {endpoint_id}: {warm_result.state.value}")
         run_result: BatchRunResult | None = None
         try:
-            driver.freeze(lint_passed=lint_ok, budget_approved=plan.budget.within_cap)
             run_result = await driver.run()
         finally:
             if batch_config.endpoint_policy.retire_after:

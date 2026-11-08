@@ -48,6 +48,28 @@ def test_freeze_stores_record(cli_runner: CliRunner, args: list[str], env: Path)
     assert (Path(env).parent / "state" / "freezes" / "2026-11-b1.json").is_file()
 
 
+def test_failed_freeze_neither_warms_nor_retires(
+    cli_runner: CliRunner, args: list[str], env: Path
+) -> None:
+    assert cli_runner.invoke(app, ["models", "register", "--model", "demo", *args]).exit_code == 0
+    assert cli_runner.invoke(app, ["models", "probe", "--model", "demo", *args]).exit_code == 0
+    batch = env / "batch.yaml"
+    batch.write_text(
+        batch.read_text(encoding="utf-8").replace("max_total_usd: 100", "max_total_usd: 0.0001"),
+        encoding="utf-8",
+    )
+
+    run = cli_runner.invoke(app, ["batch", "run", *_batch_args(env, args)])
+
+    assert run.exit_code != 0
+    assert "warm " not in run.output and "retire " not in run.output
+    listed = cli_runner.invoke(app, ["models", "list", "--json", *args])
+    assert listed.exit_code == 0, listed.output
+    assert [(row["state"], row["retired_at"]) for row in json.loads(listed.output)] == [
+        ("ready", None)
+    ]
+
+
 def test_batch_run_and_report(
     cli_runner: CliRunner, args: list[str], env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
