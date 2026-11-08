@@ -60,6 +60,7 @@ async def test_logic001_reference_passes_all_gates(pack_factory, make_trial_ctx,
     assert verdicts["R1"] == "pass"
     assert verdicts["R2"] == "pass"
     assert verdicts["R4"] == "pass"
+    assert all(verdicts[item] == "pass" for item in ("R3", "R5", "R11", "R12"))
     artifacts = {a.path for a in result.artifacts}
     assert "answer.json" in artifacts and "instances.json" in artifacts
 
@@ -80,6 +81,7 @@ async def test_logic001_empty_fails_expected_items(pack_factory, make_trial_ctx,
     assert verdicts["R1"] == "fail"
     assert verdicts["R2"] == "fail"
     assert verdicts["R4"] == "pass"
+    assert verdicts["R3"] == "fail" and verdicts["R12"] == "fail"  # answer.json missing
 
 
 async def test_logic001_tampered_locked_input_is_a_cheat_signal(
@@ -134,6 +136,7 @@ async def test_data001_reference_passes_all_gates(pack_factory, make_trial_ctx, 
     verdicts = {item.item_id: item.verdict for item in result.rubric}
     assert verdicts["R1"] == "pass"
     assert verdicts["R2"] == "pass"
+    assert verdicts["R3"] == "pass" and verdicts["R12"] == "pass"
 
 
 async def test_data001_empty_fails_expected_items(pack_factory, make_trial_ctx, tmp_path) -> None:
@@ -149,6 +152,7 @@ async def test_data001_empty_fails_expected_items(pack_factory, make_trial_ctx, 
     verdicts = {item.item_id: item.verdict for item in result.rubric}
     assert verdicts["R1"] == "fail"
     assert verdicts["R2"] == "fail"
+    assert verdicts["R3"] == "fail"  # required clean_logs.py missing from the export
 
 
 async def test_data001_tampered_locked_input_is_a_cheat_signal(

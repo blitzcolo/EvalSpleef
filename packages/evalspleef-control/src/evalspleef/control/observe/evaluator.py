@@ -32,6 +32,7 @@ from ..batch.executor import LeaseHandle
 from ..taskpack.models import TaskPack
 from ..trial.types import CheatSignal, EvaluationResult, RubricItemResult, TrialContext
 from .artifacts import (
+    REASON_MISSING,
     ExportCaps,
     WorkspaceExport,
     artifact_decls,
@@ -145,7 +146,8 @@ class Evaluator:
         output = await self._verify(verifier, pack, export)
 
         locks = await self._hash_locks(pack, export)
-        rubric = list(map_script_items(pack, output.gates))
+        missing = [issue.path for issue in export.issues if issue.reason == REASON_MISSING]
+        rubric = list(map_script_items(pack, output.gates, missing_artifacts=missing))
         judge_run, judge_manual = await self._judge(ctx, pack, export, rubric)
         self._cover_remaining_items(pack, rubric)
 

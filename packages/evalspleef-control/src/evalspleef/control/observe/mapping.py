@@ -36,8 +36,21 @@ A check id gets a *passed* signal when none of the failure rules fired and:
 - its matching JSON boolean keys are all ``true``; or
 - its named hard gate passed.
 
+- it is a **violation code** (final segment ``UPPER_SNAKE`` with an underscore, such
+  as ``checker.RULE_NOT_SELF_CONSISTENT``) that appears nowhere, and the pack's
+  checker ran to completion: a gate run that did not time out emitted a JSON report
+  carrying a violation list (a list under ``violations`` or ``*_violations``). Such
+  codes exist only on failure, so their absence from a completed check is the pass.
+
+A violation code with no signal at all is a *fail* when a ``required`` artifact of
+task.yaml is missing from the export: the checker had nothing to inspect, and the
+item's pass criteria presuppose that artifact.
+
 Conflicting signals on one id (a ``true`` boolean but a failed named gate) are
 *undecidable*: the id contributes no pass.
+
+Detect blocks come from ``defects.yaml``; a rubric item that has no catalog entry
+may carry its own ``detect`` block in ``rubric.yaml`` (rubric schema field).
 
 Item verdict (``kind: script`` rubric items):
 
@@ -68,6 +81,7 @@ __all__ = ["CatalogDetect", "check_id_signal", "load_catalog_detects", "map_scri
 _FAIL_LINE = re.compile(r"^(FAIL|ERROR):", re.IGNORECASE)
 _PASS_LINE = re.compile(r"^ok\b")
 _FAIL_PROGRESS = re.compile(r"\s\.\.\.\s(FAIL|ERROR)$", re.IGNORECASE)
+_VIOLATION_CODE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
 _PASS_PROGRESS = re.compile(r"\s\.\.\.\sok$", re.IGNORECASE)
 
 CheckSignal = Literal["fail", "pass", "undecidable"]
@@ -86,21 +100,31 @@ class CatalogDetect:
     check_ids: tuple[str, ...]
 
 
-def load_catalog_detects(pack: TaskPack) -> dict[str, CatalogDetect]:
-    """Parse ``defects.yaml`` for per-item detect blocks (the loader keeps only the rubric view)."""
-    document = yaml.safe_load(pack.file("defects.yaml").read_text(encoding="utf-8"))
-    detects: dict[str, CatalogDetect] = {}
+def _detect_entries(pack: TaskPack, name: str, id_key: str) -> list[tuple[str, object]]:
+    """``(item id, detect block)`` pairs from one pack YAML document's ``items`` list."""
+    document = yaml.safe_load(pack.file(name).read_text(encoding="utf-8"))
     if not isinstance(document, Mapping):
-        return detects
+        return []
     items = document.get("items")
     if not isinstance(items, list):
-        return detects
-    for entry in items:
-        if not isinstance(entry, Mapping):
-            continue
-        item_id = str(entry.get("rubric_item_id", ""))
-        detect = entry.get("detect")
-        if not item_id or not isinstance(detect, Mapping):
+        return []
+    return [
+        (str(entry.get(id_key, "")), entry.get("detect"))
+        for entry in items
+        if isinstance(entry, Mapping)
+    ]
+
+
+def load_catalog_detects(pack: TaskPack) -> dict[str, CatalogDetect]:
+    """Per-item detect blocks: ``defects.yaml`` first, then ``rubric.yaml`` for items the
+    catalog does not list (the loader keeps only the rubric view, so both are re-read)."""
+    detects: dict[str, CatalogDetect] = {}
+    entries = [
+        *_detect_entries(pack, "defects.yaml", "rubric_item_id"),
+        *_detect_entries(pack, "rubric.yaml", "id"),
+    ]
+    for item_id, detect in entries:
+        if not item_id or not isinstance(detect, Mapping) or item_id in detects:
             continue
         raw_ids = detect.get("check_ids")
         check_ids = tuple(str(cid) for cid in raw_ids) if isinstance(raw_ids, list) else ()
@@ -150,6 +174,19 @@ def _collect_report_signals(
 
     visit(blob, None)
     return booleans, codes
+
+
+def _has_violation_list(value: object) -> bool:
+    """Whether a report carries a checker violation list (``violations``/``*_violations``)."""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            named = str(key) == "violations" or str(key).endswith("_violations")
+            if (named and isinstance(item, list)) or _has_violation_list(item):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_has_violation_list(item) for item in value)
+    return False
 
 
 def _named_gate(check_id: str, gate_ids: Mapping[str, bool]) -> str | None:
@@ -215,6 +252,8 @@ def check_id_signal(
     gate_passed: Mapping[str, bool],
     lines: Sequence[str],
     reports: Sequence[tuple[dict[str, list[bool]], set[str]]],
+    checker_completed: bool = False,
+    artifact_missing: bool = False,
 ) -> CheckSignal:
     """The combined signal for one check id; see the module docstring for the rules."""
     named = _named_gate(check_id, gate_passed)
@@ -225,6 +264,11 @@ def check_id_signal(
         return _SIGNAL_FAIL
     if named is None:
         if not signals:
+            if _VIOLATION_CODE.match(check_id.rsplit(".", 1)[-1]):
+                if artifact_missing:
+                    return _SIGNAL_FAIL
+                if checker_completed:
+                    return _SIGNAL_PASS
             return _SIGNAL_UNDECIDABLE
         return (
             _SIGNAL_PASS
@@ -253,9 +297,12 @@ def _verdict(signals: Sequence[CheckSignal]) -> RubricVerdict:
 def map_script_items(
     pack: TaskPack,
     runs: Sequence[GateRun],
+    *,
+    missing_artifacts: Sequence[str] = (),
 ) -> tuple[RubricItemResult, ...]:
     """Derive script-kind rubric results from the gate runs.
 
+    ``missing_artifacts`` lists required task.yaml artifacts absent from the export.
     Returns one result per script-kind rubric item; ``llm_judge`` items are the judge
     step's business and are not included here.
     """
@@ -264,6 +311,12 @@ def map_script_items(
     texts = [run.output for run in runs]
     lines = [line for text in texts for line in text.splitlines()]
     reports = [_collect_report_signals(blob) for text in texts for blob in _json_blobs(text)]
+    checker_completed = any(
+        _has_violation_list(blob)
+        for run in runs
+        if not run.timed_out
+        for blob in _json_blobs(run.output)
+    )
 
     results: list[RubricItemResult] = []
     for item in pack.rubric.items:
@@ -279,11 +332,22 @@ def map_script_items(
                 gate_passed=gate_passed,
                 lines=lines,
                 reports=reports,
+                checker_completed=checker_completed,
+                artifact_missing=bool(missing_artifacts),
             )
             for check_id in detect.check_ids
         ]
         verdict = _verdict(signals)
         evidence = tuple(_evidence(run) for run in runs if run.gate.gate_id in detect.check_ids)
+        if verdict == "fail" and missing_artifacts:
+            evidence += tuple(
+                Evidence(
+                    kind=EvidenceKind.OTHER,
+                    uri=f"artifact://{path}",
+                    excerpt="required artifact missing",
+                )
+                for path in missing_artifacts
+            )
         results.append(RubricItemResult(item.id, verdict, evidence=evidence))
     return tuple(results)
 

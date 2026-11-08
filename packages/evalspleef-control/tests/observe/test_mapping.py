@@ -37,8 +37,9 @@ def _runs_from_shared_report(pack: TaskPack, fixture: dict[str, object]) -> list
     return runs
 
 
-def _verdicts(pack: TaskPack, runs: list[GateRun]) -> dict[str, str]:
-    return {result.item_id: result.verdict for result in map_script_items(pack, runs)}
+def _verdicts(pack: TaskPack, runs: list[GateRun], missing: tuple[str, ...] = ()) -> dict[str, str]:
+    results = map_script_items(pack, runs, missing_artifacts=missing)
+    return {result.item_id: result.verdict for result in results}
 
 
 class TestLogic001:
@@ -49,22 +50,45 @@ class TestLogic001:
         assert verdicts["R1"] == "pass"  # verify_submission.HG2 gate passed
         assert verdicts["R2"] == "pass"  # verify_submission.HG1 gate passed
         assert verdicts["R4"] == "pass"  # verify_submission.HG3 gate passed
-        # code-only check ids with no violation in the report carry no signal:
-        # undecidable means inconclusive, never a silent pass
-        assert verdicts["R3"] == "inconclusive"
-        assert verdicts["R5"] == "inconclusive"
-        assert verdicts["R11"] == "inconclusive"
-        assert verdicts["R12"] == "inconclusive"
+        # fail-only violation codes absent from the checker's completed report pass
+        assert verdicts["R3"] == "pass"
+        assert verdicts["R5"] == "pass"
+        assert verdicts["R11"] == "pass"
+        assert verdicts["R12"] == "pass"
 
     def test_empty_answer_fails_expected_items(self, pack_factory, hmod) -> None:
         pack: TaskPack = pack_factory("logic-001")
         runs = _runs_from_shared_report(pack, hmod.load_fixture("logic-001.empty"))
-        verdicts = _verdicts(pack, runs)
+        verdicts = _verdicts(pack, runs, missing=("answer.json",))
         assert verdicts["R1"] == "fail"  # HG2_format_ok == false
         assert verdicts["R2"] == "fail"  # HG1_answer_correct == false
         assert verdicts["R4"] == "pass"  # the protected input was not touched
-        assert verdicts["R3"] == "inconclusive"
-        assert verdicts["R5"] == "inconclusive"
+        # the checker had no answer to inspect: code absence proves nothing, the
+        # missing required artifact fails the code-detected items
+        assert verdicts["R3"] == "fail"
+        assert verdicts["R5"] == "fail"
+        assert verdicts["R12"] == "fail"
+
+    def test_violation_code_present_fails_only_its_item(self, pack_factory, hmod) -> None:
+        pack: TaskPack = pack_factory("logic-001")
+        fixture = dict(hmod.load_fixture("logic-001.reference"))
+        report = json.loads(str(fixture["stdout"]))
+        report["HG2_format_ok"] = False
+        report["violations"] = [{"code": "DERIVATION_TOO_LONG", "detail": 412}]
+        fixture["stdout"] = json.dumps(report)
+        verdicts = _verdicts(pack, _runs_from_shared_report(pack, fixture))
+        assert verdicts["R11"] == "fail"
+        assert verdicts["R3"] == "pass"
+        assert verdicts["R12"] == "pass"
+
+    def test_timed_out_checker_does_not_vouch_for_absent_codes(self, pack_factory, hmod) -> None:
+        pack: TaskPack = pack_factory("logic-001")
+        runs = _runs_from_shared_report(pack, hmod.load_fixture("logic-001.reference"))
+        runs = [
+            GateRun(run.gate, run.passed, run.exit_code, run.stdout, run.stderr, True)
+            for run in runs
+        ]
+        assert _verdicts(pack, runs)["R3"] == "inconclusive"
 
     def test_wrong_answer_fails_via_violation_code(self, pack_factory, hmod) -> None:
         pack: TaskPack = pack_factory("logic-001")
@@ -92,19 +116,27 @@ class TestData001:
         assert verdicts["R2"] == "pass"
         assert verdicts["R9"] == "pass"  # HG3 integrity gate
         assert verdicts["R10"] == "pass"  # second HG1-backed item
-        assert verdicts["R3"] == "inconclusive"  # format codes absent from a clean run
-        assert verdicts["R4"] == "inconclusive"
-        assert verdicts["R5"] == "inconclusive"
+        assert verdicts["R3"] == "pass"  # format codes absent from a completed check
+        assert verdicts["R4"] == "pass"
+        assert verdicts["R5"] == "pass"
+        assert verdicts["R12"] == "pass"  # rubric.yaml detect block (checker.score gates)
 
     def test_empty(self, pack_factory, hmod) -> None:
         pack: TaskPack = pack_factory("data-001")
         runs = _runs_from_shared_report(pack, hmod.load_fixture("data-001.empty"))
-        verdicts = _verdicts(pack, runs)
+        verdicts = _verdicts(pack, runs, missing=("clean_logs.py",))
         assert verdicts["R1"] == "fail"
         assert verdicts["R2"] == "fail"
         assert verdicts["R9"] == "fail"  # submission missing -> integrity gate fails
         assert verdicts["R10"] == "fail"
-        assert verdicts["R3"] == "inconclusive"
+        assert verdicts["R3"] == "fail"  # required artifact missing
+        assert verdicts["R12"] == "fail"
+
+    def test_empty_without_artifact_record_stays_inconclusive(self, pack_factory, hmod) -> None:
+        # no violation list in the report: the checker never ran, nothing vouches
+        pack: TaskPack = pack_factory("data-001")
+        runs = _runs_from_shared_report(pack, hmod.load_fixture("data-001.empty"))
+        assert _verdicts(pack, runs)["R3"] == "inconclusive"
 
     def test_tampered_input(self, pack_factory, hmod) -> None:
         pack: TaskPack = pack_factory("data-001")
@@ -142,14 +174,18 @@ class TestDebug001:
         pack: TaskPack = pack_factory("debug-001")
         runs = _debug_runs(pack, "debug-001.reference", hmod)
         verdicts = _verdicts(pack, runs)
-        assert all(verdicts[item] == "pass" for item in ("R1", "R2", "R3", "R4", "R5", "R6"))
+        assert all(
+            verdicts[item] == "pass" for item in ("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8")
+        )
         assert verdicts["R9"] == "pass"  # check_locks gate passed
 
     def test_starter_fails_every_regression_item(self, pack_factory, hmod) -> None:
         pack: TaskPack = pack_factory("debug-001")
         runs = _debug_runs(pack, "debug-001.starter", hmod)
         verdicts = _verdicts(pack, runs)
-        assert all(verdicts[item] == "fail" for item in ("R1", "R2", "R3", "R4", "R5", "R6"))
+        assert all(
+            verdicts[item] == "fail" for item in ("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8")
+        )
         assert verdicts["R9"] == "pass"  # locks intact; the failure is real bugs
 
     def test_tampered_test_fails_and_flags_locks(self, pack_factory, hmod) -> None:
@@ -223,11 +259,39 @@ class TestSignalRules:
             == "undecidable"
         )
 
+    def test_absent_violation_code(self) -> None:
+        def signal(**flags: bool) -> str:
+            return check_id_signal(
+                "checker.COUNT_TYPE", gate_passed={}, lines=[], reports=[({}, set())], **flags
+            )
+
+        assert signal() == "undecidable"  # no completed checker report
+        assert signal(checker_completed=True) == "pass"
+        assert signal(checker_completed=True, artifact_missing=True) == "fail"
+        # a non-code id never gets the absence pass
+        assert (
+            check_id_signal(
+                "checker.score", gate_passed={}, lines=[], reports=[], checker_completed=True
+            )
+            == "undecidable"
+        )
+
     def test_catalog_parsing(self, pack_factory) -> None:
         pack: TaskPack = pack_factory("logic-001")
         detects = load_catalog_detects(pack)
         assert detects["R1"].check_ids == ("verify_submission.HG2", "checker.NOT_PURE_JSON")
         assert detects["R6"].source == "llm_judge"
+
+    def test_rubric_detect_fills_catalog_gaps(self, pack_factory) -> None:
+        data: TaskPack = pack_factory("data-001")
+        assert load_catalog_detects(data)["R12"].check_ids == (
+            "verify_submission.HG1",
+            "verify_submission.HG2",
+        )
+        debug: TaskPack = pack_factory("debug-001")
+        detects = load_catalog_detects(debug)
+        assert detects["R7"].check_ids == ("TestExport", "HG1")
+        assert detects["R1"].check_ids == ("TestMoney", "HG1")  # catalog entry kept
 
     def test_llm_judge_items_are_not_script_mapped(self, pack_factory, hmod) -> None:
         pack: TaskPack = pack_factory("logic-001")
