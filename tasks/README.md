@@ -31,5 +31,5 @@
 
 1. 先读该题 `instruction.md` 与 `notes.md`（含构建/运行/验收命令、已知局限、`TODO(run-on-host)` 位置）。
 2. 本地自检（在仓库根目录执行）：`bash tasks/<task-id>/hidden-tests/run.sh --selftest`（若支持）；没有 selftest 的题默认跑候选工程。自检会写临时文件，建议先把题包复制到临时目录再跑。
-3. 真实评测：按 [docs/07-harness-mapping.md](../docs/07-harness-mapping.md) 把题包映射为 Harbor task；隐藏测试与参考解只放验证侧，不得进入 Agent 镜像或 workspace。
+3. 真实评测：在 `batch.yaml` 的 `tasks.include` 里列出题包，按 `spleef batch plan` → `freeze` → `run` → `report` 运行（命令与配置见根目录 `README.md` 与 `config/examples/`）。控制面在验证侧沙箱里跑 `hidden-tests/`，隐藏测试与参考解不得进入 Agent 镜像或 workspace。Harbor 只是可选执行后端（`evalspleef-harbor-bridge`），不再需要手工映射。
 4. 新增题包：按 [docs/05-task-library.md](../docs/05-task-library.md) 的出题流水线，最后跑 `python3 scripts/check_repo.py` 与 `uv run --frozen --no-sync python scripts/validate_schemas.py`。
