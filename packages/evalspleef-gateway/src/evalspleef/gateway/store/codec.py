@@ -15,7 +15,7 @@ KEY_COLUMNS = (
 
 USAGE_COLUMNS = (
     "ts, trial_id, round, endpoint_id, upstream_model, input_tokens, output_tokens, "
-    "cached_tokens, reasoning_tokens, latency_ms, status_code, cold_start_ms, cost_usd"
+    "cached_tokens, reasoning_tokens, latency_ms, status_code, cold_start_ms, cost_usd, error_code"
 )
 
 
@@ -79,6 +79,7 @@ def usage_params(record: UsageRecord) -> tuple[Any, ...]:
         record.status_code,
         record.cold_start_ms,
         record.cost_usd,
+        record.error_code,
     )
 
 
@@ -97,4 +98,5 @@ def usage_from_row(row: Any) -> UsageRecord:
         status_code=int(row[10]),
         cold_start_ms=int(row[11]),
         cost_usd=float(row[12]),
+        error_code=row[13],
     )

@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS usage (
     latency_ms BIGINT NOT NULL,
     status_code BIGINT NOT NULL,
     cold_start_ms BIGINT NOT NULL,
-    cost_usd DOUBLE PRECISION NOT NULL
+    cost_usd DOUBLE PRECISION NOT NULL,
+    error_code TEXT
 );
 CREATE INDEX IF NOT EXISTS usage_trial_idx ON usage (trial_id, seq);
 """
@@ -64,6 +65,7 @@ class PostgresStore(KeyStore, UsageStore):
         connection = await psycopg.AsyncConnection.connect(url, autocommit=True)
         async with connection.cursor() as cursor:
             await cursor.execute(_SCHEMA)
+            await cursor.execute("ALTER TABLE usage ADD COLUMN IF NOT EXISTS error_code TEXT")
         return cls(connection)
 
     async def close(self) -> None:

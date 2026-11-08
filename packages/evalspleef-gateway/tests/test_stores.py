@@ -189,3 +189,29 @@ async def _create_database(admin_dsn: str, database: str) -> None:
             await cursor.execute(f'CREATE DATABASE "{database}"')
     finally:
         await connection.close()
+
+
+async def test_a_store_written_before_error_codes_gains_the_column(tmp_path: Path) -> None:
+    import sqlite3
+
+    from evalspleef.gateway.store.sqlite import SqliteStore
+    from evalspleef.spi.gateway import UsageRecord
+
+    path = tmp_path / "old.sqlite3"
+    old = sqlite3.connect(path)
+    old.execute(
+        "CREATE TABLE usage (seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, "
+        "trial_id TEXT NOT NULL, round INTEGER NOT NULL, endpoint_id TEXT NOT NULL, "
+        "upstream_model TEXT NOT NULL, input_tokens INTEGER NOT NULL, "
+        "output_tokens INTEGER NOT NULL, cached_tokens INTEGER NOT NULL, "
+        "reasoning_tokens INTEGER NOT NULL, latency_ms INTEGER NOT NULL, "
+        "status_code INTEGER NOT NULL, cold_start_ms INTEGER NOT NULL, cost_usd REAL NOT NULL)"
+    )
+    old.commit()
+    old.close()
+    store = SqliteStore(str(path))
+    record = UsageRecord(
+        "t", "trial-1", 1, "ep", "m", 0, 0, 0, 0, 0, 502, 0, 0.0, "endpoint_mismatch"
+    )
+    await store.append(record)
+    assert await store.for_trial("trial-1") == [record]

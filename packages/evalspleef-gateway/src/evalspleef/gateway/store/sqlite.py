@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS usage (
     latency_ms INTEGER NOT NULL,
     status_code INTEGER NOT NULL,
     cold_start_ms INTEGER NOT NULL,
-    cost_usd REAL NOT NULL
+    cost_usd REAL NOT NULL,
+    error_code TEXT
 );
 CREATE INDEX IF NOT EXISTS usage_trial_idx ON usage (trial_id, seq);
 """
@@ -62,6 +63,9 @@ class SqliteStore(KeyStore, UsageStore):
     def __init__(self, path: str) -> None:
         self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.executescript(_SCHEMA)
+        columns = {row[1] for row in self._connection.execute("PRAGMA table_info(usage)")}
+        if "error_code" not in columns:  # a store written before the column existed
+            self._connection.execute("ALTER TABLE usage ADD COLUMN error_code TEXT")
         self._connection.commit()
         self._lock = threading.Lock()
 

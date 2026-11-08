@@ -128,6 +128,35 @@ class InMemoryGatewayAdmin(GatewayAdmin):
         secret = self._secrets_by_key_id.get(key_id)
         return secret is not None and secret in self._revoked
 
+    def record_refusal(
+        self,
+        *,
+        trial_id: str,
+        round: int,
+        endpoint_id: str,
+        error_code: str,
+        status_code: int = 502,
+    ) -> UsageRecord:
+        """Append the uncharged usage record of a request the gateway refused (``error_code``)."""
+        record = UsageRecord(
+            ts=_format_instant(self._clock.now()),
+            trial_id=trial_id,
+            round=round,
+            endpoint_id=endpoint_id,
+            upstream_model="",
+            input_tokens=0,
+            output_tokens=0,
+            cached_tokens=0,
+            reasoning_tokens=0,
+            latency_ms=0,
+            status_code=status_code,
+            cold_start_ms=0,
+            cost_usd=0.0,
+            error_code=error_code,
+        )
+        self._usage.append(record)
+        return record
+
     def record_usage(
         self,
         *,

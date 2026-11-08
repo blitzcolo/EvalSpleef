@@ -9,6 +9,8 @@ from typing import Literal
 from .model import UpstreamRoute
 
 COST_CAP = "cost_cap"
+ENDPOINT_MISMATCH = "endpoint_mismatch"
+"""Usage error code: the upstream answered as a vendor the route's provider lock refuses."""
 TOKEN_CAP = "token_cap"
 """HTTP 429 error.code values returned when a trial key exceeds its budget."""
 
@@ -57,6 +59,8 @@ class UsageRecord:
     status_code: int
     cold_start_ms: int
     cost_usd: float
+    error_code: str | None = None
+    """Why the gateway refused or failed the request (for example ``endpoint_mismatch``)."""
 
 
 class GatewayAdmin(ABC):

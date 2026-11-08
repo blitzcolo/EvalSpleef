@@ -55,8 +55,8 @@ from evalspleef.core.state import (
     record_grade,
 )
 from evalspleef.core.versions import TrialVersions
-from evalspleef.spi.errors import SpleefError
-from evalspleef.spi.gateway import GatewayAdmin, TrialKey
+from evalspleef.spi.errors import EndpointMismatch, SpleefError
+from evalspleef.spi.gateway import ENDPOINT_MISMATCH, GatewayAdmin, TrialKey
 from evalspleef.spi.runner import AgentRunner, RunnerBudget, ShellTurn, StopReason, TokenUsage
 
 from ..batch.executor import LeaseHandle, PlannedTrial, TrialExecutor, TrialLeases, TrialOutcome
@@ -423,6 +423,7 @@ class _TrialRun:
             )
             self.transcript.append(f"user: {message}")
             turn, elapsed = await self._send(message)
+            await self._check_vendor_lock()
             if turn.stop_reason is StopReason.CRASH:
                 self._account(turn, elapsed, count_round=False)
                 await self._step_event(turn, counted=False)
@@ -526,6 +527,20 @@ class _TrialRun:
             job.cancel()
             timer.cancel()
             await asyncio.gather(job, timer, return_exceptions=True)
+
+    async def _check_vendor_lock(self) -> None:
+        """Void the trial when the gateway refused an answer for its provider lock (FR-MOD-04).
+
+        Another vendor than the registered one served the model, so whatever the agent did
+        afterwards no longer measures that model.
+        """
+        records = await self.owner.gateway.usage(self.trial.trial_id)
+        refused = [record for record in records if record.error_code == ENDPOINT_MISMATCH]
+        if refused:
+            raise EndpointMismatch(
+                f"{len(refused)} upstream answer(s) came from a vendor the provider lock refuses",
+                detail={"reason": "provider_lock", "rounds": sorted({r.round for r in refused})},
+            )
 
     def _account(self, turn: ShellTurn, elapsed: float, *, count_round: bool) -> None:
         tokens = turn.usage.input_tokens + turn.usage.output_tokens

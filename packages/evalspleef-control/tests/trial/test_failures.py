@@ -36,6 +36,7 @@ from evalspleef.spi.errors import (
     SandboxCreateError,
     SandboxLost,
 )
+from evalspleef.spi.gateway import ENDPOINT_MISMATCH
 from evalspleef.spi.runner import ShellTurn
 from evalspleef.testing.fake_gateway import TrialKeyRejected
 from evalspleef.testing.scripted_runner import ScriptedRunner
@@ -488,3 +489,30 @@ def test_a_subclass_of_a_taxonomy_error_maps_like_its_parent() -> None:
         "environment",
         "discard",
     )
+
+
+class _ServedByAnotherVendor(ScriptedRunner):
+    """Its first turn is answered by a vendor the route's provider lock refuses."""
+
+    gateway: Any = None
+    trial_id = ""
+
+    async def send(self, message: str, *, deadline_s: int) -> ShellTurn:
+        self.gateway.record_refusal(
+            trial_id=self.trial_id,
+            round=1,
+            endpoint_id="ep_demo_00000000",
+            error_code=ENDPOINT_MISMATCH,
+        )
+        return await super().send(message, deadline_s=deadline_s)
+
+
+async def test_a_provider_lock_refusal_voids_the_trial_as_a_provider_error(
+    harness_factory: Any,
+) -> None:
+    runner = _ServedByAnotherVendor()
+    h = await harness_factory(scripted=runner, owns_terminal_events=True)
+    runner.gateway, runner.trial_id = h.gateway, h.trial.trial_id
+    outcome = await h.run()
+    assert outcome.status == "invalid"
+    assert outcome.reason.startswith("EndpointMismatch")

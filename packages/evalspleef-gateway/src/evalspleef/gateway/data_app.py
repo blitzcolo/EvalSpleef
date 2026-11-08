@@ -17,7 +17,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from evalspleef.spi.gateway import COST_HEADER, UsageRecord
+from evalspleef.spi.gateway import COST_HEADER, ENDPOINT_MISMATCH, UsageRecord
 
 from .protocols import (
     ChatToAnthropicStream,
@@ -181,6 +181,7 @@ async def _admit(
             status_code=429,
             cold_start_ms=0,
             charge=False,
+            error_code="rate_limited",
         )
         return _error_response(
             flavor,
@@ -214,6 +215,7 @@ async def _admit(
         status_code=429,
         cold_start_ms=0,
         charge=False,
+        error_code=violation,
     )
     return _error_response(
         flavor, 429, violation, f"trial key budget exhausted ({violation})", headers
@@ -268,6 +270,7 @@ async def _record_usage(
     cold_start_ms: int,
     charge: bool,
     upstream_model: str = "",
+    error_code: str | None = None,
 ) -> float:
     """Append the usage record, charge the key on success and emit request.completed.
 
@@ -300,6 +303,7 @@ async def _record_usage(
         status_code=status_code,
         cold_start_ms=cold_start_ms,
         cost_usd=cost,
+        error_code=error_code,
     )
     await state.append_usage(record)
     await state.emit(
@@ -407,6 +411,7 @@ async def _transport_failure(
         status_code=status,
         cold_start_ms=0,
         charge=False,
+        error_code="upstream_timeout" if timed_out else "upstream_error",
     )
     if timed_out:
         return _error_response(flavor, 504, "upstream_timeout", f"upstream timed out: {exc!r}")
@@ -478,6 +483,7 @@ async def _forward(
             status_code=502,
             cold_start_ms=cold_start_ms,
             charge=False,
+            error_code=ENDPOINT_MISMATCH,
         )
         return _error_response(
             flavor, 502, "endpoint_mismatch", "upstream response violates the provider lock"
@@ -598,6 +604,7 @@ async def _forward_stream(
             status_code=502,
             cold_start_ms=opened.cold_start_ms,
             charge=False,
+            error_code=ENDPOINT_MISMATCH,
         )
         return _error_response(
             flavor, 502, "endpoint_mismatch", "upstream response violates the provider lock"
@@ -628,6 +635,9 @@ async def _forward_stream(
     return _passthrough_stream(
         state, key, entry, opened, model, round_, started_at, _upstream_model(first_chunk)
     )
+
+
+_STREAM_FAILURE_CODES = {504: "upstream_timeout", 502: "upstream_error"}
 
 
 def _mid_stream_error(
@@ -702,6 +712,7 @@ def _passthrough_stream(
                 cold_start_ms=opened.cold_start_ms,
                 charge=True,
                 upstream_model=upstream_model,
+                error_code=_STREAM_FAILURE_CODES.get(int(usage_holder.get("status", 200))),
             )
 
     return StreamingResponse(
@@ -764,6 +775,7 @@ def _converted_stream(
                 cold_start_ms=opened.cold_start_ms,
                 charge=True,
                 upstream_model=upstream_model,
+                error_code=_STREAM_FAILURE_CODES.get(int(usage_holder.get("status", 200))),
             )
 
     return StreamingResponse(

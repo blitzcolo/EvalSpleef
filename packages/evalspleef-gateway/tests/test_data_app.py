@@ -784,7 +784,7 @@ async def test_provider_lock_mismatch_returns_502(state: GatewayState) -> None:
         )
         assert response.status_code == 502
         usage = await state.usage_for("trial-ep1")
-        assert usage[0].status_code == 502  # flagged on the usage record
+        assert (usage[0].status_code, usage[0].error_code) == (502, "endpoint_mismatch")
         events = state.events()
         mismatch = [e for e in events if e["type"] == EVENT_ENDPOINT_MISMATCH]
         assert len(mismatch) == 1
