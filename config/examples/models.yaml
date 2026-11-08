@@ -5,6 +5,19 @@
 # the same shape points at a vendor API, Novita Serverless or a self-hosted
 # vLLM/SGLang endpoint. Registration validates the entry, probes it through the
 # gateway (P-01..P-15) and freezes the resulting capabilities into the batch.
+#
+# A Hugging Face model deployed on a Novita Dedicated Endpoint looks like this
+# (Hugging Face does not report token expiry, so record it; the batch freeze
+# needs it to lie past the planned end plus 7 days):
+#
+#   source:
+#     type: huggingface
+#     repo: our-org/qwen3-32b-sql-sft
+#     revision: <40-hex commit sha>
+#     access: private            # public | gated | private
+#     token_ref: vault://hf/eval-readonly
+#     token_expires: 2027-06-30  # or: never
+#   deployment: {adapter: novita-dedicated, account: novita-main}
 models:
   - slug: fake-ref-agent # immutable model id (PRD appendix A.1: lowercase, hyphenated)
     spec_version: 1 # bump on any change; a (slug, spec_version) pair is written once

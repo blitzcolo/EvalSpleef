@@ -45,7 +45,10 @@ def check_token_expiry(
             ok=False,
             warning=True,
             days_remaining=None,
-            reason="no token expiry date is recorded; cannot verify the batch is covered",
+            reason=(
+                "no token expiry date is recorded; set source.token_expires in models.yaml "
+                "(a date, or never) so the freeze can verify the batch is covered"
+            ),
         )
     days_remaining = (expires_at - today).days
     if expires_at <= today:

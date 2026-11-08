@@ -11,7 +11,13 @@ field (:class:`ConfigError`).
 
 from .batch import BatchFileConfig, EndpointPolicy, load_batch
 from .errors import ConfigError
-from .models import HFSourceConfig, ModelConfig, VendorSourceConfig, load_models
+from .models import (
+    HFSourceConfig,
+    ModelConfig,
+    VendorSourceConfig,
+    load_hf_token_expiry,
+    load_models,
+)
 from .providers import (
     EgressProxyConfig,
     GatewayConfig,
@@ -36,6 +42,7 @@ __all__ = [
     "SandboxInstanceConfig",
     "VendorSourceConfig",
     "load_batch",
+    "load_hf_token_expiry",
     "load_models",
     "load_providers",
 ]

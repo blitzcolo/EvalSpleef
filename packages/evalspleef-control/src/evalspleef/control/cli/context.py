@@ -35,6 +35,7 @@ import re
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
@@ -50,6 +51,7 @@ from evalspleef.control.config import (
     BatchFileConfig,
     ProvidersFileConfig,
     load_batch,
+    load_hf_token_expiry,
     load_models,
     load_providers,
 )
@@ -171,6 +173,15 @@ def load_models_config(path: Path, environ: Mapping[str, str]) -> list[ModelSpec
     tmp = _load_interpolated(path, environ)
     try:
         return load_models(tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def load_hf_token_expiry_config(path: Path, environ: Mapping[str, str]) -> dict[str, date]:
+    """HF token expiry dates recorded in ``models.yaml``, by token ref."""
+    tmp = _load_interpolated(path, environ)
+    try:
+        return load_hf_token_expiry(tmp)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -594,7 +605,14 @@ class AppContext:
             probes=cast(ProbeRunner, _LazyProbeRunner(self)),
             price_for=price_for_spec,
             hf=self.hf,
+            hf_token_expiry=self.hf_token_expiry(),
         )
+
+    def hf_token_expiry(self) -> dict[str, date]:
+        """Recorded HF token expiry dates; the batch freeze checks them (TECH-DESIGN 6.5)."""
+        if not self.settings.models_path.is_file():
+            return {}
+        return load_hf_token_expiry_config(self.settings.models_path, self._environ)
 
     def probe_runner(self) -> ProbeRunner:
         if self._probe_runner is None:

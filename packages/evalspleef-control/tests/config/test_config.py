@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from evalspleef.control.config import (
     ModelConfig,
     ProvidersFileConfig,
     load_batch,
+    load_hf_token_expiry,
     load_models,
     load_providers,
 )
@@ -135,6 +137,54 @@ def test_load_models_converts_to_spi(tmp_path: Path) -> None:
     assert isinstance(vendor.source, VendorSource)
     assert vendor.source.vendor == "anthropic"
     assert vendor.roles == frozenset({"judge", "target"})
+
+
+def _hf_entry(slug: str, token_lines: str) -> str:
+    return f"""
+  - slug: {slug}
+    family: qwen
+    roles: [target]
+    source:
+      type: huggingface
+      repo: our-org/{slug}
+      revision: {SHA}
+      access: gated
+{token_lines}
+    deployment: {{adapter: novita-dedicated, account: novita-main}}
+    declared_context_tokens: 32768
+    declared_max_output_tokens: 4096
+    pricing_ref: ref:novita/{slug}@2026-11
+    license: apache-2.0
+    owner: model-ops
+"""
+
+
+def test_hf_token_expiry_is_read_from_models_yaml(tmp_path: Path) -> None:
+    shared = "      token_ref: vault://hf/shared\n"
+    text = "models:" + "".join(
+        [
+            _hf_entry("alpha", shared + "      token_expires: 2027-03-01"),
+            _hf_entry("beta", shared + "      token_expires: never"),
+            _hf_entry("gamma", "      token_ref: vault://hf/forever\n      token_expires: never"),
+            _hf_entry("delta", "      token_ref: vault://hf/unknown"),
+        ]
+    )
+    path = tmp_path / "models.yaml"
+    path.write_text(text, encoding="utf-8")
+
+    # Two models sharing a token: the earlier date is the one the batch depends on.
+    assert load_hf_token_expiry(path) == {
+        "vault://hf/shared": date(2027, 3, 1),
+        "vault://hf/forever": date.max,
+    }
+
+
+def test_token_expires_needs_the_token_it_describes(tmp_path: Path) -> None:
+    path = tmp_path / "models.yaml"
+    path.write_text("models:" + _hf_entry("alpha", "      token_expires: 2027-03-01"), "utf-8")
+    with pytest.raises(ConfigError) as excinfo:
+        load_models(path)
+    assert "token_ref" in str(excinfo.value)
 
 
 def test_revision_must_be_40_hex(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
@@ -19,7 +20,14 @@ from evalspleef.spi.model import (
 from ._yaml import load_yaml_mapping
 from .errors import ConfigError
 
-__all__ = ["HFSourceConfig", "ModelConfig", "ModelFileConfig", "VendorSourceConfig", "load_models"]
+__all__ = [
+    "HFSourceConfig",
+    "ModelConfig",
+    "ModelFileConfig",
+    "VendorSourceConfig",
+    "load_hf_token_expiry",
+    "load_models",
+]
 
 #: A pinned commit sha, exactly 40 lowercase hex characters (FR-MOD-02).
 REVISION_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -58,6 +66,10 @@ class HFSourceConfig(BaseModel):
     revision: str
     access: Literal["public", "gated", "private"]
     token_ref: str | None = None
+    #: Expiry date of the token behind ``token_ref``, or ``never``. Hugging Face does
+    #: not report it through its API, so the operator records it here (TECH-DESIGN
+    #: 6.5); the batch freeze needs it to lie past the planned end plus 7 days.
+    token_expires: date | Literal["never"] | None = None
     mirror: bool = False
     mirror_repo: str | None = None
     adapter_repo: str | None = None
@@ -79,6 +91,12 @@ class HFSourceConfig(BaseModel):
         if value is None:
             return None
         return _check_secret_ref(value)
+
+    @model_validator(mode="after")
+    def _expiry_needs_a_token(self) -> HFSourceConfig:
+        if self.token_expires is not None and self.token_ref is None:
+            raise ValueError("token_expires is set but there is no token_ref it belongs to")
+        return self
 
     @model_validator(mode="after")
     def _revision_is_pinned(self) -> HFSourceConfig:
@@ -196,16 +214,37 @@ class ModelFileConfig(BaseModel):
     def to_model_specs(self) -> list[ModelSpec]:
         return [entry.to_model_spec() for entry in self.models]
 
+    def hf_token_expiry(self) -> dict[str, date]:
+        """Token ref -> expiry date (``never`` is ``date.max``); the earliest date wins."""
+        expiry: dict[str, date] = {}
+        for entry in self.models:
+            source = entry.source
+            if not isinstance(source, HFSourceConfig) or source.token_ref is None:
+                continue
+            if source.token_expires is None:
+                continue
+            when = date.max if source.token_expires == "never" else source.token_expires
+            expiry[source.token_ref] = min(when, expiry.get(source.token_ref, date.max))
+        return expiry
+
 
 def load_models(path: str | Path) -> list[ModelSpec]:
     """Parse ``models.yaml`` and return SPI :class:`ModelSpec` entries.
 
     Raises :class:`ConfigError` naming the file and the failing field path.
     """
+    return _parse(path).to_model_specs()
+
+
+def load_hf_token_expiry(path: str | Path) -> dict[str, date]:
+    """Parse ``models.yaml`` and return the recorded HF token expiry dates by token ref."""
+    return _parse(path).hf_token_expiry()
+
+
+def _parse(path: str | Path) -> ModelFileConfig:
     file = str(path)
     document = load_yaml_mapping(path)
     try:
-        config = ModelFileConfig.model_validate(document)
+        return ModelFileConfig.model_validate(document)
     except Exception as exc:
         raise ConfigError.from_validation(file, exc) from exc
-    return config.to_model_specs()
