@@ -36,7 +36,7 @@ from evalspleef.spi.model import (
 from evalspleef.spi.secrets import SecretResolver
 
 from .clock import Clock, SystemClock
-from .engine_args import build_engine_args, select_profile
+from .engine_args import Engine, build_engine_args, select_profile
 from .errors import CredentialRejected, DeploymentNotFound, PlanInputMissing
 from .gpu_api import DEFAULT_API_BASE, NovitaGpuClient
 from .inference import (
@@ -177,6 +177,15 @@ class NovitaServerlessGpuProvider(ModelEndpointProvider):
         value = spec.deployment.params.get(key)
         return value if value is not None else self.config.get(key, default)
 
+    def _engine(self, spec: ModelSpec) -> Engine:
+        engine = str(self._param(spec, "engine", "vllm"))
+        if engine not in ("vllm", "sglang"):
+            raise CapabilityNotSupported(
+                f"serverless engine {engine!r} is not supported (vllm, sglang)",
+                detail={"engine": engine},
+            )
+        return "sglang" if engine == "sglang" else "vllm"
+
     def _markers(self) -> tuple[str, ...]:
         raw = self.config.get("not_ready_markers")
         if isinstance(raw, (list, tuple)) and raw:
@@ -281,6 +290,7 @@ class NovitaServerlessGpuProvider(ModelEndpointProvider):
             served_model_name=served_name,
             tensor_parallel_size=plan.gpu_count or 1,
             port=port,
+            engine=self._engine(spec),
         )
         envs: list[dict[str, str]] = []
         if source.token_ref:

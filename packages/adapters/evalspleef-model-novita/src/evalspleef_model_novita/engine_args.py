@@ -1,4 +1,4 @@
-"""vLLM argument generator driven by the per-family YAML profiles (TECH-DESIGN section 6.6.3/4).
+"""vLLM and SGLang argument generator driven by the per-family YAML profiles (TECH-DESIGN 6.6.3/4).
 
 The generated command pins the model to a mirror repo and a commit sha, so the engine can
 never pull a moving revision. Profiles live in ``engine_profiles/<family>.yaml``.
@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import resources
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -17,6 +17,8 @@ from evalspleef.spi.errors import CapabilityNotSupported
 from evalspleef.spi.model import HFSource, ModelSpec
 
 PROFILE_NAMES = ("qwen", "llama", "deepseek", "glm", "generic")
+
+Engine = Literal["vllm", "sglang"]
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class EngineProfile:
     quantization: str | None
     extra_args: tuple[str, ...]
     variants: tuple[ProfileVariant, ...]
+    sglang: ProfileVariant | None = None
+    """SGLang parser names; the engine names its parsers differently from vLLM."""
 
 
 def _optional_str(value: object) -> str | None:
@@ -58,6 +62,17 @@ def _parse_profile(raw: Mapping[str, Any]) -> EngineProfile:
         quantization=_optional_str(raw.get("quantization")),
         extra_args=tuple(str(arg) for arg in raw.get("extra_args") or []),
         variants=variants,
+        sglang=_sglang_names(raw.get("sglang")),
+    )
+
+
+def _sglang_names(raw: object) -> ProfileVariant | None:
+    if not isinstance(raw, Mapping):
+        return None
+    return ProfileVariant(
+        match=(),
+        tool_call_parser=_optional_str(raw.get("tool_call_parser")),
+        reasoning_parser=_optional_str(raw.get("reasoning_parser")),
     )
 
 
@@ -96,8 +111,10 @@ def build_engine_args(
     served_model_name: str,
     tensor_parallel_size: int = 1,
     port: int = 8000,
+    engine: Engine = "vllm",
 ) -> list[str]:
-    """vLLM argv (without the executable) for ``spec``.
+    """Engine argv for ``spec``: vLLM without the executable (the image entrypoint runs
+    it), SGLang with ``python3 -m sglang.launch_server`` (its images have none).
 
     ``spec.deployment.params["engine_overrides"]`` may set ``tool_call_parser``,
     ``reasoning_parser``, ``quantization`` (``None`` switches one off) and ``extra_args``.
@@ -117,11 +134,34 @@ def build_engine_args(
 
     raw_overrides = spec.deployment.params.get("engine_overrides")
     overrides: Mapping[str, Any] = raw_overrides if isinstance(raw_overrides, Mapping) else {}
+    if engine == "sglang":
+        if profile.sglang is None and "tool_call_parser" not in overrides:
+            raise CapabilityNotSupported(
+                f"engine profile {profile.name!r} has no SGLang parser names; "
+                "set engine_overrides.tool_call_parser",
+                detail={"engine": engine, "profile": profile.name},
+            )
+        names = profile.sglang or ProfileVariant(
+            match=(), tool_call_parser=None, reasoning_parser=None
+        )
+        tool_parser, reasoning_parser = names.tool_call_parser, names.reasoning_parser
     tool_parser = overrides.get("tool_call_parser", tool_parser)
     reasoning_parser = overrides.get("reasoning_parser", reasoning_parser)
     quantization = overrides.get("quantization", quantization)
     extra_args.extend(str(arg) for arg in overrides.get("extra_args") or [])
 
+    if engine == "sglang":
+        return _sglang_args(
+            source,
+            served_model_name=served_model_name,
+            port=port,
+            context=spec.declared_context_tokens,
+            tensor_parallel_size=tensor_parallel_size,
+            quantization=quantization,
+            tool_parser=tool_parser,
+            reasoning_parser=reasoning_parser,
+            extra_args=extra_args,
+        )
     args = [
         "--model",
         source.mirror_repo or source.repo,
@@ -142,6 +182,46 @@ def build_engine_args(
         args += ["--quantization", str(quantization)]
     if tool_parser:
         args += ["--enable-auto-tool-choice", "--tool-call-parser", str(tool_parser)]
+    if reasoning_parser:
+        args += ["--reasoning-parser", str(reasoning_parser)]
+    return args + extra_args
+
+
+def _sglang_args(
+    source: HFSource,
+    *,
+    served_model_name: str,
+    port: int,
+    context: int,
+    tensor_parallel_size: int,
+    quantization: object,
+    tool_parser: object,
+    reasoning_parser: object,
+    extra_args: list[str],
+) -> list[str]:
+    args = [
+        "python3",
+        "-m",
+        "sglang.launch_server",
+        "--model-path",
+        source.mirror_repo or source.repo,
+        "--revision",
+        source.revision,
+        "--served-model-name",
+        served_model_name,
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(port),
+        "--context-length",
+        str(context),
+        "--tp-size",
+        str(tensor_parallel_size),
+    ]
+    if quantization:
+        args += ["--quantization", str(quantization)]
+    if tool_parser:
+        args += ["--tool-call-parser", str(tool_parser)]
     if reasoning_parser:
         args += ["--reasoning-parser", str(reasoning_parser)]
     return args + extra_args

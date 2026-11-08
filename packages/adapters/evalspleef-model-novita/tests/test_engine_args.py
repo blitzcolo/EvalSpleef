@@ -98,3 +98,31 @@ def test_a_non_hf_source_is_rejected(make_spec: SpecFactory) -> None:
     )
     with pytest.raises(CapabilityNotSupported):
         build_engine_args(spec, served_model_name="s")
+
+
+def test_sglang_argv_runs_the_launcher_with_its_own_flags_and_parsers(
+    make_spec: SpecFactory,
+) -> None:
+    spec = make_spec(
+        family="qwen3", engine_overrides={"extra_args": ["--mem-fraction-static", "0.85"]}
+    )
+    args = build_engine_args(spec, served_model_name="m", tensor_parallel_size=2, engine="sglang")
+    assert args[:3] == ["python3", "-m", "sglang.launch_server"]
+    flag = {name: args[args.index(name) + 1] for name in ("--model-path", "--tp-size", "--port")}
+    assert flag == {"--model-path": spec.source.repo, "--tp-size": "2", "--port": "8000"}  # type: ignore[union-attr]
+    assert args[args.index("--context-length") + 1] == str(spec.declared_context_tokens)
+    # SGLang parser names come from the profile's sglang section, not the vLLM ones.
+    assert args[args.index("--tool-call-parser") + 1] == "qwen25"
+    assert args[args.index("--reasoning-parser") + 1] == "qwen3"
+    assert "--model" not in args and "--enable-auto-tool-choice" not in args
+    assert args[-2:] == ["--mem-fraction-static", "0.85"]
+
+
+def test_sglang_needs_parser_names_the_profile_or_the_overrides_give(
+    make_spec: SpecFactory,
+) -> None:
+    with pytest.raises(CapabilityNotSupported, match="no SGLang parser names"):
+        build_engine_args(make_spec(family="llama3"), served_model_name="m", engine="sglang")
+    spec = make_spec(family="llama3", engine_overrides={"tool_call_parser": "llama3"})
+    args = build_engine_args(spec, served_model_name="m", engine="sglang")
+    assert args[args.index("--tool-call-parser") + 1] == "llama3"

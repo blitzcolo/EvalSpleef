@@ -10,3 +10,7 @@ variants:
   - match: [coder]
     tool_call_parser: qwen3_xml
     reasoning_parser: null
+# SGLang names its parsers differently; re-check them against the SGLang image too.
+sglang:
+  tool_call_parser: qwen25
+  reasoning_parser: qwen3

@@ -164,6 +164,17 @@ async def test_deploy_passes_the_disk_and_cuda_floor_when_configured(
     assert (worker["rootfs_size_gb"], worker["min_cuda_version"]) == (80, "12.8")
 
 
+async def test_deploy_with_the_sglang_engine_sends_the_launcher_command(
+    provider: NovitaServerlessGpuProvider,
+    api: FakeNovitaGpuApi,
+    make_spec: SpecFactory,
+) -> None:
+    await deployed(provider, make_spec(engine="sglang"))
+    body = api.calls[0][2]
+    assert body is not None
+    assert body["command"].split()[:3] == ["python3", "-m", "sglang.launch_server"]
+
+
 async def test_deploy_sends_the_hf_token_but_never_records_or_logs_it(
     provider: NovitaServerlessGpuProvider,
     api: FakeNovitaGpuApi,
