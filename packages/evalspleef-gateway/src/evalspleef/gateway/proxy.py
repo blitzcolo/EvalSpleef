@@ -158,14 +158,32 @@ async def _should_retry(
     return True
 
 
+#: Upstream statuses retried with exponential backoff (PRD appendix B.6: provider rate
+#: limits and 5xx are retried up to five times before the trial sees them).
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+async def _backoff(state: GatewayState, response: httpx.Response, attempt: int) -> bool:
+    """Wait before retry ``attempt`` (0-based) of a retryable status; ``False`` when spent."""
+    if response.status_code not in RETRYABLE_STATUSES or attempt >= state.provider_max_retries:
+        return False
+    delay = state.provider_backoff_s * (2**attempt)
+    retry_after = response.headers.get("retry-after", "")
+    if retry_after.replace(".", "", 1).isdigit():
+        delay = float(retry_after)
+    await state.clock.sleep(min(delay, state.provider_backoff_cap_s))
+    return True
+
+
 async def post_upstream(
     state: GatewayState, entry: RouteEntry, body: dict[str, Any], *, endpoint_id: str
 ) -> tuple[httpx.Response, int]:
-    """Non-streaming forward with cold-start absorption; body is read."""
+    """Non-streaming forward with cold-start absorption and backoff; body is read."""
     route = entry.route
     headers = upstream_headers(state, route)
     started_at = state.clock.now()
     retried = False
+    attempts = 0
     while True:
         try:
             response = await state.client.post(chat_url(route), json=body, headers=headers)
@@ -182,6 +200,9 @@ async def post_upstream(
             and await _should_retry(state, route, started_at, retried, endpoint_id=endpoint_id)
         ):
             retried = True
+            continue
+        if await _backoff(state, response, attempts):
+            attempts += 1
             continue
         cold_start_ms = int((state.clock.now() - started_at) * 1000) if retried else 0
         return response, cold_start_ms
@@ -200,6 +221,7 @@ async def open_upstream_stream(
     headers = upstream_headers(state, route)
     started_at = state.clock.now()
     retried = False
+    attempts = 0
     while True:
         request = state.client.build_request("POST", chat_url(route), json=body, headers=headers)
         try:
@@ -218,6 +240,12 @@ async def open_upstream_stream(
         ):
             retried = True
             await response.aclose()
+            continue
+        if response.status_code in RETRYABLE_STATUSES and attempts < state.provider_max_retries:
+            await response.aread()
+            await response.aclose()
+            await _backoff(state, response, attempts)
+            attempts += 1
             continue
         if response.status_code != 200:
             await response.aread()

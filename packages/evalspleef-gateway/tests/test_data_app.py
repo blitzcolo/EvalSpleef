@@ -672,6 +672,77 @@ async def test_cold_start_absorbs_503_with_injected_clock(state: GatewayState) -
     assert len(cold) == 1
 
 
+async def _post_with_fake_clock(
+    handler: Callable[[httpx.Request], httpx.Response], *, stream: bool
+) -> tuple[httpx.Response, list[float]]:
+    """POST one chat request through a gateway whose clock records every backoff wait."""
+    from evalspleef.testing.clock import FakeClock
+
+    waits: list[float] = []
+
+    class RecordingClock(FakeClock):
+        async def sleep(self, seconds: float) -> None:
+            waits.append(seconds)
+            self.advance(seconds)
+
+    store = MemoryStore()
+    backoff_state = GatewayState(
+        key_store=store,
+        usage_store=store,
+        secrets=DictSecretResolver({"vault://upstream/key": UPSTREAM_KEY}),
+        clock=RecordingClock(start=1000.0),
+    )
+    add_route(backoff_state)
+    secret = await issue(backoff_state)
+    async with client_for(backoff_state, handler) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={"model": "ep_ep1", "messages": [{"role": "user", "content": "hi"}]}
+            | ({"stream": True} if stream else {}),
+            headers=auth(secret),
+        )
+        await response.aread()
+    return response, waits
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_upstream_rate_limits_are_retried_with_backoff(stream: bool) -> None:
+    """Novita answered 429 to a burst of probe requests; the gateway now waits and retries."""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            return httpx.Response(429, json={"error": {"message": "rate limit"}})
+        if stream:
+            chunk = {
+                "id": "c1",
+                "model": "fake-model",
+                "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            }
+            return httpx.Response(200, content=sse_body(chunk))
+        return httpx.Response(200, json=canned_chat())
+
+    response, waits = await _post_with_fake_clock(handler, stream=stream)
+    assert response.status_code == 200
+    assert (calls, waits) == (3, [1.0, 2.0])
+
+
+async def test_retry_after_is_honoured_and_retries_are_bounded() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503, headers={"retry-after": "7"}, json={"error": {}})
+
+    response, waits = await _post_with_fake_clock(handler, stream=False)
+    # Five retries after the first attempt, then the upstream status reaches the caller.
+    assert (response.status_code, calls, waits) == (503, 6, [7.0] * 5)
+
+
 # -- concurrency bound ------------------------------------------------------------------
 
 

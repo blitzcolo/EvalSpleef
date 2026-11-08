@@ -151,6 +151,9 @@ class GatewayState:
         clock: Clock | None = None,
         cold_start_interval_s: float = 15.0,
         upstream_timeout_s: float = 120.0,
+        provider_max_retries: int = 5,
+        provider_backoff_s: float = 1.0,
+        provider_backoff_cap_s: float = 30.0,
     ) -> None:
         self.key_store = key_store
         self.usage_store = usage_store
@@ -158,6 +161,9 @@ class GatewayState:
         self.clock: Clock = clock if clock is not None else SystemClock()
         self.cold_start_interval_s = cold_start_interval_s
         self.upstream_timeout_s = upstream_timeout_s
+        self.provider_max_retries = provider_max_retries
+        self.provider_backoff_s = provider_backoff_s
+        self.provider_backoff_cap_s = provider_backoff_cap_s
         self._owns_client = client is None
         timeout = httpx.Timeout(upstream_timeout_s, connect=min(10.0, upstream_timeout_s))
         self.client = client if client is not None else httpx.AsyncClient(timeout=timeout)
