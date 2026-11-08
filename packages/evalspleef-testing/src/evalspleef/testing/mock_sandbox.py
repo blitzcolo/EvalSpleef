@@ -17,6 +17,7 @@ import signal
 import tempfile
 import time
 import uuid
+import weakref
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -101,6 +102,9 @@ class MockSandbox(Sandbox):
         self.expires_at = expires_at
         self._clock = clock
         self._root = Path(tempfile.mkdtemp(prefix=f"evalspleef-mock-{sandbox_id}-"))
+        # A sandbox that is dropped without destroy() must not strand its root in the temp
+        # directory; the finalizer also runs at interpreter exit.
+        weakref.finalize(self, shutil.rmtree, self._root, ignore_errors=True)
         self._root_resolved = Path(os.path.realpath(self._root))
         self._workspace = self._root / "workspace"
         self._workspace.mkdir()
