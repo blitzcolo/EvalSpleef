@@ -84,13 +84,13 @@ Every line below comes from a command run during this build, with the exit code 
 
 | # | Result | Evidence | Limits |
 | --- | --- | --- | --- |
-| 1 | met | `python3 scripts/lint_commit_msg.py --history` exits 0 (88 commits, 0 failing). Running `.githooks/commit-msg` on message files exits 1 for the criterion example `feat: M1 control plane`, for lowercase messages containing `M1`, `P2.1`, `P1` or `W07` (each reported as `matched ...`), for `phase 2`, the word milestone, a `Co-Authored-By` trailer and a session link, and exits 0 for a clean message. `core.hooksPath` is `.githooks` | The hook is client side; `--no-verify` is forbidden by AGENTS.md but not blocked technically |
-| 2 | met | `uv run --frozen --no-sync pytest`: 1725 passed, 1 skipped (the e2e test, selected with `-m e2e`), exit 0, 139 s, including the PostgreSQL tests against a real `postgres:16` container. `ruff check .`, `ruff format --check .`, `mypy` (strict, 22 modules, 285 source files) and `lint-imports` (6 contracts kept) all exit 0. `uv lock --check` exits 0. All 131 reference tests are present by name: 129 in `evalspleef-core` (`check_repo.py --run` runs them: Ran 129 tests, OK) and the 2 Harbor mapping tests, which moved with their code to `evalspleef-harbor-bridge/tests/test_events.py` | Run with `--frozen --no-sync`, equivalent to `uv run` because the lock is current |
+| 1 | met | `python3 scripts/lint_commit_msg.py --history` exits 0 (147 commits, 0 failing, before the commit that records it). Running `.githooks/commit-msg` on message files exits 1 for the criterion example `feat: M1 control plane`, for lowercase messages containing `M1`, `P2.1`, `P1` or `W07` (each reported as `matched ...`), for `phase 2`, the word milestone, a `Co-Authored-By` trailer and a session link, and exits 0 for a clean message. `core.hooksPath` is `.githooks` | The hook is client side; `--no-verify` is forbidden by AGENTS.md but not blocked technically |
+| 2 | met | `uv run --frozen --no-sync pytest`: 1883 passed, 1 skipped (the e2e test, selected with `-m e2e`), exit 0, 170 s (rerun on 2026-11-08 after the second fix round), including the PostgreSQL tests against a real `postgres:16` container. `ruff check .`, `ruff format --check .`, `mypy` (strict, 300 source files) and `lint-imports` (6 contracts kept) all exit 0. `uv lock --check` exits 0. All 131 reference tests are present by name: 129 in `evalspleef-core` (`check_repo.py --run` runs them: Ran 129 tests, OK) and the 2 Harbor mapping tests, which moved with their code to `evalspleef-harbor-bridge/tests/test_events.py` | Run with `--frozen --no-sync`, equivalent to `uv run` because the lock is current |
 | 3 | met | `python3 scripts/check_repo.py --run` exits 0: the core unit tests and the self-test of all ten packs on temporary copies | web-001 skips Playwright and runs its static contract only |
 | 4 | met | `docs/evidence/gateway-curl.md`: a real `spleef-gateway` process driven with `curl -i`: chat with a trial key and a usage record, HTTP 429 `cost_cap` for an over-budget key, 401 for a revoked key, an Anthropic Messages tool round trip | The upstream is the in-repo fake server; no real vendor traffic |
 | 5 | met at command level, with a transport fake for the Novita-hosted call | `packages/evalspleef-control/tests/cli/test_models_assisted.py` (5 tests) drives the real `spleef models register`, `tickets`, `attach` and `list`: register leaves the endpoint `awaiting_operator` with an open ticket; attach to `https://fake-endpoint.novita.ai/v1` sends one `max_tokens=1` request, the probes run, the endpoint ends `ready` with a stored probe report and the ticket closes; non-Novita hosts are refused with no request and no state change; the model is never ready without an attach. Mutation check: ignoring the stored report fails the test. Register and probe against a real gateway process are in transcripts 02 and 03 of `docs/evidence/e2e-batch.md` | The adapter accepts only `https` hosts under `*.novita.ai`, so a loopback endpoint cannot be attached by the real adapter; that guard is deliberate and untouched. Not verified against a real Novita account |
 | 6 | met | 21 conformance targets, each run as `pytest --spleef-provider <target>`, all exit 0 with 0 failures; see the next table | Only `local-docker` and `remote-docker` are real. Every adapter fake is **not verified on a real host**. Not-applicable counts follow each target's declared capabilities |
-| 7 | met | `docs/evidence/e2e-batch.md`: `pytest tests/e2e -m e2e` exits 0 on local Docker with a real `spleef-gateway` process. 3 packs x 2 models x 2 epochs = 12 trials, 6 scored cells. The scripted reference agent scores Perfect (0 deductions) on all three packs, the empty agent scores Failed (28, 20 and 22 deductions), all 12 canary scans are clean, every sandbox ran on `local-docker`, trial events replay through the core state machine, gateway usage matches the runner's token counts | The model and the judge are fakes; see the bridges below |
+| 7 | met | `docs/evidence/e2e-batch.md`: `pytest tests/e2e -m e2e` exits 0 on local Docker with a real `spleef-gateway` process. 3 packs x 2 models x 2 epochs = 12 trials, 6 scored cells. The scripted reference agent scores Perfect (0 deductions) on all three packs, the empty agent scores Failed (28, 20 and 22 deductions), all 12 canary scans are clean, every sandbox ran on `local-docker`, trial events replay through the core state machine, gateway usage matches the runner's token counts | The model and the judge are fakes; see "Known limits" below |
 | 8 | met | This table. Items that rest on fakes say so | |
 
 ### Conformance runs (criterion 6)
@@ -129,22 +129,17 @@ Every line below comes from a command run during this build, with the exit code 
 | Egress proxy | Package tests only; it is not started in the end-to-end run |
 | Docker image templates | logic-001, data-001 and debug-001 built and checked locally; heavy toolchain, macOS and Windows images are not built |
 | Compose stack and Helm chart | `docker compose config` validates the compose file; the chart was checked structurally and never rendered by Helm |
-| Beam Pod model endpoint (`beam-pod`) | Run for real once on 2026-11-08 (deploy, status, chat, gateway probe, terminate); every other path through the transport fakes |
+| Beam Pod model endpoint (`beam-pod`) | Run for real on 2026-11-08 (deploy, status, chat, gateway probe, Volume weights, long-context runs, terminate); multi-GPU layouts only against the fakes, because the workspace refuses multi-GPU containers |
+| Isolation preflight probes | Docker I1-I9 run as commands in real containers (adapter test and every e2e trial); other adapters' probes are described and waived |
 | Novita Dedicated and Serverless GPU, Novita Agent Sandbox, Hugging Face, E2B self-host, Tart, Hyper-V, libvirt, apple-container, Windows Sandbox, Kubernetes, device pool | Transport fakes only: **not verified on a real host or account** |
 
-## Known bridges and open follow-ups
+## Known limits
 
-These work today and are covered by the evidence above, but they are workarounds or gaps, not finished design.
+The bridges this section used to list (the gateway's extra `ep_` prefix, prose isolation probes waived on Docker, the `/tmp/verify` verifier root, duplicated hash-lock path resolution, the mock sandbox in the example routes, the missing `docs/guides/`, Hyper-V double pid files in the host `/tmp`) are fixed; see "Second fix round" below. What remains:
 
-1. **Gateway public model name.** The gateway prefixes `ep_` to the endpoint id, while the SPI says the model name equals the endpoint id. The command line strips one leading `ep_` when it issues keys (`HttpGatewayAdmin._wire_endpoint_id`), and the gateway tests encode the gateway's convention. One side must change, then the bridge goes.
-2. **Isolation preflight probes are prose.** Adapters fill `InvariantEntry.probe` with descriptions, and `run_isolation_probes` runs them verbatim, so the S5 check cannot pass on a real adapter. The command line waives prose probes with a recorded reason (visible in every `preflight.result` event and in the freeze record, and `batch run` prints a warning). The Docker adapter's executable `probes/linux.sh` is never invoked.
-3. **Verifier root.** The sandbox root file system is read-only, so the default `/verify` cannot be created; `SPLEEF_VERIFY_ROOT` selects another path (the end-to-end uses `/tmp/verify`).
-4. **Observer limit.** When a pack checker aborts early on an invalid answer, other items' violation codes look absent and pass. The trial still fails its hard gates and lands on tier F.
-5. **`agent_judge` items.** backend-001, macos-001 and video-001 still contain items no component decides, so those packs pause for a human. debug-001 was fixed (R8 became a script check, R10 and R11 became `llm_judge`).
-6. **Duplicated path resolution.** `observe/verifier._locked_local_path` and `trial/prepare._manifest_locked_paths` both resolve hash manifest paths and must be kept in sync.
-7. **Route fallback.** The example `providers.yaml` lists the mock sandbox after Docker, and an unpinned run used it for 4 of 12 trials. The end-to-end pins its routes to `local-docker`.
-8. **Documentation.** `docs/guides/` was not written. The root `README.md`, 20 package READMEs and the specs under `docs/` stand in.
-9. **Hyper-V test double.** The adapter writes a pid file such as `/tmp/spleef-<id>.pid` in the guest for every timed command so the timeout path can kill the process tree. The test double runs guest commands as host processes, so those few-byte files land in the host's `/tmp` and no test removes them. A real guest is destroyed with its pid files.
+1. **Observer limit.** When a pack checker aborts early on an invalid answer, other items' violation codes look absent and pass. The trial still fails its hard gates and lands on tier F.
+2. **`agent_judge` items.** backend-001, macos-001 and video-001 still contain items no component decides, so those packs pause for a human. The packs are hash-locked content and need an author.
+3. **Described probes on the other adapters.** Only the Docker adapter's I1-I9 probes are `$ <command>`s; every other adapter still describes them, and the command line waives those loudly (warning plus `preflight.result` and freeze record entries). Each adapter needs its own commands, checked on its real carrier.
 
 ## Spec conformance review (2026-11-08)
 
@@ -167,87 +162,49 @@ The eight success criteria above are narrower than the PRD. They prove one local
 | D11 | TD 16.1: the compose stack runs the control plane | The `control` service runs `--help`; the control plane is a command line, not a resident service | Low today, matters for scheduled work (alerts, health loop, ticket expiry) |
 | D12 | `tasks/README.md` usage step 3 | Still says to map packs to Harbor tasks (v2 text) | Low |
 
-### Unfinished work
+Status: D1, D2, D4, D5, D6, D7, D9, D10 and D12 are fixed (commits in the two fix tables below). D3, D8 and D11 are open and listed under architecture-level work.
 
-Priorities follow PRD section 5 (P0 is needed for the minimal closed loop). "Account" means the item needs a real vendor account or hardware that this build did not have.
+### Remaining work
 
-**Evaluation flow and events**
+Everything from the review's unfinished list that could be fixed in code here is fixed (see "Fixed since the review" and "Second fix round"). What is left needs a design change or an outside resource.
 
-| Item | Spec | State |
-| --- | --- | --- |
-| Fix the event projection (D1) and call `verify_projection` after every batch run | AGENTS rule 6, B.8 | code fix |
-| Batch lifecycle events (Draft, Frozen, Running, Graded) and a persisted batch state; `batch_state` is inferred from trial rows today | B.1, B.8 | missing |
-| Emit `hiddentest.result` and `judge.verdict` | B.8 | defined, never emitted |
-| Operator commands: regrade, void a trial or version, resolve the manual queue, resume a paused trial | B.6, B.7 | library only (`core/state.py`); paused trials stay paused |
-| P5 manual-intervention timeout | B.4 | `manual_interrupt_expired` has no caller |
-| Shell heartbeat consumed by the control plane (three missed beats = hung) | B.3 | the runner sends it, nobody reads it |
-| Provider-error retry rule (backoff up to five, then back to pending) | B.6 | one three-retry chain for every class |
-| Batch total budget checked at dispatch, not only at freeze | B.5 | freeze only |
-| Cold-start time excluded from the trial wall clock; dispatch pauses while an endpoint sleeps | FR-MOD-06.2, FR-FLOW-06 | the gateway sends `x-spleef-cold-start-ms`; nothing reads it |
-| Judge model and endpoint frozen into the batch | FR-GRD | not in the freeze record |
+**Architecture-level work** (effort is a rough estimate for one engineer who knows the code)
 
-**Grading, reports, cost, observability**
+| Item | Spec | Why it is not a small fix | Effort |
+| --- | --- | --- | --- |
+| hostd dials out over one bidirectional stream (D3) | TD 7.5, FR-SBX-10 | the transport today is control-plane-to-host gRPC; dial-out needs a new stream protocol, reconnection and request routing on both ends | 1-2 weeks |
+| Resident control-plane service (D11): health loop, alerts (orphan sandbox, quota, HF token expiry, frequent cold starts, lost heartbeat), the 24 h assisted-ticket expiry, the periodic `reap(labels={batch})`, the manual-pause expiry on a timer, batch lifecycle events and a persisted batch state | NFR-09, FR-OPS-03, FR-MOD-03, B.1, B.8 | the control plane is a command line; every scheduled duty needs a process that owns time, leader election and restart semantics | 2-3 weeks |
+| Resume a paused trial into `running` | B.6 | sandboxes are destroyed when a trial ends; resuming needs sandbox retention for 30 minutes and a live agent session, which only the resident service can hold. A human decision (`spleef trials resolve`) and the timeout (`spleef trials expire-paused`) work today | with the service |
+| Pause dispatch while an endpoint sleeps | FR-MOD-06.2 | the cold-start wait is now kept out of the wall clock; pausing the queue needs endpoint state pushed to the scheduler | 2-3 days, with the service |
+| Anthropic Messages and OpenAI Responses upstream passthrough (D8) | FR-MOD-07.1 | the gateway converts every client protocol to chat completions upstream; passthrough needs per-protocol usage parsing, cost and budget accounting and stream relaying | 1 week |
+| OpenTelemetry spans around SPI calls, joined per trial | NFR-10 | `telemetry/tracing.py` exists; wiring touches every SPI call site and needs a collector in the deployment | 3-5 days |
+| Egress enforcement on Docker (internal network, proxy variables, firewall rule, gateway domain added automatically for in-sandbox shells) | TD 7.3, FR-SBX-03 | needs a network topology per trial and a proxy container in the run; only a network name is attached today | 1 week |
+| Multi-carrier template registry and cross-carrier fingerprint check; Tart and VHDX template builds | TD 7.6 | the registry maps OCI digests to Novita templates; Tart and VHDX need their own builders and hosts | 1-2 weeks plus hosts |
+| Judge calibration (kappa or alpha >= 0.70) and regrade agreement (>= 95%) as runnable tools | C.5, AC-09, NFR-01 | needs labelled calibration sets and a reviewer workflow | 1 week plus labelled data |
+| LoRA adapters on dedicated endpoints | FR-MOD-03.5 | P1 in the PRD; needs adapter support in each engine and the registry | 3-5 days |
+| Packs for the missing tracks (rust, ios, game) and replacing the `agent_judge` items of backend-001, macos-001, video-001 | appendix E.2, C | pack authoring, hash-locked content | days per pack |
+| Throughput and start-latency measurements | NFR-04, NFR-06 | needs the resident service and a realistic carrier mix | 2-3 days |
 
-| Item | Spec | State |
-| --- | --- | --- |
-| Cell drill-down: model source and HF revision, deployment adapter, engine, sandbox adapter and isolation level, cost basis | FR-RPT-2, NFR-02 | missing; `core/report.py:Cell` has none of these fields |
-| Cost columns split by cost basis | FR-RPT-3, PRD Q3 | missing |
-| Release package: per-carrier isolation report, judge consistency report, version manifest, probe summary, cost reconciliation | FR-RPT-4, FR-ISO-01 | missing; only the leaderboard exists |
-| Judge calibration gate (kappa or alpha >= 0.70) and the regrade agreement gate (>= 95%) as runnable tools | C.5, AC-09, NFR-01 | missing |
-| Wire `CostLedger` (token cost, endpoint running time, sandbox seconds) and Novita bill import into batches; cost dashboard | FR-OPS-02, FR-OPS-04, AC-10, NFR-08 | library only, no writer |
-| Alerts: orphan sandbox, quota, HF token expiry, frequent cold starts, lost host heartbeat | FR-OPS-03 | idle-endpoint check only, and no resident process runs it |
-| OpenTelemetry spans around SPI calls, joined per trial | NFR-10 | `telemetry/tracing.py` has no caller |
+**Needs an outside resource**
 
-**Model side**
-
-| Item | Spec | State |
-| --- | --- | --- |
-| Populate `trial.versions` (D4) | FR-MOD-09, FR-MOD-07.6 | code fix |
-| Record HF token expiry so freeze can pass (D5); schedule the 14-day warning | FR-MOD-02.5 | code fix |
-| `verify_mirror` at batch end; honour `mirror: false` from models.yaml (parsed, then dropped) | FR-MOD-02.2, 02.4 | never called |
-| Copy chat template and tokenizer hashes into the trial versions | FR-MOD-02.6 | recorded on the spec only |
-| Enforce `rpm`/`tpm` in the gateway and stop sending them upstream (D6) | FR-MOD-04 | code fix |
-| Gateway: 429/5xx backoff, read timeouts, persistent routes, prices and usage events, a non-zero cost for unpriced routes, per-request round/trial/latency/status record | FR-MOD-07.4, 07.5 | routes, prices and events are in memory; unpriced routes never hit the cost cap |
-| Upstream passthrough for Anthropic Messages and OpenAI Responses (D8) | FR-MOD-07.1 | 502 today |
-| Vendor-lock mismatch voids the trial as a provider error | FR-MOD-04 | the gateway refuses; the runner is not told |
-| Scheduled assisted-ticket expiry (24 h) and a running `HealthLoop` | FR-MOD-03, 06.4 | methods exist, nothing schedules them |
-| LoRA adapters on dedicated endpoints | FR-MOD-03.5 | missing (P1) |
-| Real Novita Dedicated, Novita Serverless GPU, vpc-vllm and Hugging Face runs; AC-01 with a public, a gated and a private model | AC-01, US-01, US-02 | account |
-
-**Sandbox side**
-
-| Item | Spec | State |
-| --- | --- | --- |
-| Apply `runsc` in the Docker adapter (D2) | TD 7.4.2 | code fix |
-| hostd dials out over one bidirectional stream (D3) | TD 7.5 | redesign of the transport |
-| Executable isolation probes instead of prose, and run the shipped `probes/*.sh`; drop the waiver | TD 7.7, appendix D | bridge 2 above |
-| Egress enforcement on Docker: internal network, proxy variables, firewall rule; gateway domain added automatically for `in-sandbox` | TD 7.3, FR-SBX-03 | only a network name is attached |
-| Docker `create` validates lifetime, disk and resource ceilings against its capabilities | TD 7.1 | disk is silently ignored |
-| Multi-carrier template registry and cross-carrier fingerprint check; Tart and VHDX template builds | TD 7.6 | Docker only |
-| Harbor: template registry lookup in the bridge, regrade and analyze integration, a run against real Harbor (AC-08) | TD 9, AC-08 | stub executable only |
-| A conformance case that proves the TTL sweeper (C-LIFE-03 force-deletes today) and one that exercises the proxy path | TD 15.1 | weak |
-| Example `providers.yaml` with a remote host, a Novita instance and egress proxies | TD 14.2 | trimmed to Docker and the mock |
-| Real runs: Novita Agent Sandbox (AC-03 second half), E2B self-host, Tart with two macOS VMs for 24 h (AC-04), Hyper-V (AC-05), libvirt, apple-container, Kubernetes, device pool | AC-03..AC-05 | account or hardware |
-
-**Runners, task packs, operations**
-
-| Item | Spec | State |
-| --- | --- | --- |
-| Native shells (Claude Code, Codex CLI, OpenCode) and Inspect run for real, with pinned versions written to `trial.versions` | FR-RUN-01, 02 | stub executables; versions are `0.1.0` constants |
-| Packs for the missing tracks (rust, ios, game) | appendix E.2 | 10 packs cover 9 of 12 tracks |
-| Replace the `agent_judge` items in backend-001, macos-001 and video-001 so they finish without a human | appendix C | they always pause |
-| Pin image digests (`TODO(pin-on-host)` in every pack) | FR-TSK-03 | the linter accepts a pending marker |
-| A resident control-plane service for scheduled work (D11); Helm rendered by `helm`; compose smoke with all services | NFR-09 | not done |
-| Throughput and start-latency measurements | NFR-04, NFR-06 | not measured |
-| Adapter onboarding drill by an engineer outside the core team | AC-07 | needs a person |
-| `docs/guides/` and the stale `tasks/README.md` step (D12) | | not written |
+| Item | What is needed |
+| --- | --- |
+| Native shells (Claude Code, Codex CLI, OpenCode) and Inspect run for real, with pinned versions in `trial.versions` | the tools installed in task images, and their accounts |
+| Harbor integration and AC-08 | a Harbor installation |
+| Tart with two macOS VMs for 24 h (AC-04), Hyper-V (AC-05), libvirt, apple-container, Kubernetes, device pool, E2B self-host | the hosts or clusters |
+| A batch on a Novita sandbox; Novita Dedicated and Serverless GPU serving | Novita GPU capacity (every product reported 0 available) |
+| AC-01 public and private Hugging Face models; a full batch on a self-served model | a private repo and GPU time |
+| Multi-GPU (TP2 and above) on Beam | Beam must enable multi-GPU containers for the workspace (`multi_gpu_enabled: false`, max_gpu_count 2, pools not permitted) |
+| Adapter onboarding drill (AC-07) | an engineer outside the core team |
+| Pin image digests in every pack (`TODO(pin-on-host)`) | the target registries |
+| Helm rendered by `helm`; compose smoke with every service | a cluster |
 
 ### Acceptance criteria status
 
 | AC | State |
 | --- | --- |
 | AC-01 | partly: a gated Hugging Face model at a pinned revision was served for real on a Beam RTX 5090 (`beam-pod`) and probed through the gateway (10/14); no Novita GPU had capacity, the public and private cases and a batch on a self-served model have not run |
-| AC-02 | partly: gateway budgets proven with a fake upstream; no source or cost-basis annotation on the leaderboard |
+| AC-02 | partly: gateway budgets proven with a fake upstream; every leaderboard column now carries its cost basis (`cost_bases`, end to end on real Docker) and the drill-down carries model source and revision; not run against a real priced vendor batch since |
 | AC-03 | partly: the Docker half runs for real; the Novita adapter passes conformance on the real account and packs now map to Novita templates (D10), but no batch has run on a Novita sandbox |
 | AC-04, AC-05 | not met: need a Mac mini with Tart and a Hyper-V host |
 | AC-06 | met for Docker and remote-over-Docker (real) and the five in-repo doubles; the other 14 targets pass against transport fakes written together with their adapters |
@@ -281,7 +238,39 @@ Priorities follow PRD section 5 (P0 is needed for the minimal closed loop). "Acc
 | Serverless GPU: `rootfs_size_gb`, `min_cuda_version` and a scale `policy` are sent; the live API rejects a create without `policy` (400 "invalid worker policy") although the reference marks it optional | 8861e5d, 156b0fc | mutation; the policy fix was confirmed on the real API |
 | Serverless GPU workers can run SGLang (`engine: sglang`), with per-engine parser names in the family profiles | d47023c | mutation |
 
-D3, D6-D9, D11, D12 and the rest of the unfinished list above remain open.
+### Second fix round
+
+| Item | Commit | Regression check |
+| --- | --- | --- |
+| Beam: up to 8-GPU layouts (tp default, explicit tp/pp/dp/ep and dp-attention validated before launch) | c6ca79f | layout tests, mutation |
+| Model-and-hardware launch presets: `spleef presets` CRUD, schema validation, expansion at registration with preset id and digest in the spec | a7650a5 | CLI and loader tests |
+| Beam: a crash loop ends `FAILED` after two unserved restarts; refused launches carry the SDK reason; multi-GPU permission checked before launch | 5f471e4 | fake transport, mutation |
+| Gateway: a stream that fails upstream ends with an error event and a 502/504 usage record | 4b9e31a | chat, Anthropic and Responses streams |
+| PostgreSQL tests pull the image before the 60 s start window | 7890c54 | |
+| D7: a single judge vendor needs `allow_single_judge_vendor: true` in batch.yaml | 989586a | mutation |
+| D6: route `rpm`/`tpm` enforced in the gateway (429 `rate_limited`, `Retry-After`) and never sent upstream | 3972684 | gateway tests, CLI-to-gateway contract test |
+| D12: `tasks/README.md` describes running packs through `spleef` batches | 6023efd | |
+| Judge panel (models and endpoints) frozen into the version matrix | 557230f | freeze tests |
+| `mirror: false` honoured; mirrors rechecked after a batch, a moved mirror opens an incident and fails the run | 3891492 | mutation |
+| Engine, GPU, chat template and tokenizer hashes in `trial.versions` | 572c885 | e2e rows |
+| D9: Harbor bridge pins task images to the real registry digest | 6e7f7f7 | mutation |
+| A trial answered by a vendor the provider lock refuses is voided as a provider error | 8863dc9 | runner test against the fake gateway |
+| Docker `create` enforces the requested disk (tmpfs size) and the CPU, memory, disk and lifetime ceilings | efbf615 | real Docker |
+| `hiddentest.result` and `judge.verdict` events | 08d6b44 | runner tests |
+| A batch refuses models without a price (no unpriced route can dodge the cost cap) | 68955a4 | freeze and run tests |
+| Verifier sandboxes get a writable `/verify` tmpfs; the e2e runs on the default root | 1b61437 | real Docker, e2e |
+| Hash-lock paths resolved in one place | 10780bb | mutation: 4 tests fail |
+| Hyper-V test double keeps guest pid files in the VM directory | 9399442 | host `/tmp` count 0 before and after, 2 with the old code |
+| Example routes name real carriers only; commented remote host, Novita sandbox, egress proxy and Beam examples | 2344d6e | `spleef config validate`, e2e |
+| Batch budget checked before each trial starts (booked spend plus in-flight worst cases) | ab1ddaa | mutation of both terms |
+| Cold-start time kept out of the trial wall clock and logged as `endpoint.cold_start` | ac6318b | mutation |
+| Provider failures: five retries with exponential backoff, then back to pending and run after the rest of the batch, once | f4b7b01 | three mutations |
+| Three missed heartbeats end the turn as a hung agent (crash retry applies); `AgentRunner.watch_heartbeat` | 9c6cb2f | fake-clock tests, mutations |
+| Leaderboard columns carry their cost basis (`cost_bases`, markdown section, note when bases differ) | 52b73bf, fe804e7 | core test, e2e on real Docker |
+| Gateway public model name is the endpoint id; the CLI strip and the judge client's re-prefix are gone | fcb5726 | CLI-to-gateway contract test; mutation |
+| Preflight probes: `$ <command>` runs in the sandbox; Docker I1-I9 are commands, checked in a real hardened container (and seen failing in an unhardened one); only described probes are waived | 8426fcf | real Docker, waiver test, mutations |
+| `spleef trials expire-paused`: trials paused for a human past 30 minutes become invalid | eca7c10 | runner scenario at 29 and 31 minutes |
+| C-LIFE-03 proves the TTL reclaim: no forced reap in the case; Docker's injector runs the real sweep | 507972a | mutation: the mock without its sweep fails |
 
 ### Real surfaces
 
@@ -308,14 +297,25 @@ Defects found on real surfaces in that run, fixed since:
 
 - `batch run` retired the endpoints in its `finally` block even when it failed at the freeze guard before any trial (2e8a566).
 - A batch could not route a task pack to a Novita sandbox: packs carry OCI templates and the control plane had no OCI-to-Novita template mapping (D10, d995c4a). The mapping is tested against fakes; no batch has run on a Novita sandbox yet, and the Template Builder CLI step that fills the registry is a Python call, not a `spleef` command.
-- A streaming response whose upstream times out mid-stream still ends without an error event (the status line is already sent); runners use non-streaming requests, so this only affects streaming clients (open).
+- A streaming response whose upstream times out mid-stream ended without an error event (fixed in 4b9e31a).
+
+Long context and multi-GPU on Beam (2026-11-08, 1x RTX5090, SGLang v0.5.23, 0.88 memory fraction, chunked prefill 2048, context 262,144, weights from the Volume; prompts with unique prefixes so the radix cache cannot share them):
+
+| Case | Result |
+| --- | --- |
+| Capacity | KV pool 75,515 tokens; at most 2 running requests (the Gated DeltaNet state cache has 12 slots) |
+| c=1 | 18K, 37K, 57K and 72K-token prompts served in 2.5 to 13.9 s, the needle found each time; 84K refused with HTTP 400 (longer than the 75,509-token limit), no OOM |
+| c=2 | 46K and 69K in total ran concurrently; 93K in total was queued and run one after the other; no OOM |
+| c=3 | always 2 running and 1 queued; no OOM |
+| 1M at c=1, 2M at c=2, 3M at c=3 | not possible on this model at all: one request is capped at the native 262,144 tokens (default RoPE, no YaRN). Total KV for 1M tokens needs about 32.8 GB (32 KB per token in FP8), more than a 32 GB card holds besides 22.7 GB of weights. Estimated pools: TP2 about 850K tokens, TP4 enough for 1M in total; not measured |
+| 2-GPU (TP2) deploy | refused by Beam: multi-GPU containers are not enabled for this workspace (no cost); `validate` now reports it before launch |
+
+The engine flags live in the presets table (`config/examples/presets.yaml`), with these runs as verification records. The P-09/P-10 gateway probes were not re-run after the chunked-prefill change; the long-context run above sent larger prefills through the same engine settings without an OOM.
 
 Open items from the Beam run:
 
-- The engine flags are a deployment choice, not adapter code: for this model on a 32 GB card, `--mem-fraction-static 0.88` leaves too little memory for a 16K-token prefill, and 0.80 leaves no room for the Gated DeltaNet state cache at all. 0.88 with `--chunked-prefill-size 2048` serves; whether it survives the 16K probe is not verified (open).
-- `status` cannot tell an engine restart after a crash from a first start; both read as `deploying` until `/v1/models` answers again, and the crash is only visible in the Beam logs. A crash loop keeps the GPU billed until the deployment is stopped (open).
 - A Beam Volume is not faster on a cold read: the first container read the weights in 177.5 s against 60.6 s from Hugging Face; only containers after it read them in about 6 s. The win in that run came mostly from the cached image (open: measure a cold Volume read on another day or node).
-- The PostgreSQL store tests give `docker run` 60 s, which includes pulling `postgres:16`; on a machine without the image they fail or error until the image is pulled (open).
+- Fixed since: crash loops end `FAILED` (5f471e4); the PostgreSQL tests pull their image first (7890c54).
 
 ## Defects found by the checks, and fixed
 

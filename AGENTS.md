@@ -90,7 +90,7 @@ Parallel agents must run tools with `uv run --frozen --no-sync <tool>` (or `.ven
 - asyncio throughout I/O code. Every network call and subprocess has an explicit timeout. Build subprocess argv as lists; never `shell=True` with interpolated input.
 - Raise the typed errors from `evalspleef.spi.errors`; do not swallow exceptions, and do not catch bare `Exception` without re-raising or recording it as an event.
 - Comments and docstrings are English and explain intent, not mechanics. Code imported from the earlier reference implementation (`packages/evalspleef-core`) still has Chinese comments; leave them unless you edit the line.
-- Adding an adapter: create `packages/adapters/evalspleef-<kind>-<name>/`, register it through entry points (`evalspleef.sandbox_providers` or `evalspleef.model_providers`) in its `pyproject.toml`, ship an isolation profile (sandbox) and pass `evalspleef-conformance`. No change to `spi`, `core` or `control` should be needed; if one is, the abstraction is wrong.
+- Adding an adapter: create `packages/adapters/evalspleef-<kind>-<name>/`, register it through entry points (`evalspleef.sandbox_providers` or `evalspleef.model_providers`) in its `pyproject.toml`, ship an isolation profile (sandbox) and pass `evalspleef-conformance`. Write the I1-I9 preflight probes as `$ <command>` (run in the sandbox, exit 0 means the invariant holds) wherever the carrier allows; a described probe is waived, loudly, on every batch. No change to `spi`, `core` or `control` should be needed; if one is, the abstraction is wrong.
 - Keep diffs small. No refactors next to a bug fix, no helpers for hypothetical needs, no validation inside trusted code paths (validate at system boundaries only).
 
 ## Testing rules

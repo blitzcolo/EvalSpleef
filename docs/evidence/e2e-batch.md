@@ -14,7 +14,7 @@ Captured on 2026-11-08 by `pytest tests/e2e -m e2e` (exit 0, `1 passed in 10.78s
 
 - Real: the `spleef` commands, the gateway process and its trial keys and budgets, the Docker containers (read-only root, tmpfs workspace, non-root user), the pack hidden tests and checkers, the canary injection and scan, the grade computation.
 - Fake: the model (a scripted fake OpenAI-compatible server: reference solution A for the reference agent, no tool calls for the empty agent) and the judge panel (a fake judge model). **Not verified against a real model or a real vendor endpoint.**
-- Bridged, not fixed (follow-ups): the isolation preflight probes are prose in the adapters, so they are waived with a recorded reason in every preflight event; the gateway's public model name carries an extra `ep_` prefix that the command line strips when issuing keys; the verifier root is `/tmp/verify` because the read-only root filesystem has no `/verify`.
+- Bridged at capture time, fixed since: the isolation preflight probes were prose and waived (Docker's I1-I9 now run as commands, 8426fcf); the gateway's public model name carried an extra `ep_` prefix the command line stripped (fcb5726); the verifier root was `/tmp/verify` (verifier sandboxes now get `/verify`, 1b61437). The transcripts below are from the capture and still show the old behaviour.
 - Known limit: when a checker aborts early on an invalid answer, other items' violation codes look absent and pass; the trial still fails its hard gates and lands on tier F.
 
 ## Batch report
