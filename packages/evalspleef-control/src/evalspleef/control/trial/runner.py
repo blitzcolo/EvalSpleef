@@ -294,6 +294,8 @@ class _TrialRun:
         self.artifacts: list[Artifact] = []
         self.transcript: list[str] = []
         self.stop_reasons: list[str] = []
+        self.usage_records_seen = 0
+        """Gateway usage records already read after earlier turns."""
         self.versions: dict[str, Any] | None = None
         self.preflight_log: list[dict[str, Any]] = []
         self.placements: list[dict[str, str]] = []
@@ -470,9 +472,9 @@ class _TrialRun:
             )
             self.transcript.append(f"user: {message}")
             turn, elapsed = await self._send(message)
-            await self._check_vendor_lock()
+            cold_s = await self._after_turn()
             if turn.stop_reason is StopReason.CRASH:
-                self._account(turn, elapsed, count_round=False)
+                self._account(turn, elapsed, cold_s, count_round=False)
                 await self._step_event(turn, counted=False)
                 if crash_retries >= MAX_CRASH_RETRIES:
                     raise RunnerCrashed("the agent runner crashed again after a retry")
@@ -480,21 +482,21 @@ class _TrialRun:
                 kind = "crash_retry"
                 continue
             if turn.stop_reason is StopReason.CANCELLED:
-                self._account(turn, elapsed, count_round=False)
+                self._account(turn, elapsed, cold_s, count_round=False)
                 await self._step_event(turn, counted=False)
                 raise RunnerCrashed("the agent runner was cancelled")
             if turn.stop_reason is StopReason.NEED_CLARIFICATION and (
                 clarifications < MAX_CLARIFICATIONS
             ):
                 # A reasonable question is answered from the FAQ; it is no feedback and no round.
-                self._account(turn, elapsed, count_round=False)
+                self._account(turn, elapsed, cold_s, count_round=False)
                 await self._step_event(turn, counted=False)
                 clarifications += 1
                 self._record_reply(turn)
                 message, kind = self.writer.answer(turn.final_message or ""), "clarification"
                 continue
 
-            self._account(turn, elapsed, count_round=True)
+            self._account(turn, elapsed, cold_s, count_round=True)
             self._mark_exhausted(turn.stop_reason)
             self._record_reply(turn)
             self.stop_reasons.append(turn.stop_reason.value)
@@ -575,11 +577,12 @@ class _TrialRun:
             timer.cancel()
             await asyncio.gather(job, timer, return_exceptions=True)
 
-    async def _check_vendor_lock(self) -> None:
-        """Void the trial when the gateway refused an answer for its provider lock (FR-MOD-04).
+    async def _after_turn(self) -> float:
+        """Read the turn's gateway records; return the cold-start seconds the gateway absorbed.
 
-        Another vendor than the registered one served the model, so whatever the agent did
-        afterwards no longer measures that model.
+        A refused answer for the provider lock voids the trial (FR-MOD-04): another vendor
+        served the model, so whatever the agent did afterwards no longer measures it. Cold
+        start waits are kept out of the trial wall clock but logged (FR-MOD-06, FR-FLOW-06).
         """
         records = await self.owner.gateway.usage(self.trial.trial_id)
         refused = [record for record in records if record.error_code == ENDPOINT_MISMATCH]
@@ -588,10 +591,25 @@ class _TrialRun:
                 f"{len(refused)} upstream answer(s) came from a vendor the provider lock refuses",
                 detail={"reason": "provider_lock", "rounds": sorted({r.round for r in refused})},
             )
+        fresh = records[self.usage_records_seen :]
+        self.usage_records_seen = len(records)
+        cold_ms = sum(record.cold_start_ms for record in fresh)
+        if cold_ms > 0:
+            await self._emit(
+                EventType.ENDPOINT_COLD_START,
+                {
+                    "round": self.usage.rounds + 1,
+                    "endpoint_ids": sorted({r.endpoint_id for r in fresh if r.cold_start_ms}),
+                    "cold_start_ms": cold_ms,
+                },
+            )
+        return cold_ms / 1000
 
-    def _account(self, turn: ShellTurn, elapsed: float, *, count_round: bool) -> None:
+    def _account(
+        self, turn: ShellTurn, elapsed: float, cold_s: float, *, count_round: bool
+    ) -> None:
         tokens = turn.usage.input_tokens + turn.usage.output_tokens
-        wall = max(elapsed, turn.duration_s)
+        wall = max(max(elapsed, turn.duration_s) - cold_s, 0.0)
         if count_round:
             self.usage.add_round(tokens=tokens, agent_cost_usd=turn.cost_usd, wall_clock_s=wall)
         else:

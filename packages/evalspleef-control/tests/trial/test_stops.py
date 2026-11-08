@@ -10,6 +10,8 @@ import pytest
 from evalspleef.control.trial.feedback_text import _parse_persona
 from evalspleef.control.trial.testing import make_result
 from evalspleef.core.feedback import F0Policy
+from evalspleef.spi.gateway import PriceSpec
+from evalspleef.spi.model import UpstreamRoute
 from evalspleef.spi.runner import ShellTurn, StopReason
 from evalspleef.testing.scripted_runner import ScriptedRunner
 
@@ -169,3 +171,52 @@ async def test_a_second_crash_is_an_infrastructure_failure(harness_factory: Any,
     assert outcome.status == "failed_infra"
     assert outcome.reason.startswith("RunnerCrashed")
     assert all(box.destroyed for box in h.sandboxes())
+
+
+class _ColdStartRunner(ScriptedRunner):
+    """Its first turn waits ``cold_s`` of ``turn_s`` on an endpoint cold start."""
+
+    def __init__(self, clock: Any, turn_s: float, cold_s: float) -> None:
+        super().__init__()
+        self.clock, self.turn_s, self.cold_s = clock, turn_s, cold_s
+        self.gateway: Any = None
+        self.trial_id = ""
+
+    async def send(self, message: str, *, deadline_s: int) -> ShellTurn:
+        if self.clock.now() == self.start_s:
+            self.clock.advance(self.turn_s)
+            self.gateway.record_usage(
+                trial_id=self.trial_id,
+                round=1,
+                route_name="ep_cold",
+                input_tokens=10,
+                output_tokens=10,
+                cold_start_ms=int(self.cold_s * 1000),
+            )
+        return await super().send(message, deadline_s=deadline_s)
+
+
+async def test_cold_start_waits_are_logged_and_kept_out_of_the_wall_clock(
+    harness_factory: Any, clock: Any
+) -> None:
+    runner = _ColdStartRunner(clock, turn_s=40.0, cold_s=30.0)
+    h = await harness_factory(scripted=runner)
+    assert h.pack.budget.max_wall_clock_s > runner.turn_s
+    await h.gateway.upsert_route(
+        "ep_cold",
+        UpstreamRoute(
+            api_base="http://upstream.invalid/v1",
+            model="m",
+            protocol="chat_completions",
+            api_key_ref="vault://models/test",
+        ),
+    )
+    await h.gateway.set_price("ep_cold", PriceSpec(input_per_mtok=0.0, output_per_mtok=0.0))
+    runner.gateway, runner.trial_id, runner.start_s = h.gateway, h.trial.trial_id, clock.now()
+
+    outcome = await h.run()
+
+    flow = outcome.record["extensions"]["flow"]
+    assert flow["usage"]["wall_clock_s"] == pytest.approx(runner.turn_s - runner.cold_s)
+    (cold,) = await h.of_type("endpoint.cold_start")
+    assert (cold.payload["round"], cold.payload["cold_start_ms"]) == (1, 30000)
