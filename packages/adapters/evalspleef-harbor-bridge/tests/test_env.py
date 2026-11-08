@@ -23,6 +23,8 @@ from evalspleef.spi.sandbox import (
 from evalspleef.testing.mock_sandbox import MockSandbox, MockSandboxProvider
 from evalspleef.testing.secrets import DictSecretResolver
 
+DIGEST = "sha256:" + "d" * 64
+
 
 @pytest.fixture
 def mock_provider(tmp_path: Path) -> MockSandboxProvider:
@@ -121,6 +123,7 @@ async def test_env_lifecycle_and_exec(mock_provider: MockSandboxProvider):
     env = SpleefEnvironment(
         task_env_config={
             "image": "ubuntu:24.04",
+            "digest": DIGEST,
             "cpus": 2,
             "memory_mb": 2048,
             "storage_mb": 5120,
@@ -150,7 +153,7 @@ async def test_env_lifecycle_and_exec(mock_provider: MockSandboxProvider):
 @pytest.mark.asyncio
 async def test_env_file_transfer(mock_provider: MockSandboxProvider, tmp_path: Path):
     env = SpleefEnvironment(
-        task_env_config={"image": "alpine:latest"},
+        task_env_config={"image": "alpine:latest", "digest": DIGEST},
         provider=mock_provider,
     )
     await env.start()
@@ -193,7 +196,7 @@ async def test_env_dynamic_network_policy_supported(tmp_path: Path):
         secrets=DictSecretResolver({}),
     )
     env = SpleefEnvironment(
-        task_env_config={"image": "ubuntu:24.04"},
+        task_env_config={"image": "ubuntu:24.04", "digest": DIGEST},
         provider=provider,
     )
     await env.start()
@@ -207,7 +210,7 @@ async def test_env_dynamic_network_policy_supported(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_env_dynamic_network_policy_unsupported(mock_provider: MockSandboxProvider):
     env = SpleefEnvironment(
-        task_env_config={"image": "ubuntu:24.04"},
+        task_env_config={"image": "ubuntu:24.04", "digest": DIGEST},
         provider=mock_provider,
     )
     await env.start()
@@ -222,3 +225,25 @@ async def test_env_dynamic_network_policy_unsupported(mock_provider: MockSandbox
 def test_find_sandbox_provider_not_found():
     with pytest.raises(LookupError, match="No sandbox provider entry point found"):
         find_sandbox_provider("nonexistent_provider_xyz")
+
+
+def test_the_digest_comes_from_the_config_the_reference_or_the_registry(tmp_path: Path) -> None:
+    from evalspleef_harbor_bridge.env import TemplateNotPinned, resolve_digest
+
+    other = "sha256:" + "e" * 64
+    assert resolve_digest("img:1", DIGEST, None) == DIGEST
+    assert resolve_digest(f"img@{other}", None, None) == other
+    registry = {"logic-001": {"tag": "llm-eval/logic-001:local", "image_id": other}}
+    assert resolve_digest("llm-eval/logic-001:local", None, registry) == other
+    for image, explicit in (("img:1", None), ("img:1", "sha256:short")):
+        with pytest.raises(TemplateNotPinned):
+            resolve_digest(image, explicit, registry)
+
+
+@pytest.mark.asyncio
+async def test_an_unpinned_task_image_is_refused(mock_provider: MockSandboxProvider) -> None:
+    from evalspleef_harbor_bridge.env import TemplateNotPinned
+
+    env = SpleefEnvironment(task_env_config={"image": "ubuntu:24.04"}, provider=mock_provider)
+    with pytest.raises(TemplateNotPinned):
+        await env.start()

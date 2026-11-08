@@ -15,13 +15,14 @@ import contextlib
 import importlib.metadata
 import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evalspleef.spi.caps import Arch, NetMode, OSFamily
-from evalspleef.spi.errors import CapabilityNotSupported
+from evalspleef.spi.errors import CapabilityNotSupported, SpleefError
 from evalspleef.spi.sandbox import (
     NetworkPolicy,
     Resources,
@@ -173,6 +174,37 @@ def map_sandbox_capabilities(caps: SandboxCapabilities) -> dict[str, bool]:
     }
 
 
+_PINNED = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+class TemplateNotPinned(SpleefError):
+    """No digest is known for the task image; a template is never run by tag alone."""
+
+    error_class = "environment"
+    disposition = "manual"
+
+
+def resolve_digest(image: str, explicit: str | None, registry: Mapping[str, Any] | None) -> str:
+    """The image digest: explicit, pinned in the reference, or built and recorded in the registry."""
+    if explicit:
+        if not _PINNED.fullmatch(explicit):
+            raise TemplateNotPinned(f"digest {explicit!r} is not sha256:<64 hex>")
+        return explicit
+    _, at, pinned = image.partition("@")
+    if at and _PINNED.fullmatch(pinned):
+        return pinned
+    for entry in (registry or {}).values():
+        if isinstance(entry, Mapping) and entry.get("tag") == image:
+            recorded = str(entry.get("image_id") or "")
+            if _PINNED.fullmatch(recorded):
+                return recorded
+    raise TemplateNotPinned(
+        f"no digest for {image!r}: pin it (@sha256:...), pass digest, or build it into the "
+        "template registry",
+        detail={"image": image},
+    )
+
+
 class SpleefEnvironment(BaseEnvironment):
     """Bridges Harbor's BaseEnvironment calls to an EvalSpleef Sandbox instance."""
 
@@ -184,6 +216,7 @@ class SpleefEnvironment(BaseEnvironment):
         config_path: str | Path | None = None,
         provider_config: Mapping[str, Any] | None = None,
         secrets: SecretResolver | None = None,
+        templates_registry: str | Path | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(task_env_config=task_env_config, **kwargs)
@@ -191,6 +224,11 @@ class SpleefEnvironment(BaseEnvironment):
         self._config_path = config_path
         self._provider_config = dict(provider_config or {})
         self._secrets = secrets
+        self._registry: dict[str, Any] = (
+            json.loads(Path(templates_registry).read_text(encoding="utf-8"))
+            if templates_registry
+            else {}
+        )
         self._provider: SandboxProvider | None = None
         self._sandbox: Sandbox | None = None
 
@@ -251,10 +289,12 @@ class SpleefEnvironment(BaseEnvironment):
         arch = Arch.X86_64
         net_mode = NetMode.FULL
         env_vars: dict[str, str] = {}
+        digest: str | None = None
 
         if env_cfg is not None:
             if isinstance(env_cfg, dict):
                 image = str(env_cfg.get("image", image))
+                digest = env_cfg.get("digest")
                 cpus = float(env_cfg.get("cpus", cpus))
                 memory_mb = int(env_cfg.get("memory_mb", memory_mb))
                 storage_mb = int(env_cfg.get("storage_mb", storage_mb))
@@ -269,6 +309,7 @@ class SpleefEnvironment(BaseEnvironment):
                     env_vars = {str(k): str(v) for k, v in env_cfg["env"].items()}
             else:
                 image = getattr(env_cfg, "image", image)
+                digest = getattr(env_cfg, "digest", None)
                 cpus = float(getattr(env_cfg, "cpus", cpus))
                 memory_mb = int(getattr(env_cfg, "memory_mb", memory_mb))
                 storage_mb = int(getattr(env_cfg, "storage_mb", storage_mb))
@@ -291,7 +332,7 @@ class SpleefEnvironment(BaseEnvironment):
         template = TemplateRef(
             kind="oci",
             ref=image,
-            digest=f"sha256:{image}",
+            digest=resolve_digest(image, digest, self._registry),
         )
         network = NetworkPolicy(mode=net_mode)
 
