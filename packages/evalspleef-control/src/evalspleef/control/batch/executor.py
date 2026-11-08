@@ -96,7 +96,8 @@ OutcomeStatus = Literal["scored", "invalid", "failed_infra", "paused_manual"]
 class TrialOutcome:
     """How a trial attempt ended.
 
-    ``failed_infra`` makes the driver retry the trial as a new record (at most three times).
+    ``failed_infra`` makes the driver retry the trial as a new record; ``error_class`` (the
+    SPI taxonomy class of the cause) picks the retry rule (``scheduling.retry_decision``).
     ``record`` is the trial record JSON (``evalspleef.core.models.TrialRecord.to_dict``) and is
     required for ``scored``; its ``trial_id`` must equal the planned trial's id and its
     ``grades`` feed the grade table and the aggregate report.
@@ -105,6 +106,7 @@ class TrialOutcome:
     status: OutcomeStatus
     record: Mapping[str, Any] | None = None
     reason: str = ""
+    error_class: str | None = None
 
 
 class TrialExecutor(Protocol):

@@ -1046,7 +1046,7 @@ class _TrialRun:
                 await self._advance("invalidate", EventType.TRIAL_INVALIDATED, notice)
             else:
                 await self._emit(EventType.TRIAL_INVALIDATED, notice)
-        return TrialOutcome(verdict.status, reason=reason)
+        return TrialOutcome(verdict.status, reason=reason, error_class=verdict.error_class)
 
     async def _invalidate(self, reason: str) -> None:
         decision = evaluate_terminal(isolation_failed=True)

@@ -12,7 +12,7 @@ the cells at the end.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -106,8 +106,10 @@ class BatchDriver:
         deadline_s: float | None = None,
         today: date | None = None,
         ledger: CostLedger | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._ledger = ledger
+        self._sleep = sleep
         self._plan = plan
         self._freeze = freeze
         self._executor = executor
@@ -214,7 +216,21 @@ class BatchDriver:
         self._scheduler.dispatch()
         async with asyncio.TaskGroup() as group:
             chains = [group.create_task(self._chain(trial, ticket)) for trial, ticket in queued]
-        results = [result for chain in chains for result in chain.result()]
+        results = [result for chain in chains for result in chain.result()[0]]
+        deferred = [later for chain in chains if (later := chain.result()[1]) is not None]
+        if deferred:
+            # Trials whose provider kept failing went back to pending; they run once more now
+            # that the rest of the batch is done.
+            requeued = [
+                (trial, self._scheduler.enqueue(self._work_item(trial))) for trial in deferred
+            ]
+            self._scheduler.dispatch()
+            async with asyncio.TaskGroup() as group:
+                again = [
+                    group.create_task(self._chain(trial, ticket, deferred=True))
+                    for trial, ticket in requeued
+                ]
+            results.extend(result for chain in again for result in chain.result()[0])
         results.extend(self._skipped_result(cell) for cell in self._plan.skipped_cells)
         return results
 
@@ -229,28 +245,43 @@ class BatchDriver:
             priority=priority_for(requirements, rerun=trial.attempt > 0),
         )
 
-    async def _chain(self, trial: PlannedTrial, ticket: Ticket) -> list[TrialResult]:
-        """Run a trial and, while it fails on infrastructure, its retries; one result each."""
+    async def _chain(
+        self, trial: PlannedTrial, ticket: Ticket, *, deferred: bool = False
+    ) -> tuple[list[TrialResult], PlannedTrial | None]:
+        """Run a trial and, while it fails on infrastructure, its retries; one result each.
+
+        Returns the results and, when provider retries ran out, the pending trial that
+        runs again after the rest of the batch.
+        """
         results: list[TrialResult] = []
         while True:
             outcome = await self._attempt(trial, ticket)
             decision = (
-                retry_decision(trial.trial_id, trial.attempt)
+                retry_decision(
+                    trial.trial_id,
+                    trial.attempt,
+                    error_class=outcome.error_class,
+                    deferred=deferred,
+                )
                 if outcome.status == "failed_infra"
                 else None
             )
             await self._finish(trial, outcome, decision)
             results.append(TrialResult.from_record(self._record_of(trial, outcome)))
-            if decision is None or not decision.retry or decision.next_trial_id is None:
-                return results
+            if decision is None or decision.next_trial_id is None:
+                return results, None
             previous = trial.trial_id
             trial = replace(
                 trial,
                 trial_id=decision.next_trial_id,
                 index=trial.index + 1,
-                attempt=decision.attempt,
+                attempt=0 if decision.defer else decision.attempt,
             )
             await self._create_record(trial, retry_of=previous)
+            if decision.defer:
+                return results, trial
+            if decision.backoff_s > 0:
+                await self._sleep(decision.backoff_s)
             ticket = self._scheduler.enqueue(self._work_item(trial))
             self._scheduler.dispatch()
 
@@ -270,8 +301,8 @@ class BatchDriver:
         except SpleefError as exc:
             reason = f"{type(exc).__name__}: {exc.message}"
             if _is_infra_failure(exc):
-                return TrialOutcome("failed_infra", reason=reason)
-            return TrialOutcome("invalid", reason=reason)
+                return TrialOutcome("failed_infra", reason=reason, error_class=exc.error_class)
+            return TrialOutcome("invalid", reason=reason, error_class=exc.error_class)
         finally:
             # Sandboxes are already destroyed by now, so the provider quota is free again.
             self._scheduler.release(reservation)
@@ -560,6 +591,7 @@ class BatchDriver:
                     "outcome": outcome.status,
                     "reason": outcome.reason,
                     "retry": retry.retry if retry is not None else False,
+                    "deferred": retry.defer if retry is not None else False,
                     "next_trial_id": retry.next_trial_id if retry is not None else None,
                 },
             )

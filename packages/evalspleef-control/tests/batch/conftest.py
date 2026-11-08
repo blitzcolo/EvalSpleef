@@ -207,6 +207,8 @@ class Harness:
     freeze: FreezeRecord
     driver: BatchDriver
     providers: dict[str, MockSandboxProvider] = field(default_factory=dict)
+    sleeps: list[float] = field(default_factory=list)
+    """Backoff waits the driver asked for; the harness records them instead of waiting."""
 
     def refreeze(
         self,
@@ -347,6 +349,11 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
         executor = FakeExecutor(events)
         trials = TrialRepository(db)
         grades = GradeRepository(db)
+        sleeps: list[float] = []
+
+        async def record_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
         driver = BatchDriver(
             plan=plan,
             freeze=freeze,
@@ -362,6 +369,7 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
             deadline_s=deadline_s,
             today=TODAY,
             ledger=CostLedger(db),
+            sleep=record_sleep,
         )
         return Harness(
             clock=clock,
@@ -385,6 +393,7 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
             freeze=freeze,
             driver=driver,
             providers=providers,
+            sleeps=sleeps,
         )
 
     yield make

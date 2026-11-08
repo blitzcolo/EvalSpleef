@@ -12,7 +12,12 @@ from evalspleef.control.scheduling import CapacitySpec, HostSpec, next_trial_id
 from evalspleef.core.batch import BatchState, IllegalBatchTransition
 from evalspleef.core.events import EventType
 from evalspleef.core.models import CellStatus, Validity
-from evalspleef.spi.errors import CapabilityNotSupported, SandboxCreateError, SandboxLost
+from evalspleef.spi.errors import (
+    CapabilityNotSupported,
+    EndpointUnavailable,
+    SandboxCreateError,
+    SandboxLost,
+)
 
 BATCH = "2026-11-b1"
 TRIAL = "web-001.alpha.terminus.e1.t01"
@@ -379,3 +384,55 @@ async def test_trials_in_flight_count_against_the_batch_budget_at_dispatch(build
     assert states == ["invalid", "scored"]
     [stop] = await h.events_of(EventType.BUDGET_THRESHOLD)
     assert stop.payload["used"] == 25.0
+
+
+async def test_provider_failures_back_off_exponentially_up_to_five_retries(build) -> None:
+    h = await build()
+    ids = attempt_ids(4)
+    for trial_id in ids[:3]:
+        h.executor.raises[trial_id] = EndpointUnavailable("upstream 503")
+
+    await h.freeze_and_run()
+
+    assert h.executor.calls == ids
+    assert h.sleeps == [2.0, 4.0, 8.0]
+    rows = {row.trial_id: row.state for row in await h.trials.list_by_batch(BATCH)}
+    assert [rows[i] for i in ids] == ["invalid", "invalid", "invalid", "scored"]
+
+
+async def test_a_trial_whose_provider_keeps_failing_runs_again_after_the_batch(build) -> None:
+    h = await build(n_tasks=2)
+    ids = attempt_ids(7)
+    for trial_id in ids[:6]:  # the original attempt plus five provider retries
+        h.executor.raises[trial_id] = EndpointUnavailable("upstream 503")
+
+    await h.freeze_and_run()
+
+    other = "web-002.alpha.terminus.e1.t01"
+    assert h.executor.calls.index(other) < h.executor.calls.index(ids[6])
+    assert h.executor.calls[-1] == ids[6]
+    assert h.sleeps == [2.0, 4.0, 8.0, 16.0, 32.0]
+    rows = {row.trial_id: row for row in await h.trials.list_by_batch(BATCH)}
+    assert (rows[ids[6]].state, rows[ids[6]].extensions["retry_of"]) == ("scored", ids[5])
+    invalidated = {e.trial_id: e.payload for e in await h.events_of(EventType.TRIAL_INVALIDATED)}
+    assert (invalidated[ids[5]]["deferred"], invalidated[ids[5]]["next_trial_id"]) == (True, ids[6])
+
+
+async def test_a_deferred_trial_is_not_deferred_twice(build) -> None:
+    h = await build()
+    ids = attempt_ids(13)
+    for trial_id in ids:
+        h.executor.raises[trial_id] = EndpointUnavailable("upstream 503")
+
+    await h.freeze_and_run()
+
+    assert h.executor.calls == ids[:12]  # two chains of six attempts, then it stops
+    rows = {row.trial_id: row.state for row in await h.trials.list_by_batch(BATCH)}
+    assert sorted(rows) == ids[:12]
+    assert set(rows.values()) == {"invalid"}
+    last = (await h.events_of(EventType.TRIAL_INVALIDATED))[-1]
+    assert (last.trial_id, last.payload["deferred"], last.payload["next_trial_id"]) == (
+        ids[11],
+        False,
+        None,
+    )
