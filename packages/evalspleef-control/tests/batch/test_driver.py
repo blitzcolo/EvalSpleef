@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from evalspleef.control.events import verify_projection
+from evalspleef.control.ledger import CostKind, CostLedger
 from evalspleef.control.scheduling import CapacitySpec, HostSpec, next_trial_id
 from evalspleef.core.batch import BatchState, IllegalBatchTransition
 from evalspleef.core.events import EventType
@@ -200,6 +201,21 @@ async def test_trial_rows_are_projections_of_the_event_log(build) -> None:
     report = await verify_projection(h.events, h.db, batch_id=BATCH)
     assert report.checked == 4
     assert report.ok, report.mismatches
+
+
+async def test_each_trial_books_its_model_spend_in_the_cost_ledger(build) -> None:
+    h = await build(n_tasks=2)
+    h.executor.raises["web-002.alpha.terminus.e1.t01"] = CapabilityNotSupported("gpu")
+
+    await h.freeze_and_run()
+
+    entries = await CostLedger(h.db).entries(BATCH, kind=CostKind.TOKENS)
+    # The scored trial carries agent 1.5 + judge 0.25 + simulated user 0.05 USD; the trial
+    # refused before its agent started spent nothing and has no record to book.
+    assert [(e.entry_id, e.source, e.quantity) for e in entries] == [
+        ("web-001.alpha.terminus.e1.t01:tokens", "runner", 4000.0)
+    ]
+    assert entries[0].amount_usd == pytest.approx(1.8)
 
 
 async def test_trial_rows_carry_the_versions_recorded_at_start(build) -> None:

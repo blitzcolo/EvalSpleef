@@ -102,6 +102,21 @@ def test_batch_run_and_report(
         (row_extensions,) = db.execute("SELECT extensions FROM trial").fetchone()
     assert json.loads(row_extensions)["versions"] == versions
 
+    # The cost ledger has the trial's spend; a bill that disagrees fails the reconciliation.
+    costs = cli_runner.invoke(app, ["batch", "costs", "--batch-id", "2026-11-b1", "--json"])
+    kinds = {row["kind"]: row for row in json.loads(costs.output)["kinds"]}
+    assert set(kinds) == {"tokens", "gpu", "sandbox", "infra"}
+    bill = Path(env).parent / "bill.json"
+    bill.write_text(
+        json.dumps({"items": [{"id": "tx-1", "product_category": "llm", "amount": 10.0}]}),
+        encoding="utf-8",
+    )
+    mismatch = cli_runner.invoke(
+        app, ["batch", "costs", "--batch-id", "2026-11-b1", "--novita-bill", str(bill)]
+    )
+    assert mismatch.exit_code == 1
+    assert "tokens" in mismatch.output and "MISMATCH" in mismatch.output
+
     # The trial paused for a human; the operator commands decide and then void it.
     trial_id = "logic-001.demo.scripted.e1.t01"
     listed = cli_runner.invoke(app, ["trials", "list", "--batch-id", "2026-11-b1"])

@@ -28,6 +28,7 @@ from evalspleef.spi.isolation import IsolationProfile
 
 from ..events import EventStore, replay_trial_machine
 from ..leases import LeasedSandbox, LeaseManager, LeaseRequest, LeaseRole
+from ..ledger import CostEntry, CostKind, CostLedger
 from ..scheduling import (
     CapacityUnavailable,
     HostLoss,
@@ -104,7 +105,9 @@ class BatchDriver:
         now: Callable[[], datetime] = _utcnow,
         deadline_s: float | None = None,
         today: date | None = None,
+        ledger: CostLedger | None = None,
     ) -> None:
+        self._ledger = ledger
         self._plan = plan
         self._freeze = freeze
         self._executor = executor
@@ -436,6 +439,29 @@ class BatchDriver:
         events = await self._events.read(self._plan.batch_id, trial_id=trial.trial_id)
         return replay_trial_machine(events, trial_id=trial.trial_id).state
 
+    async def _record_cost(self, trial: PlannedTrial, outcome: TrialOutcome) -> None:
+        """Book the trial's model spend (agent, judge, simulated user) in the cost ledger."""
+        if self._ledger is None or outcome.record is None:
+            return
+        flow = (outcome.record.get("extensions") or {}).get("flow") or {}
+        usage = flow.get("usage") or {}
+        amount = sum(
+            float(usage.get(key) or 0.0)
+            for key in ("agent_cost_usd", "judge_cost_usd", "user_cost_usd")
+        )
+        await self._ledger.record(
+            CostEntry(
+                entry_id=f"{trial.trial_id}:tokens",
+                batch_id=trial.batch_id,
+                kind=CostKind.TOKENS,
+                source="runner",
+                amount_usd=amount,
+                quantity=float(usage.get("total_tokens") or 0),
+                unit="tokens",
+                period=self._ts()[:7],
+            )
+        )
+
     async def _started_versions(self, trial: PlannedTrial) -> Mapping[str, Any] | None:
         """``trial.versions`` as the executor recorded it when the agent started, if it did."""
         events = await self._events.read(self._plan.batch_id, trial_id=trial.trial_id)
@@ -452,6 +478,7 @@ class BatchDriver:
         executor records the trial's transitions, and the row takes the state
         that the log replays to.
         """
+        await self._record_cost(trial, outcome)
         if outcome.status == "scored":
             record = self._record_of(trial, outcome)
             grades = list(record.get("grades") or ())

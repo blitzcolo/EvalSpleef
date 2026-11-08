@@ -29,6 +29,7 @@ from evalspleef.control.batch.operations import OperationRefused, TrialOperation
 from evalspleef.control.config import ConfigError
 from evalspleef.control.endpoints import make_endpoint_id, probe_failures
 from evalspleef.control.events import verify_projection
+from evalspleef.control.ledger import CostLedger
 from evalspleef.control.taskpack import lint_task_pack_dir
 from evalspleef.core.batch import BatchGuardFailed
 from evalspleef.core.report import BatchReport, TrialResult
@@ -1389,6 +1390,7 @@ async def _batch_run(
             events=ctx.events,
             endpoint_states=StoredEndpointStates(ctx.endpoints),
             isolation_profiles=profiles,
+            ledger=CostLedger(ctx.db),
         )
         endpoint_ids = sorted({cell.model.endpoint_id for cell in plan.runnable_cells})
         manager = ctx.endpoint_manager()
@@ -1432,6 +1434,64 @@ async def _batch_run(
                 )
             return EXIT_DOMAIN
         return EXIT_SUCCESS
+
+
+_NOVITA_BILL_OPT = typer.Option(
+    None, "--novita-bill", help="Novita billing JSON to import before reconciling"
+)
+
+
+@batch_app.command("costs")
+def batch_costs(
+    batch_id: str = typer.Option(..., "--batch-id"),
+    novita_bill: Path | None = _NOVITA_BILL_OPT,
+    period: str = typer.Option("", "--period", help="billing period of that bill, e.g. 2026-11"),
+    tolerance: float = typer.Option(0.05, "--tolerance"),
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    as_json: bool = _JSON_OPT,
+) -> None:
+    """Show the batch cost ledger by kind and reconcile it with the vendor bill (FR-OPS-04)."""
+    bill_text = None if novita_bill is None else novita_bill.read_text(encoding="utf-8")
+
+    async def run() -> int:
+        async with AppContext(_store_settings(store_url, events_url, state_dir)) as ctx:
+            ledger = CostLedger(ctx.db)
+            if bill_text is not None:
+                try:
+                    imported = await ledger.import_novita_billing(
+                        bill_text,
+                        batch_id=batch_id,
+                        period=period or batch_id[:7],
+                    )
+                except ValueError as exc:
+                    raise DomainError(f"bill import failed: {exc}") from exc
+                typer.echo(f"imported {len(imported)} bill line(s)", err=True)
+            report = await ledger.reconcile(batch_id, tolerance=tolerance)
+            rows = [
+                {
+                    "kind": str(kind.kind),
+                    "ledger_usd": round(kind.ledger_usd, 6),
+                    "bill_usd": round(kind.bill_usd, 6),
+                    "relative_difference": kind.relative_difference,
+                    "ok": kind.ok,
+                }
+                for kind in report.kinds
+            ]
+            if as_json:
+                payload = {"batch_id": batch_id, "tolerance": tolerance, "ok": report.ok}
+                typer.echo(json.dumps({**payload, "kinds": rows}, indent=2))
+            else:
+                for row in rows:
+                    verdict = "ok" if row["ok"] else "MISMATCH"
+                    typer.echo(
+                        f"{row['kind']:<8} ledger {row['ledger_usd']:.4f} USD  "
+                        f"bill {row['bill_usd']:.4f} USD  {verdict}"
+                    )
+            return EXIT_SUCCESS if report.ok else EXIT_DOMAIN
+
+    _run(run())
 
 
 @batch_app.command("report")

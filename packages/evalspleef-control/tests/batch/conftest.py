@@ -27,6 +27,7 @@ from evalspleef.control.batch import (
 )
 from evalspleef.control.events import EventStore, open_event_store
 from evalspleef.control.leases import LeaseManager
+from evalspleef.control.ledger import CostLedger
 from evalspleef.control.scheduling import CapacitySpec, Scheduler, StaticMatcher
 from evalspleef.control.store import connect, migrate
 from evalspleef.control.store.db import Database
@@ -85,6 +86,16 @@ def scored_record(
         "trial_id": trial_id,
         "state": "scored",
         "validity": "valid",
+        "extensions": {
+            "flow": {
+                "usage": {
+                    "total_tokens": 4000,
+                    "agent_cost_usd": cost,
+                    "judge_cost_usd": 0.25,
+                    "user_cost_usd": 0.05,
+                }
+            }
+        },
         "grades": [
             {
                 "grade_version": 1,
@@ -350,6 +361,7 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
             now=lambda: NOW,
             deadline_s=deadline_s,
             today=TODAY,
+            ledger=CostLedger(db),
         )
         return Harness(
             clock=clock,
