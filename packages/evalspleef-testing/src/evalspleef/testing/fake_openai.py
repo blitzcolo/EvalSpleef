@@ -138,6 +138,7 @@ class FakeOpenAIServer:
         parallel_tool_calls: bool = False,
         reasoning_content: bool = False,
         long_output_words: int | None = None,
+        thinking_tokens: int = 0,
     ) -> None:
         self.model = model
         self.reported_model = reported_model if reported_model is not None else model
@@ -147,6 +148,9 @@ class FakeOpenAIServer:
         self.parallel_tool_calls = parallel_tool_calls
         self.reasoning_enabled = reasoning_content
         self.long_output_words = long_output_words
+        self.thinking_tokens = thinking_tokens
+        """Like a reasoning model: this many tokens of ``max_tokens`` go to hidden reasoning
+        before any content, so a small budget yields an empty answer."""
         self.latency_s = 0.0
         self.requests: list[RecordedRequest] = []
         self._clock: Clock = clock if clock is not None else SystemClock()
@@ -486,9 +490,10 @@ class FakeOpenAIServer:
                 text = text[:cut_at]
         max_tokens = body.get("max_tokens")
         if isinstance(max_tokens, int):
+            budget = max_tokens - self.thinking_tokens
             words = text.split()
-            if len(words) > max_tokens:
-                text = " ".join(words[:max_tokens])
+            if len(words) > budget:
+                text = " ".join(words[: max(budget, 0)])
                 finish_reason = "length"
         message["content"] = text
         return message, finish_reason, count_tokens(text)

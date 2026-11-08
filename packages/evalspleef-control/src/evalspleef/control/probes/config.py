@@ -38,6 +38,8 @@ class ProbeConfig:
     context_floor_tokens: int = 256
     context_resolution_tokens: int = 512
     """P-09 stops bisecting once the bracket is this narrow."""
+    needle_max_tokens: int = 1024
+    """Answer budget of a P-09 request; reasoning models spend part of it thinking first."""
     max_output_probe_tokens: int | None = None
     """Cap for the P-10 request; the declared maximum output is used when None."""
     max_output_halvings: int = 4

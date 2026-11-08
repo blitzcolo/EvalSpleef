@@ -118,6 +118,17 @@ async def test_failed_chat_skips_the_remaining_probes(make_stack: MakeStack) -> 
     assert len(stack.server.requests) == 1
 
 
+async def test_context_probe_leaves_a_reasoning_model_room_to_answer(make_stack: MakeStack) -> None:
+    """Real reasoning models (DeepSeek, GLM) answered nothing within a 32-token budget,
+    which measured their context as 0 and skipped every task."""
+    stack = make_stack(context_limit_tokens=3000, thinking_tokens=200, reasoning_content=True)
+    report = await runner(stack, include=frozenset({"P-01", "P-09"})).run(target(stack))
+
+    by_id = {check.probe_id: check for check in report.checks}
+    assert by_id["P-09"].passed, by_id["P-09"].detail
+    assert 2000 < by_id["P-09"].data["effective"] <= 3000
+
+
 async def test_identity_probe_detects_a_different_responding_model(make_stack: MakeStack) -> None:
     stack = make_stack(reported_model="some-other-model")
     report = await runner(stack, include=frozenset({"P-01", "P-14"})).run(target(stack))

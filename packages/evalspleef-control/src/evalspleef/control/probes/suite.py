@@ -377,14 +377,16 @@ class ProbeSuite:
         reply = await self._chat(
             [_user(prompt)],
             temperature=0,
-            max_tokens=32,
+            max_tokens=self._cfg.needle_max_tokens,
             timeout_s=self._cfg.long_request_timeout_s,
         )
         if reply.status in _TOO_LONG_STATUSES:
             return False
         if not reply.ok:
             raise ProbeResponseError(f"context probe at {tokens} tokens failed: {reply.error}")
-        return code in reply.content
+        reasoning = _reasoning_field(reply)
+        recalled_in = [reply.content, str(reply.message.get(reasoning, "")) if reasoning else ""]
+        return any(code in text for text in recalled_in)
 
     async def _p09(self) -> ProbeCheck:
         declared = self._t.declared_context_tokens
