@@ -37,6 +37,9 @@ VENDOR_E2B = "e2b"
 #: User commands inside trial sandboxes run as this (non-root) user (I6).
 DEFAULT_RUN_AS_USER = "agent"
 
+#: The task workspace every template provides, owned by the run-as user.
+WORKSPACE = "/workspace"
+
 #: Best-effort sudo removal across the distro families our task images use.
 REMOVE_SUDO_CMD = (
     "if command -v sudo >/dev/null 2>&1; then "
@@ -169,7 +172,11 @@ class TemplateBuilder:
         # base provisioning runs as root, so sudo removal must come first and
         # the user switch afterwards.
         from_image_builder = builder.run_cmd(REMOVE_SUDO_CMD, user="root")
-        hardened = from_image_builder.set_user(run_as_user)
+        # Task packs mount their starter files at /workspace, owned by the agent; a live
+        # Novita run of a template built without it failed every case that used it.
+        hardened = from_image_builder.set_user(run_as_user).run_cmd(
+            f"mkdir -p {WORKSPACE} && chown {run_as_user}:{run_as_user} {WORKSPACE}", user="root"
+        )
 
         build_info = template_cls.build(
             hardened,

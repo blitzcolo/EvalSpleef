@@ -23,6 +23,7 @@ from novita_sandbox import (
     SandboxNotFoundException,
     SandboxQuery,
     SandboxState,
+    TimeoutException,
 )
 
 from evalspleef.spi.caps import Arch, Isolation, NetMode, OSFamily
@@ -231,7 +232,9 @@ class NovitaSandboxProvider(E2BFamilyProvider):
         return exit_exception
 
     def _not_found_exceptions(self) -> tuple[type[Exception], ...]:
-        return (SandboxNotFoundException,)
+        # A reclaimed sandbox answers TimeoutException("The sandbox was not found") on a
+        # live account; command timeouts never reach the SDK (the adapter enforces them).
+        return (SandboxNotFoundException, TimeoutException)
 
     def _rate_limit_exceptions(self) -> tuple[type[Exception], ...]:
         return (RateLimitException,)

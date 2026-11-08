@@ -84,9 +84,10 @@ def test_build_records_registry_mapping(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert result.template_id == "tpl-built-1"
     assert result.digest == "sha256:" + "ef" * 32
 
-    # build pipeline: from_image -> remove sudo as root -> set_user(agent)
+    # build pipeline: from_image -> remove sudo as root -> set_user(agent) -> workspace as root
     steps = [entry[0] for entry in log]
-    assert steps == ["from_image", "run_cmd", "set_user"]
+    assert steps == ["from_image", "run_cmd", "set_user", "run_cmd"]
+    assert log[3][2] == {"user": "root"}
     assert log[0][1] == (IMAGE,)
     assert log[0][2] == {"username": "robot", "password": "s3cret"}
     assert log[1][1] == (REMOVE_SUDO_CMD,)

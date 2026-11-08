@@ -46,6 +46,7 @@ _CHUNK_BYTES = 64 * 1024
 _BLACKHOLE_PROXY = "http://127.0.0.1:9"
 
 WORKSPACE = "/workspace"
+DEFAULT_HOME = "/home/user"
 
 
 # ---------------------------------------------------------------------------
@@ -141,11 +142,12 @@ class FakeSandboxRecord:
         return mapped
 
     def map_cwd(self, cwd: str | None) -> Path:
-        """Map a command working directory; defaults to /workspace."""
+        """Map a command working directory; like the real platform it defaults to the
+        user's home, not /workspace."""
         if cwd is None:
-            workspace = self.map_path(WORKSPACE)
-            workspace.mkdir(parents=True, exist_ok=True)
-            return workspace
+            home = self.map_path(DEFAULT_HOME)
+            home.mkdir(parents=True, exist_ok=True)
+            return home
         mapped = self.map_path(cwd)
         mapped.mkdir(parents=True, exist_ok=True)
         return mapped

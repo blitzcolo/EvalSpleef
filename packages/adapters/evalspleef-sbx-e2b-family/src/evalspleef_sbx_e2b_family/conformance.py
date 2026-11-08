@@ -1,3 +1,4 @@
+# mypy: disable-error-code=import-untyped
 """Conformance targets for the E2B-family adapters, running against fakes.
 
 Registered under the ``evalspleef.conformance_targets`` entry-point group as
@@ -10,8 +11,16 @@ Registered under the ``evalspleef.conformance_targets`` entry-point group as
 
 Both targets set ``fake=True``: they run real local subprocesses in temporary
 directories and model vendor network policy with a blackhole proxy, so they
-verify the adapter logic, not isolation. **Nothing here is verified against a
-real Novita account or E2B cluster.**
+verify the adapter logic, not isolation.
+
+A third target, ``novita-live``, runs the real adapter against a real Novita
+account. It is registered only when ``NOVITA_API_KEY`` and
+``SPLEEF_NOVITA_TEMPLATE`` (a template built by the Template Builder, with its
+image digest in ``SPLEEF_NOVITA_TEMPLATE_DIGEST``) are set, and it creates and
+destroys real, billed sandboxes. Create failures and lifetime expiry cannot be
+injected into a real account, so those cases report not applicable there. The
+fake patches the adapter module itself, so while ``novita-live`` is configured
+``novita-fake`` is not built: one process cannot hold both.
 
 Only this module may import ``evalspleef.conformance`` / ``evalspleef.testing``
 (the root import-linter config exempts ``<adapter>.conformance`` for exactly
@@ -20,8 +29,12 @@ this); the production modules and the fakes stay on the SPI plus the vendor SDKs
 
 from __future__ import annotations
 
+import asyncio
+import os
 from dataclasses import replace
 from types import ModuleType
+
+from novita_sandbox import Sandbox as NovitaSdkSandbox
 
 from evalspleef.conformance.target import ConformanceTarget
 from evalspleef.spi.caps import Arch, NetMode, OSFamily
@@ -136,24 +149,70 @@ def _build_target(
     )
 
 
+def _novita_live_target(api_key: str, template: str, digest: str) -> ConformanceTarget:
+    ref = "env://NOVITA_API_KEY"
+    provider = novita_module.NovitaSandboxProvider(
+        "novita-live",
+        # A small declared limit keeps C-CONC-01 to a handful of billed sandboxes.
+        {"api_key_ref": ref, "limits": {"max_concurrency": 5}},
+        DictSecretResolver({ref: api_key}),
+    )
+
+    async def lose_sandbox(sandbox: Sandbox) -> None:
+        # The vendor reclaiming a sandbox, out of band of the adapter's own teardown.
+        await asyncio.to_thread(NovitaSdkSandbox.kill, sandbox.id, **provider._client_kwargs())
+
+    def spec_factory(trial_id: str, *, network: NetMode, max_lifetime_s: int) -> SandboxSpec:
+        spec = _spec_factory(
+            trial_id, network=network, max_lifetime_s=max_lifetime_s, kind="novita_template"
+        )
+        return replace(
+            spec,
+            template=TemplateRef(kind="novita_template", ref=template, digest=digest),
+            resources=Resources(cpus=2, memory_mb=2048, disk_mb=20480),
+        )
+
+    async def cleanup() -> None:
+        await provider.reap({"conformance": "e2b-family"}, older_than_s=0)
+
+    return ConformanceTarget(
+        name="novita-live",
+        kind="sandbox",
+        provider=provider,
+        fake=False,
+        spec_factory=spec_factory,
+        injectors={"lose_sandbox": lose_sandbox},
+        notes="real Novita Agent Sandbox account; billed sandboxes from template " + template,
+        cleanup=cleanup,
+    )
+
+
 def build_targets() -> list[ConformanceTarget]:
-    """The two fake conformance targets ('novita-fake', 'e2b-selfhost-fake')."""
+    """The fake targets, plus 'novita-live' when a real account and template are configured."""
     secrets = DictSecretResolver({})
-    novita_provider = FakeNovitaSandboxProvider("novita-fake", {"region": "us-phx-1"}, secrets)
     selfhost_provider = FakeE2BSelfHostProvider(
         "e2b-selfhost-fake", {"domain": "e2b.fake.invalid"}, secrets
     )
-    return [
-        _build_target(
-            "novita-fake", novita_provider, novita_module, "novita_template", FakeE2BCluster()
-        ),
+    targets = [
         _build_target(
             "e2b-selfhost-fake",
             selfhost_provider,
             selfhost_module,
             "e2b_template",
             FakeE2BCluster(),
+        )
+    ]
+    api_key, template = os.environ.get("NOVITA_API_KEY"), os.environ.get("SPLEEF_NOVITA_TEMPLATE")
+    if api_key and template:
+        digest = os.environ.get("SPLEEF_NOVITA_TEMPLATE_DIGEST", _TEMPLATE_DIGEST)
+        # The real SDK must stay unpatched, so the novita fake is not built alongside it.
+        return [_novita_live_target(api_key, template, digest), *targets]
+    novita_provider = FakeNovitaSandboxProvider("novita-fake", {"region": "us-phx-1"}, secrets)
+    return [
+        _build_target(
+            "novita-fake", novita_provider, novita_module, "novita_template", FakeE2BCluster()
         ),
+        *targets,
     ]
 
 

@@ -171,6 +171,35 @@ async def test_stdin(novita_provider) -> None:
         await sandbox.destroy()
 
 
+async def test_commands_run_in_the_workspace_by_default(novita_provider) -> None:
+    """The vendor default is the user's home; relative paths must still mean the workspace."""
+    sandbox = await novita_provider.create(make_spec("cwd-default"))
+    try:
+        assert (await sandbox.exec(["mkdir", "-p", "sub"])).exit_code == 0
+        written = await sandbox.exec(["sh", "-c", "printf here > f.txt"], cwd="/workspace/sub")
+        assert written.exit_code == 0
+        assert (await sandbox.exec(["cat", "sub/f.txt"])).stdout == b"here"
+        assert (await sandbox.exec(["cat", "f.txt"], cwd="sub")).stdout == b"here"
+    finally:
+        await sandbox.destroy()
+
+
+async def test_a_reclaimed_sandbox_timeout_means_sandbox_lost(novita_provider, monkeypatch) -> None:
+    """A live Novita account answers TimeoutException for a sandbox that is gone."""
+    from novita_sandbox import TimeoutException
+
+    sandbox = await novita_provider.create(make_spec("reclaimed"))
+
+    def gone(*args: object, **kwargs: object) -> None:
+        raise TimeoutException("The sandbox was not found")
+
+    monkeypatch.setattr(sandbox._handle.commands, "run", gone)
+    with pytest.raises(SandboxLost):
+        await sandbox.exec(["true"])
+    monkeypatch.undo()
+    await sandbox.destroy()
+
+
 async def test_exec_on_destroyed_sandbox_raises(novita_provider) -> None:
     sandbox = await novita_provider.create(make_spec())
     await sandbox.destroy()
