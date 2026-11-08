@@ -311,6 +311,14 @@ class NovitaServerlessGpuProvider(ModelEndpointProvider):
             },
             "ports": [port],
         }
+        # Optional v2 worker fields: a disk large enough for weights downloaded at start,
+        # and the CUDA floor newer GPUs need (Blackwell cards such as the RTX 5090: 12.8).
+        rootfs = self._param(spec, "rootfs_size_gb")
+        if rootfs is not None:
+            body["worker_config"]["rootfs_size_gb"] = int(rootfs)
+        cuda = self._param(spec, "min_cuda_version")
+        if cuda is not None:
+            body["worker_config"]["min_cuda_version"] = str(cuda)
         if self.config.get("entrypoint"):
             body["entrypoint"] = str(self.config["entrypoint"])
         recorded = dict(body)

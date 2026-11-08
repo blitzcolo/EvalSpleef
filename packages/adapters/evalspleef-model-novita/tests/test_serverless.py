@@ -151,6 +151,19 @@ async def test_deploy_posts_the_documented_create_request(
     assert handle.observed["image"] == IMAGE
 
 
+async def test_deploy_passes_the_disk_and_cuda_floor_when_configured(
+    provider: NovitaServerlessGpuProvider,
+    api: FakeNovitaGpuApi,
+    make_spec: SpecFactory,
+) -> None:
+    spec = make_spec(rootfs_size_gb=80, min_cuda_version="12.8")
+    await deployed(provider, spec)
+    body = api.calls[0][2]
+    assert body is not None
+    worker = body["worker_config"]
+    assert (worker["rootfs_size_gb"], worker["min_cuda_version"]) == (80, "12.8")
+
+
 async def test_deploy_sends_the_hf_token_but_never_records_or_logs_it(
     provider: NovitaServerlessGpuProvider,
     api: FakeNovitaGpuApi,
