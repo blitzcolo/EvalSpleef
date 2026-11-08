@@ -251,8 +251,16 @@ async def _run_via_sh(command: str, ctx: _ExecContext) -> int:
 async def _run_argv(argv: list[str], ctx: _ExecContext) -> int:
     """Run ``argv`` as a host subprocess in its own session, streaming I/O to the channel."""
     ctx.cwd.mkdir(parents=True, exist_ok=True)
-    # Shell commands name the guest workspace as /workspace; the fake keeps it on the host.
-    argv = [token.replace("/workspace", str(ctx.workspace)) for token in argv]
+    # Shell commands name the guest workspace as /workspace and the guest's pid files under
+    # /tmp; the fake keeps both inside the VM directory, where SFTP (chrooted) reads them.
+    guest_tmp = ctx.root / "tmp"
+    guest_tmp.mkdir(parents=True, exist_ok=True)
+    argv = [
+        token.replace("/workspace", str(ctx.workspace)).replace(
+            "/tmp/spleef-", f"{guest_tmp}/spleef-"
+        )
+        for token in argv
+    ]
     try:
         process = await asyncio.create_subprocess_exec(
             *argv,
