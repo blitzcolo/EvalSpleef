@@ -116,6 +116,7 @@ Every line below comes from a command run during this build, with the exit code 
 | novita-dedicated-fake | 2 | 0 | 8 | fake |
 | novita-serverless-fake | 9 | 0 | 1 | fake |
 | vpc-vllm-fake | 9 | 0 | 1 | fake |
+| beam-pod-fake | 9 | 0 | 1 | fake (the adapter itself also ran on a real Beam workspace, see Real surfaces) |
 | mock-model-api, mock-model-assisted, mock-model-external | 9, 2, 4 | 0 | 1, 8, 6 | doubles |
 
 ## Verification boundaries
@@ -128,6 +129,7 @@ Every line below comes from a command run during this build, with the exit code 
 | Egress proxy | Package tests only; it is not started in the end-to-end run |
 | Docker image templates | logic-001, data-001 and debug-001 built and checked locally; heavy toolchain, macOS and Windows images are not built |
 | Compose stack and Helm chart | `docker compose config` validates the compose file; the chart was checked structurally and never rendered by Helm |
+| Beam Pod model endpoint (`beam-pod`) | Run for real once on 2026-11-08 (deploy, status, chat, gateway probe, terminate); every other path through the transport fakes |
 | Novita Dedicated and Serverless GPU, Novita Agent Sandbox, Hugging Face, E2B self-host, Tart, Hyper-V, libvirt, apple-container, Windows Sandbox, Kubernetes, device pool | Transport fakes only: **not verified on a real host or account** |
 
 ## Known bridges and open follow-ups
@@ -244,7 +246,7 @@ Priorities follow PRD section 5 (P0 is needed for the minimal closed loop). "Acc
 
 | AC | State |
 | --- | --- |
-| AC-01 | not met: no Novita GPU had capacity (serverless workers never left `creating`), so no real Novita or Hugging Face model was served; D5 no longer blocks the HF freeze |
+| AC-01 | partly: a gated Hugging Face model at a pinned revision was served for real on a Beam RTX 5090 (`beam-pod`) and probed through the gateway (10/14); no Novita GPU had capacity, the public and private cases and a batch on a self-served model have not run |
 | AC-02 | partly: gateway budgets proven with a fake upstream; no source or cost-basis annotation on the leaderboard |
 | AC-03 | partly: the Docker half runs for real; the Novita adapter passes conformance on the real account and packs now map to Novita templates (D10), but no batch has run on a Novita sandbox |
 | AC-04, AC-05 | not met: need a Mac mini with Tart and a Hyper-V host |
@@ -290,6 +292,7 @@ D3, D6-D9, D11, D12 and the rest of the unfinished list above remain open.
 | Novita Agent Sandbox | works. `novita-live` conformance against the real account: 25 passed, 0 failed, 8 not applicable (no create-failure or expiry injection, no network canary, no GUI or ports). Template built by the Template Builder from `python:3.12-slim` by digest |
 | Novita GPU instances | API authorised; every create (all 6 products, spot and on-demand) answered `INSUFFICIENT_RESOURCE`; none created |
 | Novita Serverless GPU | The adapter's snake_case body matches the v2 reference for `/gpus/v2/endpoints` (an earlier note here compared it with the v1 camelCase API by mistake). Driven through the real adapter on 2026-11-08: a create without `policy` is rejected (400 "invalid worker policy", fixed in 156b0fc); with it, three sync endpoints on the RTX 5090 product `SL-serverless-3` (nvidia/Qwen3.8-27B-NVFP4 at 482ca0f, SGLang dev and v0.5.23 pinned by digest, 80 GB disk, CUDA 12.8) were created and got a worker each, but every worker stayed in `creating` with an empty log for 8 to 16 minutes. A control endpoint with `python:3.12-slim` stayed in `creating` too, and every serverless and instance GPU product reported 0 available, so the pool had no capacity. No worker ever ran, nothing was billed, every endpoint was deleted. Model serving through a Novita GPU is still not verified |
+| Beam Pod (`beam-pod`, new adapter 10174a7) | Run for real on 2026-11-08 against workspace `1e1e00`: `BeamPodProvider` deployed orcarouter/Qwen3.8-27B-Uncensored-NVFP4 (gated, revision d350e02) with `lmsysorg/sglang:latest` (v0.5.23, sha256:f832b5c3) on 1x RTX5090, 8 CPU, 48Gi. The launcher (beam-client 0.2.239 in its own uv environment) built the 37 GiB image and deployed in 286 s; the container ran at 342 s and served `/v1/models` at 626 s. A direct chat answered in 5.0 s (166 tokens, reasoning split out by `--reasoning-parser qwen3`); decode ran at about 42 tokens/s. `spleef models register` and `models probe` through the gateway: 10/14 (P-06 `tool_choice: required` ignored, P-11 seed and stop, P-09 and P-10 timed out). The timeouts came from the engine: with `--mem-fraction-static 0.88` the 16.5K-token context probe ran the GPU out of memory (CUDA OOM in the Gated DeltaNet prefill), Beam replaced the container and it served again about 5 minutes later. `teardown('terminate')` stopped and deleted the deployment; the deployment and container lists were empty afterwards. REST shapes (`/gateway/deployments`, `/gateway/containers`, `scale`, `stop`, `DELETE`) matched the fakes |
 | Real probes through the gateway | deepseek-flash 11/14, glm-5.3-flash 10/14, qwen3.8-flash 11/14 after the fixes. Remaining failures: P-06 tool_choice modes, P-07 (DeepSeek rejects json_schema), P-11 seed determinism and stop, P-12 a few rate-limited requests |
 
 Real-model batch on local Docker (batch 2026-11-b2, logic-001, data-001 and debug-001, 2 epochs, targets deepseek-flash via the DeepSeek API and glm-5.3-flash via Novita, judge qwen3.8-flash via Novita, all through the gateway): 25 trials including retries, and the event projection matched all 25 rows. deepseek-flash scored 0/Perfect on both epochs of data-001 and debug-001; glm-5.3-flash reached Perfect on data-001 and debug-001 only on the fourth attempt, so with one valid epoch those cells went to Manual; logic-001 stayed Pending for both models (observation timeouts after 300 s, gateway read timeouts). Real defects this run found, all fixed since (see the table above: 67f92a5, aa24625, e7f8c89):
@@ -305,6 +308,12 @@ Defects found on real surfaces in that run, fixed since:
 - `batch run` retired the endpoints in its `finally` block even when it failed at the freeze guard before any trial (2e8a566).
 - A batch could not route a task pack to a Novita sandbox: packs carry OCI templates and the control plane had no OCI-to-Novita template mapping (D10, d995c4a). The mapping is tested against fakes; no batch has run on a Novita sandbox yet, and the Template Builder CLI step that fills the registry is a Python call, not a `spleef` command.
 - A streaming response whose upstream times out mid-stream still ends without an error event (the status line is already sent); runners use non-streaming requests, so this only affects streaming clients (open).
+
+Open items from the Beam run:
+
+- The engine flags are a deployment choice, not adapter code: for this model on a 32 GB card, `--mem-fraction-static 0.88` leaves too little memory for a 16K-token prefill. Use about 0.80 or a smaller `--chunked-prefill-size` in `engine_extra_args` before a batch (open).
+- `status` cannot tell an engine restart after a crash from a first start; both read as `deploying` until `/v1/models` answers again, and the crash is only visible in the Beam logs (open).
+- The PostgreSQL store tests give `docker run` 60 s, which includes pulling `postgres:16`; on a machine without the image they fail or error until the image is pulled (open).
 
 ## Defects found by the checks, and fixed
 

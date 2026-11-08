@@ -8,7 +8,7 @@ An agentic LLM evaluation platform. It measures how much help (feedback levels F
 
 The platform owns its evaluation kernel and talks to the outside world through two provider interfaces (SPIs):
 
-- `ModelEndpointProvider`: where the model under test comes from (any OpenAI-compatible API, Novita Dedicated Endpoint, Novita Serverless GPU, self-hosted vLLM).
+- `ModelEndpointProvider`: where the model under test comes from (any OpenAI-compatible API, Novita Dedicated Endpoint, Novita Serverless GPU, Beam Pods, self-hosted vLLM).
 - `SandboxProvider`: where task workspaces and tools run (Docker, Novita Agent Sandbox, E2B self-host, Tart, Hyper-V, libvirt, and others).
 
 Vendor differences live only in adapters. The CLI is `spleef`.
