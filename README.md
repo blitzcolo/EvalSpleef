@@ -36,7 +36,7 @@ uv run spleef config validate \
   --batch config/examples/batch.yaml
 ```
 
-`config/examples/` holds commented sample `models.yaml`, `providers.yaml` and `batch.yaml`. The model gateway is its own service: `spleef-gateway` (environment: `SPLEEF_GATEWAY_ADMIN_TOKEN`, `SPLEEF_GATEWAY_DATA_PORT`, `SPLEEF_GATEWAY_ADMIN_PORT`, `SPLEEF_GATEWAY_STORE`).
+`config/examples/` holds commented sample `models.yaml`, `providers.yaml`, `batch.yaml` and `presets.yaml` (model and hardware launch presets, managed with `spleef presets`). `docs/guides/running.md` walks through preparing task packs, models and providers and running a batch. The model gateway is its own service: `spleef-gateway` (environment: `SPLEEF_GATEWAY_ADMIN_TOKEN`, `SPLEEF_GATEWAY_DATA_PORT`, `SPLEEF_GATEWAY_ADMIN_PORT`, `SPLEEF_GATEWAY_STORE`).
 
 ## End-to-end batch on local Docker
 
