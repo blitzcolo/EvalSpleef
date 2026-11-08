@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -80,3 +81,12 @@ class AgentRunner(ABC):
     @abstractmethod
     async def stop(self) -> None:
         """Idempotent; kills the agent's process group."""
+
+    def watch_heartbeat(self, on_beat: Callable[[], None]) -> bool:
+        """Call ``on_beat`` on every liveness beat (PRD B.3: every 15 s while a turn runs).
+
+        Returns whether this runner sends beats at all; one that does not returns False and
+        the control plane does not judge it by missing beats.
+        """
+        del on_beat
+        return False

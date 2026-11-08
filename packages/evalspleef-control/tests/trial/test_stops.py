@@ -220,3 +220,78 @@ async def test_cold_start_waits_are_logged_and_kept_out_of_the_wall_clock(
     assert flow["usage"]["wall_clock_s"] == pytest.approx(runner.turn_s - runner.cold_s)
     (cold,) = await h.of_type("endpoint.cold_start")
     assert (cold.payload["round"], cold.payload["cold_start_ms"]) == (1, 30000)
+
+
+class _SilentRunner(ScriptedRunner):
+    """Declares heartbeats, then never beats and never answers on its first turn."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stops = 0
+        self.sends = 0
+
+    def watch_heartbeat(self, on_beat: Any) -> bool:
+        return True
+
+    async def send(self, message: str, *, deadline_s: int) -> ShellTurn:
+        self.sends += 1
+        if self.sends == 1:
+            await asyncio.Event().wait()
+        return await super().send(message, deadline_s=deadline_s)
+
+    async def stop(self) -> None:
+        self.stops += 1
+
+
+async def test_three_missed_heartbeats_end_the_turn_as_a_hung_agent(
+    harness_factory: Any, clock: Any
+) -> None:
+    runner = _SilentRunner()
+    h = await harness_factory(scripted=runner)
+    assert h.pack.budget.max_wall_clock_s > 45
+    task = asyncio.create_task(h.run())
+    await asyncio.wait_for(clock.sleepers(2), timeout=10)  # the turn deadline and the watchdog
+    clock.advance(45)
+    await asyncio.wait_for(task, timeout=10)
+
+    (hung,) = [
+        e for e in await h.of_type("incident.opened") if e.payload.get("kind") == "agent_hung"
+    ]
+    assert (hung.payload["round"], hung.payload["missed_beats"]) == (1, 3)
+    assert runner.stops >= 1
+    assert runner.sends == 2  # the hang counts as a crash and gets the one crash retry
+
+
+class _BeatingRunner(ScriptedRunner):
+    """A slow first turn that keeps beating."""
+
+    def __init__(self, clock: Any) -> None:
+        super().__init__()
+        self.clock = clock
+        self.on_beat: Any = None
+
+    def watch_heartbeat(self, on_beat: Any) -> bool:
+        self.on_beat = on_beat
+        return True
+
+    async def send(self, message: str, *, deadline_s: int) -> ShellTurn:
+        if not self._received:
+            for _ in range(3):
+                await self.clock.sleepers(2)  # the watchdog is armed again
+                self.clock.advance(30)
+                self.on_beat()
+        return await super().send(message, deadline_s=deadline_s)
+
+
+async def test_an_agent_that_keeps_beating_is_not_judged_hung(
+    harness_factory: Any, clock: Any
+) -> None:
+    runner = _BeatingRunner(clock)
+    h = await harness_factory(scripted=runner)
+    assert h.pack.budget.max_wall_clock_s > 90
+
+    await asyncio.wait_for(h.run(), timeout=10)
+
+    kinds = [e.payload.get("kind") for e in await h.of_type("incident.opened")]
+    assert "agent_hung" not in kinds
+    assert len(runner._received) == 1

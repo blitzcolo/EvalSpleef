@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
@@ -462,6 +462,10 @@ class UnifiedShellRunner(AgentRunner):
             await self._transcript.record(
                 {"type": "message", "role": "tool", "tool_call_id": call_id, "content": content}
             )
+
+    def watch_heartbeat(self, on_beat: Callable[[], None]) -> bool:
+        self._on_heartbeat = on_beat
+        return True
 
     def _beat(self) -> None:
         if self._on_heartbeat is not None:

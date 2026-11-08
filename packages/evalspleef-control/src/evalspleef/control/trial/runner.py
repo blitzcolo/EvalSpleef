@@ -100,6 +100,9 @@ MAX_PREFLIGHT_RETRIES = 2
 MAX_LEAK_REWRITES = 3
 MAX_CLARIFICATIONS = 3
 MAX_CRASH_RETRIES = 1
+HEARTBEAT_INTERVAL_S = 15.0
+MISSED_HEARTBEATS = 3
+"""PRD B.3: the shell beats every 15 s; three missed beats in a row mean it hangs."""
 KEY_EXPIRY_BUFFER_S = 900
 THRESHOLD_RATIO = 0.8
 MAX_SCAN_BYTES = 8 << 20
@@ -177,6 +180,10 @@ def _read_text(path: Path) -> str:
 
 class _DeadlineExceeded(Exception):
     """An awaited step ran past its deadline on the injected clock."""
+
+
+class _AgentHung(Exception):
+    """The agent runner missed ``MISSED_HEARTBEATS`` heartbeats in a row."""
 
 
 @dataclass(frozen=True)
@@ -295,6 +302,9 @@ class _TrialRun:
         self.transcript: list[str] = []
         self.stop_reasons: list[str] = []
         self.usage_records_seen = 0
+        self.heartbeats = False
+        """Whether the agent runner sends liveness beats (``AgentRunner.watch_heartbeat``)."""
+        self.last_beat = 0.0
         """Gateway usage records already read after earlier turns."""
         self.versions: dict[str, Any] | None = None
         self.preflight_log: list[dict[str, Any]] = []
@@ -376,6 +386,7 @@ class _TrialRun:
             expires_at=_iso(owner.clock.now() + self.budget.max_wall_clock_s + KEY_EXPIRY_BUFFER_S),
         )
         self.agent_runner = owner.runner_factory(trial)
+        self.heartbeats = self.agent_runner.watch_heartbeat(self._beat)
         self.versions = self._trial_versions(self.agent_runner).to_dict()
         await self._advance(
             "start",
@@ -545,12 +556,31 @@ class _TrialRun:
         started = clock.now()
         timed_out = remaining <= 0
         if not timed_out:
+            work = self.agent_runner.send(message, deadline_s=max(1, int(remaining)))
             try:
-                turn = await self._race(
-                    self.agent_runner.send(message, deadline_s=max(1, int(remaining))), remaining
-                )
+                turn = await self._race(self._watched(work) if self.heartbeats else work, remaining)
             except _DeadlineExceeded:
                 timed_out = True
+            except _AgentHung:
+                await self.agent_runner.stop()
+                await self._emit(
+                    EventType.INCIDENT_OPENED,
+                    {
+                        "kind": "agent_hung",
+                        "round": self.usage.rounds + 1,
+                        "missed_beats": MISSED_HEARTBEATS,
+                    },
+                )
+                elapsed = clock.now() - started
+                hung = ShellTurn(
+                    stop_reason=StopReason.CRASH,
+                    final_message=None,
+                    steps=0,
+                    usage=TokenUsage(),
+                    cost_usd=0.0,
+                    duration_s=elapsed,
+                )
+                return hung, elapsed
         if timed_out:
             await self.agent_runner.stop()
             turn = ShellTurn(
@@ -562,6 +592,30 @@ class _TrialRun:
                 duration_s=max(remaining, 0.0),
             )
         return turn, clock.now() - started
+
+    def _beat(self) -> None:
+        self.last_beat = self.owner.clock.now()
+
+    async def _watched(self, work: Awaitable[T]) -> T:
+        """Await ``work``; raise ``_AgentHung`` once ``MISSED_HEARTBEATS`` beats in a row are missed."""
+        clock = self.owner.clock
+        self.last_beat = clock.now()
+
+        async def watchdog() -> None:
+            while clock.now() - self.last_beat < MISSED_HEARTBEATS * HEARTBEAT_INTERVAL_S:
+                await clock.sleep(HEARTBEAT_INTERVAL_S)
+
+        job = asyncio.ensure_future(work)
+        dog = asyncio.ensure_future(watchdog())
+        try:
+            await asyncio.wait({job, dog}, return_when=asyncio.FIRST_COMPLETED)
+            if job.done():
+                return job.result()
+            raise _AgentHung
+        finally:
+            job.cancel()
+            dog.cancel()
+            await asyncio.gather(job, dog, return_exceptions=True)
 
     async def _race(self, work: Awaitable[T], seconds: float) -> T:
         """Await ``work`` for at most ``seconds`` of the injected clock."""

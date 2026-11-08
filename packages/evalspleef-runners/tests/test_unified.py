@@ -530,11 +530,8 @@ async def test_heartbeat_callback_fires(sandbox: MockSandbox, budget: Any, tmp_p
         server.queue_reply(content="done")
         beats: list[float] = []
         clock = FakeClock(start=0.0)
-        runner = UnifiedShellRunner(
-            clock=clock,
-            transcript_dir=tmp_path,
-            heartbeat=lambda: beats.append(clock.now()),
-        )
+        runner = UnifiedShellRunner(clock=clock, transcript_dir=tmp_path)
+        assert runner.watch_heartbeat(lambda: beats.append(clock.now()))
         await runner.start(
             sandbox,
             gateway_url=server.base_url,
