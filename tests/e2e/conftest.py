@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-import yaml
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
@@ -433,14 +432,6 @@ def e2e(
     config_dir.mkdir()
     for name in ("models.yaml", "providers.yaml", "batch.yaml"):
         shutil.copyfile(REPO / "config" / "examples" / name, config_dir / name)
-    # One deviation: the example routes fall back to mock-sandbox once local-docker is at
-    # max_concurrency; this scenario must run every lease on real Docker, so the routes
-    # keep local-docker only and the scheduler queues instead of overflowing.
-    providers_file = config_dir / "providers.yaml"
-    providers = yaml.safe_load(providers_file.read_text(encoding="utf-8"))
-    for route in providers["routes"]:
-        route["prefer"] = [name for name in route["prefer"] if name == "local-docker"]
-    providers_file.write_text(yaml.safe_dump(providers, sort_keys=False), encoding="utf-8")
     env = os.environ | {
         "SPLEEF_STORE_URL": f"sqlite:///{store_path}",
         "SPLEEF_EVENTS_URL": f"jsonl://{events_dir}",

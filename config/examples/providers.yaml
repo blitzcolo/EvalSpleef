@@ -9,6 +9,11 @@ model_accounts:
     adapter: openai-compatible # entry-point name (evalspleef.model_providers group)
     base_url: "${SPLEEF_FAKE_BASE_URL}" # e2e harness exports the FakeOpenAIServer URL here
     api_key_ref: "env://SPLEEF_FAKE_API_KEY" # SecretRef: resolved at use, never printed
+  # beam-gpu: # a self-served model on Beam (packages/adapters/evalspleef-model-beam)
+  #   adapter: beam-pod
+  #   api_key_ref: "env://BEAM_TOKEN"
+  #   params:
+  #     image: "lmsysorg/sglang:latest@sha256:<digest>"
 
 sandbox_instances:
   local-docker: # Linux containers on the local Docker daemon (TECH-DESIGN 7.4.2)
@@ -18,17 +23,35 @@ sandbox_instances:
       # engine_url: unix:///var/run/docker.sock # implied default
     limits:
       max_concurrency: 8 # scheduler cap; leave headroom for the verifier sandboxes
-  mock-sandbox: # in-memory double from evalspleef-testing; useful without a daemon
+  mock-sandbox: # in-memory double; no route prefers it, so a run uses it only when asked
     adapter: mock-sandbox
     config: {}
     limits:
       max_concurrency: 8
+  # remote-mac-mini: # a host running spleef-hostd, reached over mutual-TLS gRPC (TECH-DESIGN 7.5)
+  #   adapter: remote
+  #   config:
+  #     address: "mac-mini.lan:7443"
+  #     provider: tart # the instance name on that host
+  #     ca_file: /etc/spleef/ca.pem
+  #     cert_file: /etc/spleef/control.pem
+  #     key_file: /etc/spleef/control-key.pem
+  #   limits: {max_concurrency: 2}
+  # novita: # Novita Agent Sandbox (packages/adapters/evalspleef-sbx-e2b-family)
+  #   adapter: novita-sandbox
+  #   config: {api_key_ref: "env://NOVITA_API_KEY", region: us-dallas-nas-2}
+  #   limits: {max_concurrency: 4}
+  #   egress_proxy: docs-proxy # docs_whitelist / package_mirror tasks go through it
+
+# egress_proxies: # allowlist proxies for docs_whitelist / package_mirror (TECH-DESIGN 7.3)
+#   docs-proxy: {url: "http://egress.internal:3128", public_ip: "203.0.113.7"}
 
 routes: # tried in file order; the first entry whose `when` matches wins (TECH-DESIGN 7.2)
-  - when: {os: linux} # Linux tasks go to real Docker first, the mock as fallback
-    prefer: [local-docker, mock-sandbox]
+  # A test double never stands in silently for a real carrier: every route names real ones.
+  - when: {os: linux}
+    prefer: [local-docker]
   - when: {role: verifier} # verifier sandboxes are always created with network=off
-    prefer: [local-docker, mock-sandbox]
+    prefer: [local-docker]
 
 gateway:
   internal_url: "${SPLEEF_GATEWAY_URL}" # data plane the runners and probes call
