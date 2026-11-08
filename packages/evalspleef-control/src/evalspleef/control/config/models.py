@@ -19,6 +19,7 @@ from evalspleef.spi.model import (
 
 from ._yaml import load_yaml_mapping
 from .errors import ConfigError
+from .presets import expand_preset, load_presets
 
 __all__ = [
     "HFSourceConfig",
@@ -210,6 +211,8 @@ class ModelFileConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     models: list[ModelConfig] = Field(min_length=1)
+    #: Preset table that ``deployment.params.preset`` names, relative to this file.
+    presets_file: str = "presets.yaml"
 
     def to_model_specs(self) -> list[ModelSpec]:
         return [entry.to_model_spec() for entry in self.models]
@@ -228,12 +231,51 @@ class ModelFileConfig(BaseModel):
         return expiry
 
 
-def load_models(path: str | Path) -> list[ModelSpec]:
+def load_models(path: str | Path, *, base_dir: str | Path | None = None) -> list[ModelSpec]:
     """Parse ``models.yaml`` and return SPI :class:`ModelSpec` entries.
 
-    Raises :class:`ConfigError` naming the file and the failing field path.
+    Entries that name a preset get it expanded into their deployment params; the preset table
+    is looked up relative to ``base_dir`` (default: the directory of ``path``). Raises
+    :class:`ConfigError` naming the file and the failing field path.
     """
-    return _parse(path).to_model_specs()
+    parsed = _parse(path)
+    root = Path(base_dir) if base_dir is not None else Path(path).parent
+    return [entry.to_model_spec() for entry in _with_presets(str(path), parsed, root)]
+
+
+def _with_presets(file: str, parsed: ModelFileConfig, root: Path) -> list[ModelConfig]:
+    if not any("preset" in entry.deployment.params for entry in parsed.models):
+        return list(parsed.models)
+    table_path = root / parsed.presets_file
+    table = load_presets(table_path)
+    expanded: list[ModelConfig] = []
+    for index, entry in enumerate(parsed.models):
+        preset_id = entry.deployment.params.get("preset")
+        if preset_id is None:
+            expanded.append(entry)
+            continue
+        where = f"models[{index}].deployment.params.preset"
+        preset = table.get(str(preset_id))
+        if preset is None:
+            raise ConfigError(file, where, f"no preset {preset_id!r} in {table_path}")
+        source = entry.source
+        names = (
+            [source.repo, source.mirror_repo or ""]
+            if isinstance(source, HFSourceConfig)
+            else [source.model_id]
+        )
+        try:
+            params = expand_preset(
+                entry.deployment.params,
+                preset,
+                adapter=entry.deployment.adapter,
+                model_ids=names,
+            )
+        except ValueError as exc:
+            raise ConfigError(file, where, str(exc)) from exc
+        deployment = entry.deployment.model_copy(update={"params": params})
+        expanded.append(entry.model_copy(update={"deployment": deployment}))
+    return expanded
 
 
 def load_hf_token_expiry(path: str | Path) -> dict[str, date]:

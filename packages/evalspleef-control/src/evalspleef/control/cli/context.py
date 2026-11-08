@@ -173,7 +173,7 @@ def load_models_config(path: Path, environ: Mapping[str, str]) -> list[ModelSpec
     """Load ``models.yaml`` with environment placeholder support."""
     tmp = _load_interpolated(path, environ)
     try:
-        return load_models(tmp)
+        return load_models(tmp, base_dir=path.parent)
     finally:
         tmp.unlink(missing_ok=True)
 

@@ -46,6 +46,7 @@ from .context import (
     load_models_config,
 )
 from .errors import EXIT_DOMAIN, EXIT_SUCCESS, EXIT_USAGE, CliError, DomainError, UsageError
+from .presets import presets_app
 
 __all__ = ["app", "main"]
 
@@ -69,6 +70,7 @@ app.add_typer(hosts_app, name="hosts")
 app.add_typer(batch_app, name="batch")
 app.add_typer(trials_app, name="trials")
 app.add_typer(gateway_app, name="gateway")
+app.add_typer(presets_app, name="presets")
 
 
 # -- shared options -------------------------------------------------------------

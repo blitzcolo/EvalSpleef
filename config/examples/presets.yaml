@@ -1,0 +1,34 @@
+# presets.yaml — model x hardware launch presets, written and checked by people.
+#
+# A models.yaml entry names one with `deployment.params.preset: <id>`; registration fills
+# gpu, gpu_count, engine, engine_extra_args, context_length and max_concurrency from it
+# (explicit params in models.yaml win) and records the preset id and digest in the spec.
+# Manage the table with `spleef presets list|search|show|add|copy|edit|verify|remove`.
+# The CLI rewrites the file on every change and does not keep comments.
+presets:
+  - id: qwen3.8-27b-uncensored-nvfp4/beam-rtx5090x1/sglang
+    model: orcarouter/Qwen3.8-27B-Uncensored-NVFP4
+    revision: d350e02d82203d5bf07a1e203c997581f235f407
+    adapter: beam-pod
+    hardware: {provider: beam, gpu: RTX5090, gpu_count: 1, vram_gb_per_gpu: 32}
+    engine: sglang
+    engine_image: lmsysorg/sglang:latest@sha256:f832b5c39559c9caa900b22ad37c76fcce66470676855c42052102c537812f1f
+    engine_args: [--reasoning-parser, qwen3, --tool-call-parser, qwen3_coder,
+                  --mem-fraction-static, "0.88", --chunked-prefill-size, "2048"]
+    context_length: 32768
+    max_concurrency: 2
+    deployment_params: {cpu: 8, memory: 48Gi, weights_volume: huggingface_models,
+                        hf_token_secret: HUGGINGFACE_TOKEN}
+    facts:
+      weights_gib: 23.02
+      precision: NVFP4 (MLP) + FP8 (attention, KV cache), compressed-tensors
+      native_context: 262144
+      architecture: Qwen3_5ForConditionalGeneration, 64 layers (16 full attention, 48 Gated DeltaNet)
+      kv_bytes_per_token_fp8: 32768
+    notes: >-
+      Do not pass --quantization or --kv-cache-dtype; both come from config.json.
+      0.80 leaves the Gated DeltaNet state cache room for 0 requests and SGLang refuses to start.
+    verified:
+      - {date: 2026-11-08, result: failed, summary: "--mem-fraction-static 0.80: max_num_reqs=0, engine refused to start"}
+      - {date: 2026-11-08, result: partial, summary: "0.88 without chunked prefill: served, but a 16.5K-token prompt ran out of GPU memory"}
+      - {date: 2026-11-08, result: ok, summary: "0.88 + chunked prefill 2048, weights from the Volume: ready in 161 s, chat in 6.8 s"}
