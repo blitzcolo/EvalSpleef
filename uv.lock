@@ -15,6 +15,7 @@ members = [
     "evalspleef-gateway",
     "evalspleef-harbor-bridge",
     "evalspleef-hostd",
+    "evalspleef-model-beam",
     "evalspleef-model-novita",
     "evalspleef-model-openai-compat",
     "evalspleef-model-vpc-vllm",
@@ -851,6 +852,30 @@ requires-dist = [
     { name = "grpcio", specifier = ">=1.85" },
     { name = "protobuf", specifier = ">=7" },
     { name = "pyyaml", specifier = ">=6" },
+]
+provides-extras = ["conformance"]
+
+[[package]]
+name = "evalspleef-model-beam"
+version = "0.1.0"
+source = { editable = "packages/adapters/evalspleef-model-beam" }
+dependencies = [
+    { name = "evalspleef-spi" },
+    { name = "httpx" },
+]
+
+[package.optional-dependencies]
+conformance = [
+    { name = "evalspleef-conformance" },
+    { name = "evalspleef-testing" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "evalspleef-conformance", marker = "extra == 'conformance'", editable = "packages/evalspleef-conformance" },
+    { name = "evalspleef-spi", editable = "packages/evalspleef-spi" },
+    { name = "evalspleef-testing", marker = "extra == 'conformance'", editable = "packages/evalspleef-testing" },
+    { name = "httpx", specifier = ">=0.27" },
 ]
 provides-extras = ["conformance"]
 

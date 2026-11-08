@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalspleef-model-beam"
+version = "0.1.0"
+description = "Model provider beam-pod (api): an OpenAI-compatible engine deployed as a Beam Pod."
+requires-python = ">=3.12"
+# The Beam SDK (beam-client) is not a dependency: it needs protobuf<7 while hostd needs >=7,
+# so the launcher runs it in a separate uv environment (see launcher.py).
+dependencies = ["evalspleef-spi", "httpx>=0.27"]
+
+[project.optional-dependencies]
+# Only the conformance fakes need these; production code imports the SPI alone.
+conformance = ["evalspleef-conformance", "evalspleef-testing"]
+
+[project.entry-points."evalspleef.model_providers"]
+beam-pod = "evalspleef_model_beam.provider:BeamPodProvider"
+
+[project.entry-points."evalspleef.conformance_targets"]
+beam = "evalspleef_model_beam.conformance:build_targets"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalspleef_model_beam"]
+
+[tool.uv.sources]
+evalspleef-spi = { workspace = true }
+evalspleef-conformance = { workspace = true }
+evalspleef-testing = { workspace = true }
