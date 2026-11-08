@@ -44,7 +44,7 @@ def _grade_rows(store: Path) -> dict[str, dict[str, Any]]:
     for trial_id, tier, rule_id, payload in rows:
         record = json.loads(payload)
         # the grade record's decision.rule_id is authoritative (grade schema); the row's
-        # rule_id column is a projection the batch driver currently leaves empty
+        # rule_id column mirrors it
         decided = (record.get("decision") or {}).get("rule_id")
         grades[trial_id] = {"tier": tier, "rule_id": rule_id or decided, "payload": record}
     return grades
