@@ -795,9 +795,8 @@ class AppContext:
         allow_single_judge_vendor: bool = False,
     ) -> TrialRunner:
         """The real TrialExecutor: packs from the task directory, runners from entry points."""
-        # Sandboxes with a read-only rootfs and no /verify mount (the docker
-        # adapter) cannot host the default verify root; SPLEEF_VERIFY_ROOT moves
-        # verification under a writable tmpfs for those carriers.
+        # SPLEEF_VERIFY_ROOT overrides the verify root for carriers that cannot host
+        # /verify; the docker adapter mounts a /verify tmpfs in verifier sandboxes.
         evaluator = Evaluator(
             judges=judges,
             target_family=target_family,

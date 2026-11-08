@@ -189,3 +189,16 @@ async def test_the_workspace_holds_no_more_than_the_requested_disk(provider, spe
         assert b"No space left" in over.stderr
     finally:
         await sandbox.destroy()
+
+
+async def test_a_verifier_sandbox_can_write_its_verify_root(provider, spec_factory) -> None:
+    from dataclasses import replace
+
+    sandbox = await provider.create(replace(spec_factory("verify-root"), role="verifier"))
+    try:
+        result = await sandbox.exec(
+            "mkdir -p /verify/hidden-tests && echo ok > /verify/hidden-tests/x"
+        )
+        assert result.exit_code == 0, result.stderr
+    finally:
+        await sandbox.destroy()

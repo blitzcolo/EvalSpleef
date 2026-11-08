@@ -402,6 +402,15 @@ class DockerProvider(SandboxProvider):
         user = spec.run_as_user
         memory = spec.resources.memory_mb << 20
         home_tmpfs = f"/home/{user}"
+        tmpfs = {
+            "/tmp": "rw,nosuid,nodev,mode=1777",
+            # The rootfs is read-only, so the workspace tmpfs is the disk the spec asks for.
+            "/workspace": f"rw,exec,nosuid,nodev,mode=0777,size={spec.resources.disk_mb}m",
+            home_tmpfs: "rw,exec,nosuid,nodev,mode=0777",
+        }
+        if spec.role == "verifier":
+            # Hidden tests are uploaded to and run from /verify (the evaluator's default root).
+            tmpfs["/verify"] = "rw,exec,nosuid,nodev,mode=0777"
         return {
             "Image": image,
             "Cmd": ["sleep", "infinity"],
@@ -413,12 +422,7 @@ class DockerProvider(SandboxProvider):
             "OpenStdin": False,
             "HostConfig": {
                 "ReadonlyRootfs": True,
-                "Tmpfs": {
-                    "/tmp": "rw,nosuid,nodev,mode=1777",
-                    # The rootfs is read-only, so the workspace tmpfs is the disk the spec asks for.
-                    "/workspace": f"rw,exec,nosuid,nodev,mode=0777,size={spec.resources.disk_mb}m",
-                    home_tmpfs: "rw,exec,nosuid,nodev,mode=0777",
-                },
+                "Tmpfs": tmpfs,
                 "CapDrop": ["ALL"],
                 "SecurityOpt": ["no-new-privileges:true"],
                 "PidsLimit": self._pids_limit,

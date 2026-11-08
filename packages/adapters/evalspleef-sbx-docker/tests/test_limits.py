@@ -44,3 +44,12 @@ def test_the_workspace_is_sized_to_the_requested_disk() -> None:
     config = _provider()._container_config(build_spec("t1", DIGEST), "img", {})
     assert "size=1024m" in config["HostConfig"]["Tmpfs"]["/workspace"]
     assert "disk" in _provider().capabilities().enforces_limits
+
+
+def test_only_verifier_sandboxes_get_a_writable_verify_root() -> None:
+    provider = _provider()
+    agent = provider._container_config(build_spec("t1", DIGEST), "img", {})
+    verifier_spec = replace(build_spec("t1", DIGEST), role="verifier")
+    verifier = provider._container_config(verifier_spec, "img", {})
+    assert "/verify" not in agent["HostConfig"]["Tmpfs"]
+    assert "/verify" in verifier["HostConfig"]["Tmpfs"]

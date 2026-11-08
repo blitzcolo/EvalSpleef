@@ -450,9 +450,6 @@ def e2e(
         "SPLEEF_GATEWAY_URL": gateway.data_url,
         "SPLEEF_FAKE_BASE_URL": fake_server.base_url,  # type: ignore[attr-defined]
         "SPLEEF_FAKE_API_KEY": FAKE_API_KEY,
-        # The docker sandbox rootfs is read-only with no /verify mount, so the
-        # evaluator verifies under the /tmp tmpfs instead (SPLEEF_VERIFY_ROOT).
-        "SPLEEF_VERIFY_ROOT": "/tmp/verify",
         "TMPDIR": str(REPORTS / "tmp"),  # runner transcripts land in the report dir
     }
     yield E2E(
