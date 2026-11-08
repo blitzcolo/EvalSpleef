@@ -376,6 +376,8 @@ async def run_isolation_probes(sandbox: Sandbox, profile: IsolationProfile) -> l
         entry = profile.invariants.get(invariant)
         if entry is None or entry.waived or not entry.probe:
             continue
-        outcome = await sandbox.exec(entry.probe, timeout_s=PROBE_TIMEOUT_S)
+        # A described (non-executable) probe that was not waived cannot pass: it runs as
+        # written and fails, so the preflight never treats an unchecked invariant as held.
+        outcome = await sandbox.exec(entry.command or entry.probe, timeout_s=PROBE_TIMEOUT_S)
         results.append(ProbeResult(invariant, entry.probe, outcome.exit_code, outcome.timed_out))
     return results

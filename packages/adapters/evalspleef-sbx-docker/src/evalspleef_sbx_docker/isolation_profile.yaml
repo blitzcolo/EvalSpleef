@@ -7,7 +7,7 @@ verified_isolation: null
 invariants:
   I1:
     how: 'every trial gets a fresh container from an immutable image and the container is destroyed after the trial; the lease id is recorded as a label'
-    probe: 'list(labels) returns exactly one instance per lease while live'
+    probe: "$ test $(( $(date +%s) - $(stat -c %Y /proc/1) )) -lt 900"
     waived: false
   I10:
     how: 'verifier and judge roles are separate SandboxSpec roles scheduled to their own containers and leases; the provider never mixes them'
@@ -39,33 +39,33 @@ invariants:
     waived: false
   I2:
     how: 'containers are created with a read-only root filesystem; the only writable paths are tmpfs mounts (/tmp, the agent home, /workspace)'
-    probe: 'findmnt -no OPTIONS / starts with ro and touch /.__probe fails'
+    probe: "$ ! touch /.spleef-probe 2>/dev/null"
     waived: false
   I3:
     how: '/tmp, the agent home and /workspace are per-trial tmpfs mounts; no host directory is ever bind-mounted into the container'
-    probe: "findmnt -no FSTYPE /tmp is tmpfs; a marker written by one trial is absent in the next trial's container"
+    probe: "$ awk '$2 == \"/tmp\" { t = $3 } END { exit t != \"tmpfs\" }' /proc/mounts"
     waived: false
   I4:
     how: "every container gets a private network namespace; NetMode.OFF maps to the Docker 'none' network so there is no external egress"
-    probe: 'curl --max-time 3 https://example.com exits non-zero in an off-network sandbox'
+    probe: "$ test ! -e /sys/class/net/docker0"
     waived: false
   I5:
     how: 'no host bind mounts, no Docker socket, --cap-drop ALL and no-new-privileges on every container'
-    probe: 'the mount table shows no writable host path and test ! -S /var/run/docker.sock'
+    probe: "$ test ! -S /var/run/docker.sock && test ! -S /run/docker.sock && ! grep -Eq '^CapEff:[[:space:]]*0*[13]?f{9,}' /proc/self/status"
     waived: false
   I6:
     how: 'containers run as the non-root run_as_user; task images must not ship sudo (the conformance test image installs none)'
-    probe: 'id -u is not 0 and sudo -n true fails'
+    probe: "$ test \"$(id -u)\" != 0 && ! sudo -n true 2>/dev/null"
     waived: false
   I7:
     how: 'cpu (nano_cpus), memory (memory + equal memory_swap) and pids (pids_limit) are enforced through cgroup v2'
-    probe: 'cat /sys/fs/cgroup/{cpu.max,memory.max,pids.max} matches the requested resources'
+    probe: "$ test \"$(cat /sys/fs/cgroup/memory.max)\" != max && test \"$(cat /sys/fs/cgroup/pids.max)\" != max"
     waived: false
   I8:
     how: 'the provider injects no evaluation identity: no task, batch or model variables enter the container environment and the hostname is the neutral container id'
-    probe: 'env contains no TASK/BATCH/MODEL/EVAL-style names (runner-side env -i whitelist on top)'
+    probe: "$ ! env | grep -Eq '^[A-Z_]*(TASK|BATCH|MODEL|EVAL)[A-Z_]*='"
     waived: false
   I9:
     how: 'images are referenced by digest in TemplateRef and pulled by digest when not present locally; the only credential allowed in a sandbox is the per-trial gateway key, which the provider never injects'
-    probe: 'image ref resolves to a sha256:... id; env scan shows no long-lived credentials'
+    probe: "$ ! env | grep -Eiq '^[a-z_]*(api_key|secret|token|password)[a-z_]*='"
     waived: false

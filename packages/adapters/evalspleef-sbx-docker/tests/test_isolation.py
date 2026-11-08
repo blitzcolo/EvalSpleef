@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
 from evalspleef_sbx_docker import isolation
 from evalspleef_sbx_docker.provider import DockerProvider
 
@@ -65,3 +66,17 @@ def test_runsc_config_raises_declared_isolation() -> None:
     provider = DockerProvider("test", {"runtime": "runsc"}, _Secrets())
     assert provider.capabilities().isolation == Isolation.L2
     assert provider.isolation_profile().declared_isolation == Isolation.L2
+
+
+def test_preflight_invariants_have_executable_probes() -> None:
+    profile = isolation.isolation_profile()
+    missing = [f"I{n}" for n in range(1, 10) if profile.invariants[f"I{n}"].command is None]
+    assert missing == []
+
+
+def test_yaml_probes_match_python_profile() -> None:
+    document = yaml.safe_load(YAML_PATH.read_text(encoding="utf-8"))
+    profile = isolation.isolation_profile()
+    assert {key: entry["probe"] for key, entry in document["invariants"].items()} == {
+        key: entry.probe for key, entry in profile.invariants.items()
+    }

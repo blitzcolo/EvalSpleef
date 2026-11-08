@@ -13,11 +13,21 @@ class InvariantEntry:
 
     how: str
     probe: str | None = None
+    """How the invariant is checked. ``$ <command>`` is a shell command the control plane
+    runs inside the sandbox before a trial (exit status 0: the invariant holds); any other
+    text describes a check made outside the sandbox (conformance, audit)."""
     waived: bool = False
     reason: str | None = None
     compensating: str | None = None
     approved_by: str | None = None
     expires: str | None = None
+
+    @property
+    def command(self) -> str | None:
+        """The shell command of an executable probe, or ``None`` for a described one."""
+        if self.probe is not None and self.probe.startswith("$ "):
+            return self.probe[2:]
+        return None
 
 
 @dataclass(frozen=True)

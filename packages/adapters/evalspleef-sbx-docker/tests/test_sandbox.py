@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from evalspleef_sbx_docker.isolation import isolation_profile
 
 from evalspleef.spi.errors import SandboxLost, TransferError
 from evalspleef.spi.sandbox import TIMEOUT_EXIT_CODE
@@ -172,6 +173,18 @@ async def test_isolation_hardening_visible(sandbox) -> None:
     assert int(memory.stdout.strip()) == 512 * 1024 * 1024
     pids = await sandbox.exec(["cat", "/sys/fs/cgroup/pids.max"])
     assert int(pids.stdout.strip()) > 0
+
+
+async def test_every_preflight_probe_holds_in_a_real_container(sandbox) -> None:
+    profile = isolation_profile()
+    failed = {}
+    for number in range(1, 10):
+        command = profile.invariants[f"I{number}"].command
+        assert command is not None
+        result = await sandbox.exec(command, timeout_s=30)
+        if result.exit_code != 0:
+            failed[f"I{number}"] = (result.exit_code, result.stderr[-200:])
+    assert failed == {}
 
 
 async def test_the_workspace_holds_no_more_than_the_requested_disk(provider, spec_factory) -> None:

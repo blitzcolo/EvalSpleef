@@ -93,6 +93,7 @@ from evalspleef.control.store import (
 )
 from evalspleef.control.taskpack import TaskPack, load_task_pack
 from evalspleef.control.trial import ModelEndpoint, TrialRunner, TrialSetup
+from evalspleef.control.trial.prepare import PREFLIGHT_INVARIANTS
 from evalspleef.core.batch import BatchState
 from evalspleef.core.canary import CanaryRegistry
 from evalspleef.core.judge import JudgeClient
@@ -399,11 +400,9 @@ class _LazyGatewayAdmin(GatewayAdmin):
 
 
 _PROSE_PROBE_WAIVER = (
-    "waived by the spleef CLI: the trial preflight executes InvariantEntry.probe "
-    "verbatim as a shell command, but the adapter ships a prose description there "
-    "(cross-component wiring gap; the docker adapter's executable probes/linux.sh "
-    "is never invoked). Waived until the control plane runs the executable probe "
-    "scripts; the adapter conformance suite still covers these invariants."
+    "the adapter describes this preflight probe instead of giving a '$ <command>' the "
+    "preflight can run in the sandbox; waived until it ships one. The adapter "
+    "conformance suite still covers the invariant."
 )
 
 
@@ -441,14 +440,12 @@ class _BridgedProvider(SandboxProvider):
 
 
 def _waive_prose_probes(providers: ProviderRegistry) -> list[str]:
-    """Waive non-executable preflight probes (human prose) so trials can preflight.
+    """Waive preflight probes (I1-I9) that an adapter only describes, so trials can preflight.
 
-    Cross-component gap (documented in the control-cli report): adapters fill
-    ``InvariantEntry.probe`` with prose descriptions while the trial preflight
-    execs the string as a shell command, so the S5 preflight can never pass on a
-    real adapter. The waiver is loud, not silent: every preflight event records
-    the waived invariants with this reason, and the freeze record carries them.
-    Returns the instance names the bridge was applied to.
+    A probe written as ``$ <command>`` runs in the sandbox; a described one cannot,
+    and would fail every preflight. The waiver is loud, not silent: every preflight
+    event records the waived invariants with this reason, and the freeze record
+    carries them. Returns the instance names the waiver was applied to.
     """
     bridged: list[str] = []
     for name, instance in providers.sandbox_instances().items():
@@ -456,7 +453,12 @@ def _waive_prose_probes(providers: ProviderRegistry) -> list[str]:
         invariants: dict[str, InvariantEntry] = {}
         changed = False
         for key, entry in profile.invariants.items():
-            if not entry.waived and entry.probe is not None and " " in entry.probe.strip():
+            if (
+                key in PREFLIGHT_INVARIANTS
+                and not entry.waived
+                and entry.probe is not None
+                and entry.command is None
+            ):
                 invariants[key] = InvariantEntry(
                     how=entry.how,
                     probe=None,
