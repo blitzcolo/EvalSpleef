@@ -310,6 +310,31 @@ class Settings:
         )
 
 
+def deployment_version_fields(spec: ModelSpec, observed: Mapping[str, Any]) -> dict[str, Any]:
+    """The engine, GPU and chat-template fields of ``trial.versions`` (PRD FR-MOD-09).
+
+    ``chat_template_sha256`` is the hash of ``chat_template.jinja``; repositories that keep the
+    template inside ``tokenizer_config.json`` get that file's hash. The engine names the image
+    the adapter recorded, so the version travels with it; hosted APIs stay ``unknown``.
+    """
+    params = spec.deployment.params
+    source = spec.source
+    hashes = source.files_sha256 if isinstance(source, HFSource) else {}
+    engine = params.get("engine")
+    image = observed.get("image")
+    if engine and image:
+        inference_engine = f"{engine} {image}"
+    else:
+        inference_engine = str(engine) if engine else "unknown"
+    gpu = params.get("gpu") or params.get("gpu_type")
+    return {
+        "inference_engine": inference_engine,
+        "gpu_type": str(gpu) if gpu else None,
+        "chat_template_sha256": hashes.get("chat_template.jinja")
+        or hashes.get("tokenizer_config.json"),
+    }
+
+
 class StoredEndpointStates:
     """EndpointStates backed by the endpoint projection rows."""
 
@@ -755,6 +780,7 @@ class AppContext:
                 "context_length_effective": effective if isinstance(effective, int) else None,
                 "gateway_version": freeze.gateway_version,
                 "freeze_hash": freeze.version_matrix_hash,
+                **deployment_version_fields(spec, handle.observed),
             }
         return seeds
 
