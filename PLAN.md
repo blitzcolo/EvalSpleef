@@ -110,6 +110,7 @@ Every line below comes from a command run during this build, with the exit code 
 | device-pool-fake | 24 | 0 | 9 | fake |
 | perf-host-fake | 20 | 0 | 13 | fake |
 | novita-fake (Novita sandbox) | 25 | 0 | 8 | fake |
+| novita-live (Novita sandbox, real account, 2026-11-08) | 25 | 0 | 8 | real Novita Agent Sandbox |
 | e2b-selfhost-fake | 25 | 0 | 8 | fake |
 | openai-compat-fake | 3 | 0 | 7 | fake |
 | novita-dedicated-fake | 2 | 0 | 8 | fake |
@@ -252,6 +253,44 @@ Priorities follow PRD section 5 (P0 is needed for the minimal closed loop). "Acc
 | AC-08 | not met: Harbor not installed |
 | AC-09 | not met: no calibration or regrade-agreement tooling |
 | AC-10 | not met: the cost ledger is not wired |
+
+## Fixes and real-surface runs (2026-11-08)
+
+### Fixed since the review
+
+| Item | Commit | Regression check |
+| --- | --- | --- |
+| D1 trial rows are projections of explicit event transitions; `batch run` verifies them | 12b39bc | the old projection fails 30 tests; e2e checks every row |
+| D4 `trial.versions` recorded at agent start, copied to the row | 5cb64f3 | e2e asserts sandbox adapter `docker`, deployment `openai-compatible` on all 12 rows |
+| D5 HF token expiry recorded in models.yaml (`token_expires`), freeze checks it | a593c97 | mutation: an empty expiry map fails the freeze tests |
+| D2 docker runs containers under the configured runtime; an unregistered runtime is refused | b91781e | mutation for both halves on the real daemon |
+| Operator commands `spleef trials list/regrade/void/resolve`; grading inputs recorded | dfd1727 | real runner scenarios plus projection check |
+| Cost ledger written per trial; `spleef batch costs` reconciles against a Novita bill | 2513a31 | driver and CLI tests |
+| `spleef batch report --release DIR`: drill-down, version manifest, probe summary, isolation by carrier, judges, costs | a7c07c3 | e2e asserts every artifact |
+| P-09 context probe gave reasoning models no room and measured 0 | df21338 | mutation reproduces the real "recalled up to 0" |
+| Gateway retries upstream 429/5xx with backoff (B.6) | 10a9cdd | mutation: no retries fails 3 tests |
+| e2b family: creates in flight count against max_concurrency | 696ecf3 | mutation: the race lets 3 of 3 through |
+| Novita adapter: commands run in /workspace, `TimeoutException` means lost, templates get /workspace; `novita-live` conformance target | 20b1ba3 | mutation for the cwd default; real conformance below |
+
+D3, D6-D12 and the rest of the unfinished list above remain open.
+
+### Real surfaces
+
+| Surface | Result |
+| --- | --- |
+| Novita LLM API (OpenAI-compatible) | works; 99 models listed |
+| DeepSeek API | works; `deepseek-flash`, `deepseek-v4-pro` |
+| Novita Agent Sandbox | works. `novita-live` conformance against the real account: 25 passed, 0 failed, 8 not applicable (no create-failure or expiry injection, no network canary, no GUI or ports). Template built by the Template Builder from `python:3.12-slim` by digest |
+| Novita GPU instances | API authorised; every create (all 6 products, spot and on-demand) answered `INSUFFICIENT_RESOURCE`; none created |
+| Novita Serverless GPU | endpoint create with 0 workers succeeded and was deleted; all serverless products had 0 GPUs available. The repository's serverless adapter sends a snake_case body to `/gpus/v2/endpoints`, which does not match the documented camelCase body at `/gpu-instance/openapi/v1/endpoint/create` (open) |
+| Real probes through the gateway | deepseek-flash 11/14, glm-5.3-flash 10/14, qwen3.8-flash 11/14 after the fixes. Remaining failures: P-06 tool_choice modes, P-07 (DeepSeek rejects json_schema), P-11 seed determinism and stop, P-12 a few rate-limited requests |
+
+The first live conformance attempt was invalid: the fake target patched the adapter module process-wide, so `novita-live` ran against the in-memory fake. Building the live target without the fake fixed it; only the third run above counts.
+
+New defects found on real surfaces and still open:
+
+- `batch run` retires the endpoints in its `finally` block even when it fails at the freeze guard before any trial, so a retry finds them retired.
+- A batch cannot route a task pack to a Novita sandbox: packs carry OCI templates and the control plane has no OCI-to-Novita template mapping (D10).
 
 ## Defects found by the checks, and fixed
 
