@@ -9,12 +9,15 @@ event log stays authoritative (AGENTS.md rule 6):
   post hoc), one event per transition.
 * ``resolve`` records a human decision: a paused trial resumes verification
   and is scored with the human grade; a scored trial gets an overriding version.
+* ``expire_paused`` invalidates trials left paused longer than the manual
+  intervention window (P5, docs/02 section 6).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
 
 from evalspleef.core.events import EventEnvelope, EventType, new_event_id
@@ -40,6 +43,12 @@ from ..store.rows import GradeRow, TrialRow
 __all__ = ["OperationRefused", "TrialOperations"]
 
 _ACTOR = "operator"
+MANUAL_PAUSE_LIMIT_S = 1800
+"""P5: a trial paused for a human for 30 minutes without a decision is invalid (docs/02 6)."""
+
+
+def _instant(ts: str) -> datetime:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
 class OperationRefused(Exception):
@@ -172,6 +181,58 @@ class TrialOperations:
             )
         )
         return stored
+
+    async def expire_paused(
+        self, batch_id: str, *, max_pause_s: int = MANUAL_PAUSE_LIMIT_S
+    ) -> list[str]:
+        """Invalidate the batch's trials paused longer than ``max_pause_s``; their ids."""
+        now = _instant(self.now())
+        expired: list[str] = []
+        for row in await self.trials.list_by_batch(batch_id):
+            if row.state != str(TrialState.PAUSED_MANUAL):
+                continue
+            log = await self.events.read(batch_id, trial_id=row.trial_id)
+            machine = replay_trial_machine(log, trial_id=row.trial_id)
+            paused_at = [
+                event.ts
+                for event in log
+                if (event.payload.get("transition") or {}).get("to")
+                == str(TrialState.PAUSED_MANUAL)
+            ]
+            if machine.state is not TrialState.PAUSED_MANUAL or not paused_at:
+                continue
+            waited = (now - _instant(paused_at[-1])).total_seconds()
+            if waited < max_pause_s:
+                continue
+            decision = evaluate_terminal(manual_interrupt_expired=True)
+            assert decision is not None
+            reason = f"paused {int(waited)} s without a human decision (limit {max_pause_s} s)"
+            path = event_path_for_terminal(machine, decision)
+            for position, event in enumerate(path):
+                before = machine.state
+                after = machine.apply(event, note=reason)
+                last = position == len(path) - 1
+                await self._emit(
+                    row,
+                    EventType.TRIAL_INVALIDATED if last else EventType.INCIDENT_OPENED,
+                    {
+                        "transition": {"event": event, "from": before.value, "to": after.value},
+                        "kind": "manual_timeout",
+                        "code": decision.code,
+                        "reason": reason,
+                        "retry": False,
+                    },
+                )
+            await self.trials.upsert(
+                replace(
+                    row,
+                    state=str(machine.state),
+                    validity=str(Validity.INVALID),
+                    updated_at=self.now(),
+                )
+            )
+            expired.append(row.trial_id)
+        return expired
 
     # -- helpers -------------------------------------------------------------------------
 

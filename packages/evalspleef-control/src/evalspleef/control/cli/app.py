@@ -1789,6 +1789,23 @@ def trials_void(
     _run(_trial_operation(store_url, events_url, state_dir, action))
 
 
+@trials_app.command("expire-paused")
+def trials_expire_paused(
+    batch_id: str = typer.Option(..., "--batch-id"),
+    max_pause_s: int = typer.Option(1800, "--max-pause-s", min=1),
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """Invalidate trials paused for a human longer than the window (P5, 30 min by default)."""
+
+    async def action(ops: TrialOperations) -> str:
+        expired = await ops.expire_paused(batch_id, max_pause_s=max_pause_s)
+        return "\n".join(f"{trial_id}  -> invalid (P5)" for trial_id in expired) or "none expired"
+
+    _run(_trial_operation(store_url, events_url, state_dir, action))
+
+
 @trials_app.command("resolve")
 def trials_resolve(
     trial_id: str = typer.Option(..., "--trial-id"),

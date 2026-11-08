@@ -161,3 +161,34 @@ async def test_resolve_overrides_a_scored_trial_with_a_new_version(
     with pytest.raises(OperationRefused):
         await ops.resolve(TRIAL_ID, tier="C", penalty=9, reviewer="x", reason="short")
     await assert_projected(h, db)
+
+
+async def test_a_trial_paused_past_the_window_is_invalidated_as_p5(
+    harness_factory: Any, rnd: Any, db: Database
+) -> None:
+    from datetime import datetime, timedelta
+
+    final = make_result(manual_reasons=["the judge returned no usable verdict"])
+    h = await harness_factory(rounds=[rnd()], final=final)
+    ops = await finished(h, db)
+    paused_at = [
+        e.ts
+        for e in await h.log()
+        if (e.payload.get("transition") or {}).get("to") == "paused_manual"
+    ][-1]
+    start = datetime.fromisoformat(paused_at.replace("Z", "+00:00"))
+
+    def at(minutes: int) -> str:
+        return (start + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    ops.now = lambda: at(29)
+    assert await ops.expire_paused(BATCH) == []
+    ops.now = lambda: at(31)
+    assert await ops.expire_paused(BATCH) == [TRIAL_ID]
+
+    row = await ops.trials.get(TRIAL_ID)
+    assert row is not None and (row.state, row.validity) == ("invalid", "invalid")
+    (notice,) = await h.of_type("trial.invalidated")
+    assert (notice.payload["code"], notice.payload["retry"]) == ("P5", False)
+    await assert_projected(h, db)
+    assert await ops.expire_paused(BATCH) == []
