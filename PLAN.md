@@ -29,9 +29,9 @@ A run is one phase of work. Lanes inside a run have disjoint write scopes and ha
 | --- | --- | --- | --- |
 | Repository foundation | AGENTS.md, .gitattributes, .gitignore, commit-msg hook, uv workspace, spi, migrated core, schemas, task packs, docs | v2 source | done |
 | Foundations run | testing-doubles, core-v3, task-packs-v3, egress-proxy, gateway-protocols, conformance-kit | Foundation | done |
-| Engines run | gateway-core, control-data, runners, control-config, sbx-docker, sbx-e2b-family, model-openai-compat, model-novita, hostd-remote, control-endpoints, control-sched, control-trial, control-cli | Foundations run | doing |
+| Engines run | gateway-core, control-data, runners, control-config, sbx-docker, sbx-e2b-family, model-openai-compat, model-novita, hostd-remote, control-endpoints, control-sched, control-trial, control-cli | Foundations run | done |
 | Breadth run | sbx-tart, sbx-apple-container, sbx-libvirt, sbx-hyperv, sbx-windows-sandbox, sbx-k8s-agent-sandbox, sbx-device-pool, harbor-bridge, model-vpc-vllm, templates, deploy, docs | Foundations run | done |
-| Integration | End-to-end on real surfaces, conformance on local Docker, review | Engines and Breadth runs | todo |
+| Integration | End-to-end on real surfaces, conformance on local Docker, review | Engines and Breadth runs | done |
 
 ## Lane scopes
 
@@ -78,37 +78,79 @@ A run is one phase of work. Lanes inside a run have disjoint write scopes and ha
 
 Stop condition: criteria 1-8 hold with evidence captured, everything is committed, no QA process, container, port or temp directory is left behind.
 
+## Verification table
+
+Every line below comes from a command run during this build, with the exit code read from the tool and not from a pipe. Anything that ran only against a fake of an external system is **not verified on a real host**. History count measured before this file's own commit; rerun `python3 scripts/lint_commit_msg.py --history` for the current number.
+
+| # | Result | Evidence | Limits |
+| --- | --- | --- | --- |
+| 1 | met | `python3 scripts/lint_commit_msg.py --history` exits 0 (79 commits, 0 failing). Running `.githooks/commit-msg` on message files exits 1 for the criterion example `feat: M1 control plane`, for lowercase messages containing `M1`, `P2.1`, `P1` or `W07` (each reported as `matched ...`), for `phase 2`, the word milestone, a `Co-Authored-By` trailer and a session link, and exits 0 for a clean message. `core.hooksPath` is `.githooks` | The hook is client side; `--no-verify` is forbidden by AGENTS.md but not blocked technically |
+| 2 | met | `uv run --frozen --no-sync pytest`: 1725 passed, 1 skipped (the e2e test, selected with `-m e2e`), exit 0, 142 s, including the PostgreSQL tests against a real `postgres:16` container. `ruff check .`, `ruff format --check .` (488 files), `mypy` (strict, 22 modules, 285 source files) and `lint-imports` (6 contracts kept) all exit 0. `uv lock --check` exits 0. All 131 reference tests are present by name: 129 in `evalspleef-core` (`check_repo.py --run` runs them: Ran 129 tests, OK) and the 2 Harbor mapping tests, which moved with their code to `evalspleef-harbor-bridge/tests/test_events.py` | Run with `--frozen --no-sync`, equivalent to `uv run` because the lock is current |
+| 3 | met | `python3 scripts/check_repo.py --run` exits 0: the core unit tests and the self-test of all ten packs on temporary copies | web-001 skips Playwright and runs its static contract only |
+| 4 | met | `docs/evidence/gateway-curl.md`: a real `spleef-gateway` process driven with `curl -i`: chat with a trial key and a usage record, HTTP 429 `cost_cap` for an over-budget key, 401 for a revoked key, an Anthropic Messages tool round trip | The upstream is the in-repo fake server; no real vendor traffic |
+| 5 | met at command level, with a transport fake for the Novita-hosted call | `packages/evalspleef-control/tests/cli/test_models_assisted.py` (5 tests) drives the real `spleef models register`, `tickets`, `attach` and `list`: register leaves the endpoint `awaiting_operator` with an open ticket; attach to `https://fake-endpoint.novita.ai/v1` sends one `max_tokens=1` request, the probes run, the endpoint ends `ready` with a stored probe report and the ticket closes; non-Novita hosts are refused with no request and no state change; the model is never ready without an attach. Mutation check: ignoring the stored report fails the test. Register and probe against a real gateway process are in transcripts 02 and 03 of `docs/evidence/e2e-batch.md` | The adapter accepts only `https` hosts under `*.novita.ai`, so a loopback endpoint cannot be attached by the real adapter; that guard is deliberate and untouched. Not verified against a real Novita account |
+| 6 | met | 21 conformance targets, each run as `pytest --spleef-provider <target>`, all exit 0 with 0 failures; see the next table | Only `local-docker` and `remote-docker` are real. Every adapter fake is **not verified on a real host**. Not-applicable counts follow each target's declared capabilities |
+| 7 | met | `docs/evidence/e2e-batch.md`: `pytest tests/e2e -m e2e` exits 0 on local Docker with a real `spleef-gateway` process. 3 packs x 2 models x 2 epochs = 12 trials, 6 scored cells. The scripted reference agent scores Perfect (0 deductions) on all three packs, the empty agent scores Failed (28, 20 and 22 deductions), all 12 canary scans are clean, every sandbox ran on `local-docker`, trial events replay through the core state machine, gateway usage matches the runner's token counts | The model and the judge are fakes; see the bridges below |
+| 8 | met | This table. Items that rest on fakes say so | |
+
+### Conformance runs (criterion 6)
+
+| Target | Pass | Fail | Not applicable | Real or fake |
+| --- | --- | --- | --- | --- |
+| local-docker | 27 | 0 | 6 | real Docker daemon |
+| remote-docker (hostd, mutual-TLS gRPC on loopback, in front of the same Docker adapter) | 27 | 0 | 6 | real Docker daemon |
+| mock-sandbox | 24 | 0 | 9 | double |
+| remote-mock (hostd in front of the mock sandbox) | 24 | 0 | 9 | double behind a real transport |
+| tart-fake | 21 | 0 | 12 | fake |
+| apple-container-fake | 25 | 0 | 8 | fake |
+| libvirt-fake | 26 | 0 | 7 | fake |
+| hyperv-fake | 21 | 0 | 12 | fake |
+| windows-sandbox-fake | 23 | 0 | 10 | fake |
+| k8s-agent-sandbox-fake | 24 | 0 | 9 | fake |
+| device-pool-fake | 24 | 0 | 9 | fake |
+| perf-host-fake | 20 | 0 | 13 | fake |
+| novita-fake (Novita sandbox) | 25 | 0 | 8 | fake |
+| e2b-selfhost-fake | 25 | 0 | 8 | fake |
+| openai-compat-fake | 3 | 0 | 7 | fake |
+| novita-dedicated-fake | 2 | 0 | 8 | fake |
+| novita-serverless-fake | 9 | 0 | 1 | fake |
+| vpc-vllm-fake | 9 | 0 | 1 | fake |
+| mock-model-api, mock-model-assisted, mock-model-external | 9, 2, 4 | 0 | 1, 8, 6 | doubles |
+
 ## Verification boundaries
 
 | Surface | Verified how |
 | --- | --- |
-| Local Docker sandbox, gateway, control plane, runners, hostd over loopback, egress proxy | Run for real on this workstation |
-| Postgres store | Real Postgres in a local container when Docker is available |
-| Novita Dedicated, Serverless GPU, Agent Sandbox, Hugging Face, E2B self-host, Tart, Hyper-V, libvirt, apple-container, Windows Sandbox, Kubernetes, device pool | Transport fakes only: not verified on a real host or account |
+| Local Docker sandbox (directly and through hostd), gateway process, control plane and `spleef` CLI, PostgreSQL store, task packs, canary injection and scan, grade computation | Run for real on this workstation |
+| Unified shell runner (`terminus`) | Run for real in the end-to-end batch, against the fake model server |
+| Native in-sandbox shells, Inspect runner | Stub executables only: not verified against the real Claude Code, Codex CLI, OpenCode or Inspect |
+| Egress proxy | Package tests only; it is not started in the end-to-end run |
+| Docker image templates | logic-001, data-001 and debug-001 built and checked locally; heavy toolchain, macOS and Windows images are not built |
+| Compose stack and Helm chart | `docker compose config` validates the compose file; the chart was checked structurally and never rendered by Helm |
+| Novita Dedicated and Serverless GPU, Novita Agent Sandbox, Hugging Face, E2B self-host, Tart, Hyper-V, libvirt, apple-container, Windows Sandbox, Kubernetes, device pool | Transport fakes only: **not verified on a real host or account** |
 
-## Progress log
+## Known bridges and open follow-ups
 
-Evidence was captured by running the command itself, with the exit code of the tool and not of a pipe. Anything that ran only against a fake of an external system is **not verified on a real host**.
+These work today and are covered by the evidence above, but they are workarounds or gaps, not finished design.
 
-| Item | Status | Evidence |
-| --- | --- | --- |
-| Repository files: AGENTS.md, .gitattributes, .gitignore, commit-msg hook, lint script | done | Real `git commit` attempts with an M1 label, the word Milestone, a P2.1 code, a Co-Authored-By trailer and a session link were all rejected and HEAD did not move; `python3 scripts/lint_commit_msg.py --history` reports 0 failing commits |
-| SPI, core v3 (events, versions, batch lifecycle, cost basis), schemas | done | Package tests, `ruff`, `mypy` and `lint-imports` green per package |
-| Reference core migrated with its tests | done | 129 tests stay in `evalspleef-core`; 2 Harbor event tests moved to `evalspleef-harbor-bridge` with the code they cover |
-| Ten task packs | done | `python3 scripts/check_repo.py --run` exits 0: self-tests of all ten packs on temporary copies (web-001 skips Playwright and runs its static contract only) |
-| Gateway: data plane, admin plane, trial key budgets, protocol conversion | done | Real `spleef-gateway` process driven with `curl -i`: chat with usage record, 429 `cost_cap`, 401 for a revoked key, Anthropic Messages tool round trip. Captured in `docs/evidence/gateway-curl.md`. The upstream was a test double |
-| Conformance kit and test doubles | done | 87 kit tests; broken providers must fail the matching cases; a fully passing run exits 0 |
-| Conformance on real Docker | done | `local-docker` 27 pass, 0 fail, 6 not applicable; `remote-docker` (hostd over mutual-TLS gRPC on loopback in front of the same Docker adapter) 27 pass, 0 fail, 6 not applicable |
-| Conformance on transport fakes | done | Not verified on a real host. Pass counts, all with 0 failures: mock sandbox 24, tart 21, apple-container 25, libvirt 26, k8s 24, windows-sandbox 23, device-pool 24, perf-host 20, novita-sandbox 25, e2b-selfhost 25, hyperv 21, vpc-vllm 9, openai-compat, novita-dedicated and novita-serverless 14 together |
-| hostd, egress proxy, runners, templates, deploy | done | Package tests green. Compose file validates with `docker compose config`; the Helm chart was checked structurally only, never rendered by Helm. Runners ran against stub CLIs, not the real Claude Code, Codex CLI, OpenCode or Inspect |
-| Control plane: persistence, config and registry, endpoints, probes, admission, scheduling, leases, batch freeze, trial runner | done | Per-subpackage tests, `ruff`, `mypy`; PostgreSQL tests run against a real `postgres:16` container |
-| Control plane: observer and verification wiring | doing | |
-| `spleef` CLI and end-to-end batch (criteria 5 and 7) | todo | |
-| Whole-repository gates (criterion 2) | todo | To run last, after the root mypy package list covers every workspace package |
+1. **Gateway public model name.** The gateway prefixes `ep_` to the endpoint id, while the SPI says the model name equals the endpoint id. The command line strips one leading `ep_` when it issues keys (`HttpGatewayAdmin._wire_endpoint_id`), and the gateway tests encode the gateway's convention. One side must change, then the bridge goes.
+2. **Isolation preflight probes are prose.** Adapters fill `InvariantEntry.probe` with descriptions, and `run_isolation_probes` runs them verbatim, so the S5 check cannot pass on a real adapter. The command line waives prose probes with a recorded reason (visible in every `preflight.result` event and in the freeze record, and `batch run` prints a warning). The Docker adapter's executable `probes/linux.sh` is never invoked.
+3. **Verifier root.** The sandbox root file system is read-only, so the default `/verify` cannot be created; `SPLEEF_VERIFY_ROOT` selects another path (the end-to-end uses `/tmp/verify`).
+4. **Observer limit.** When a pack checker aborts early on an invalid answer, other items' violation codes look absent and pass. The trial still fails its hard gates and lands on tier F.
+5. **`agent_judge` items.** backend-001, macos-001 and video-001 still contain items no component decides, so those packs pause for a human. debug-001 was fixed (R8 became a script check, R10 and R11 became `llm_judge`).
+6. **Duplicated path resolution.** `observe/verifier._locked_local_path` and `trial/prepare._manifest_locked_paths` both resolve hash manifest paths and must be kept in sync.
+7. **Route fallback.** The example `providers.yaml` lists the mock sandbox after Docker, and an unpinned run used it for 4 of 12 trials. The end-to-end pins its routes to `local-docker`.
+8. **Documentation.** `docs/guides/` was not written. The root `README.md`, 20 package READMEs and the specs under `docs/` stand in.
 
 ## Defects found by the checks, and fixed
 
 - A cancelled child kept writing and overwrote other lanes' modules; found by file times and per-file test runs, contained and rewritten against the test contracts.
 - The Docker adapter left a created container behind when it failed to start, and `close()` raised across event loops; both found on real Docker and covered by regression tests.
-- The conformance plugin exited 5 on a fully passing run, aborted the report when a target cleanup raised, and let one broken adapter break unrelated runs.
+- Uploading a directory as `/workspace` made tar rewrite the root-owned mount point and exit 1. The conformance cases only ever uploaded into `/workspace`, so only the end-to-end found it.
+- The conformance plugin exited 5 on a fully passing run, aborted the report when a target cleanup raised, and let one broken adapter break unrelated runs. The hostd Docker target used an image without the agent user.
 - The `.gitignore` credential rule also hid the `secrets` source package.
+- Canary tokens were written into hash-locked inputs, which broke the pack's own integrity gate. A shortcut that waived that gate was rejected; placements now skip locked and protected paths.
+- Six hidden-test scripts used the BSD-only `mktemp -t` and failed inside the Linux image.
+- Rubric items that could never produce a pass signal made every trial pause for a human; fixed in the observer and in three pack files, without weakening the rule that an undecidable item goes to a human.
+- The batch driver left the `grade.rule_id` column empty.
+- The example config used one epoch per cell while the spec needs two valid epochs to rank a cell.
