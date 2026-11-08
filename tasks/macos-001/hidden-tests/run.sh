@@ -72,7 +72,7 @@ if [ ! -d "$CANDIDATE" ]; then
   exit 2
 fi
 
-TMP=$(mktemp -d -t macos001)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/macos001.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 cp -R "$CANDIDATE" "$TMP/candidate"
 

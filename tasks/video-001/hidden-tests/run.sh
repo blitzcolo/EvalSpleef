@@ -76,7 +76,7 @@ if [ ! -d "$CANDIDATE" ]; then
   exit 2
 fi
 
-TMP=$(mktemp -d -t video001)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/video001.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 if [ "$SELFTEST" -eq 0 ]; then

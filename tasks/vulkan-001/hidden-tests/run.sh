@@ -47,7 +47,7 @@ run_cpu_math() {
 ' >&2; return 2; fi
   fi
   local out
-  out=$(mktemp -t vulkan001_math)
+  out=$(mktemp "${TMPDIR:-/tmp}/vulkan001_math.XXXXXX")
   if ! "$cxx" -std=c++17 -O2 -Wall -Wextra -I "$cand/src"       "$HERE/tests/test_shadow_math.cpp" "$src" -o "$out"; then
     printf 'FAIL: shadow_math.cpp 编译失败
 ' >&2
@@ -109,7 +109,7 @@ if [ "$SELFTEST" -eq 0 ]; then
   exit 0
 fi
 
-TMP=$(mktemp -d -t vulkan001_self)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/vulkan001_self.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 PASS=0; FAILED=0
 

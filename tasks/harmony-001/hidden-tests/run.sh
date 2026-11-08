@@ -47,7 +47,7 @@ run_numeric() {
   while IFS= read -r f; do sources+=("$f"); done < <(find "$cpp_dir" -maxdepth 1 -name '*.cpp' ! -name 'napi_init.cpp' | sort)
   [ "${#sources[@]}" -ge 1 ] || fail "候选没有可编译的 C++ 内核源文件" 2
   local out
-  out=$(mktemp -t harmony001_imgops)
+  out=$(mktemp "${TMPDIR:-/tmp}/harmony001_imgops.XXXXXX")
   "$cxx" -std=c++17 -O2 -Wall -Wextra -I "$cpp_dir" \
     "$HERE/tests/test_image_ops.cpp" "${sources[@]}" -o "$out" || fail "候选 C++ 内核编译失败" 1
   "$out"
@@ -74,7 +74,7 @@ run_device() {
   hdc shell aa start -a EntryAbility -b com.example.imagefilters || fail "应用启动命令失败" 1
   sleep 10
   local log
-  log=$(mktemp -t harmony001_hilog)
+  log=$(mktemp "${TMPDIR:-/tmp}/harmony001_hilog.XXXXXX")
   hdc shell hilog -T imagefilters -t app > "$log" 2>&1 || true
   if grep -E 'CppCrash|AppRecover|SIGSEGV|Abort' "$log" >/dev/null 2>&1; then
     tail -n 30 "$log"; rm -f "$log"; fail "启动后 10 秒内检测到崩溃日志" 1
@@ -98,7 +98,7 @@ if [ "$SELFTEST" -eq 0 ]; then
   exit 0
 fi
 
-TMP=$(mktemp -d -t harmony001_self)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/harmony001_self.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 PASS=0; FAILED=0
 

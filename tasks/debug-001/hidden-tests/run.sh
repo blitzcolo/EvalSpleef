@@ -66,7 +66,7 @@ fi
 
 if [ "$SELFTEST" -eq 0 ]; then
   check_locks "$CANDIDATE"
-  LOG=$(mktemp -t debug001_run)
+  LOG=$(mktemp "${TMPDIR:-/tmp}/debug001_run.XXXXXX")
   run_suite "$CANDIDATE" "$LOG"
   CODE=$?
   if [ "$CODE" -eq 0 ]; then
@@ -81,7 +81,7 @@ if [ "$SELFTEST" -eq 0 ]; then
 fi
 
 # ---- selftest：证明验收脚本本身可靠 ----
-TMP=$(mktemp -d -t debug001_self)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/debug001_self.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 PASS_COUNT=0
 FAIL_COUNT=0

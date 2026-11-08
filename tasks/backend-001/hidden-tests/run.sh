@@ -61,7 +61,7 @@ fi
 
 if [ "$SELFTEST" -eq 0 ]; then
   check_locks "$CANDIDATE"
-  LOG=$(mktemp -t backend001_run)
+  LOG=$(mktemp "${TMPDIR:-/tmp}/backend001_run.XXXXXX")
   run_suite "$CANDIDATE" "$LOG"
   CODE=$?
   if [ "$CODE" -eq 0 ]; then
@@ -75,7 +75,7 @@ if [ "$SELFTEST" -eq 0 ]; then
   exit 1
 fi
 
-TMP=$(mktemp -d -t backend001_self)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/backend001_self.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 PASS_COUNT=0
 FAIL_COUNT=0
