@@ -13,7 +13,12 @@ from evalspleef_model_beam.conformance import (
     FakeBeamSdk,
     FakeLauncher,
 )
-from evalspleef_model_beam.errors import CredentialRejected, DeploymentNotFound, LaunchFailed
+from evalspleef_model_beam.errors import (
+    CredentialRejected,
+    DeploymentNotFound,
+    LaunchFailed,
+    ParallelismMismatch,
+)
 from evalspleef_model_beam.launcher import RESULT_PREFIX
 from evalspleef_model_beam.provider import BeamPodProvider, deployment_name, parse_launch_result
 
@@ -319,3 +324,38 @@ async def test_validate_refuses_a_repo_that_would_leave_the_volume(
     escaping = replace(spec, source=replace(spec.source, repo="../outside"))
     report = await provider.validate(escaping)
     assert ("weights_path", False) in {(check_id, ok) for check_id, ok, _ in report.checks}
+
+
+# -- multi-GPU layouts ---------------------------------------------------------------------------
+
+
+async def test_eight_gpus_default_to_one_tensor_parallel_group(
+    provider: BeamPodProvider, sdk: FakeBeamSdk, make_spec: SpecFactory
+) -> None:
+    await deployed(provider, make_spec(gpu_count=8))
+    pod = sdk.pods[0]
+    assert pod["gpu_count"] == 8
+    entrypoint = pod["entrypoint"]
+    assert entrypoint[entrypoint.index("--tp-size") + 1] == "8"
+
+
+async def test_a_preset_layout_is_passed_through_without_a_second_tp_flag(
+    provider: BeamPodProvider, sdk: FakeBeamSdk, make_spec: SpecFactory
+) -> None:
+    await deployed(
+        provider, make_spec(gpu_count=4, engine_extra_args=["--tp-size", "2", "--dp-size", "2"])
+    )
+    entrypoint = sdk.pods[0]["entrypoint"]
+    assert entrypoint.count("--tp-size") == 1
+    assert entrypoint[entrypoint.index("--dp-size") + 1] == "2"
+
+
+async def test_a_layout_that_does_not_fit_is_refused_before_any_launch(
+    provider: BeamPodProvider, fake_launcher: FakeLauncher, make_spec: SpecFactory
+) -> None:
+    spec = make_spec(gpu_count=4, engine_extra_args=["--tp-size", "2"])
+    report = await provider.validate(spec)
+    assert ("parallelism", False) in {(check_id, ok) for check_id, ok, _ in report.checks}
+    with pytest.raises(ParallelismMismatch):
+        await provider.plan(spec)
+    assert fake_launcher.calls == []

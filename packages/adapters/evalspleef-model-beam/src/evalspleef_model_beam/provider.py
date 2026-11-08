@@ -42,7 +42,13 @@ from evalspleef.spi.secrets import SecretResolver
 
 from . import launcher
 from .clock import Clock, SystemClock
-from .errors import CredentialRejected, DeploymentNotFound, LaunchFailed, PlanInputMissing
+from .errors import (
+    CredentialRejected,
+    DeploymentNotFound,
+    LaunchFailed,
+    ParallelismMismatch,
+    PlanInputMissing,
+)
 from .gateway_api import DEFAULT_API_BASE, DEFAULT_REST_BASE, BeamGatewayClient
 from .inference import (
     DEFAULT_NOT_READY_MARKERS,
@@ -52,6 +58,7 @@ from .inference import (
     serves_models,
     wake_loop,
 )
+from .parallel import Layout, layout
 
 LaunchRunner = Callable[
     [Sequence[str], bytes, Mapping[str, str], str, float], Awaitable[tuple[int, bytes, bytes]]
@@ -270,6 +277,17 @@ class BeamPodProvider(ModelEndpointProvider):
             checks.append(("engine", True, engine))
         except CapabilityNotSupported as exc:
             checks.append(("engine", False, str(exc)))
+        try:
+            parallel = self._layout(spec)
+            checks.append(
+                (
+                    "parallelism",
+                    True,
+                    f"tp={parallel.tp} pp={parallel.pp} dp={parallel.dp} ep={parallel.ep}",
+                )
+            )
+        except ParallelismMismatch as exc:
+            checks.append(("parallelism", False, str(exc)))
         source = spec.source
         if not isinstance(source, HFSource):
             checks.append(("model_source", False, "a Beam Pod deployment needs an HF source"))
@@ -321,6 +339,7 @@ class BeamPodProvider(ModelEndpointProvider):
         minimum = int(params.get("min_replicas", 1))
         maximum = int(params.get("max_replicas", minimum))
         gpu_count = int(params.get("gpu_count", 1))
+        self._layout(spec)
         price = params.get("price_per_gpu_hour_usd")
         return DeploymentPlan(
             gpu_type=str(gpu),
@@ -333,6 +352,10 @@ class BeamPodProvider(ModelEndpointProvider):
         )
 
     # -- deploy ------------------------------------------------------------------------------
+
+    def _layout(self, spec: ModelSpec) -> Layout:
+        extra = [str(arg) for arg in self._param(spec, "engine_extra_args") or []]
+        return layout(int(spec.deployment.params.get("gpu_count", 1)), extra)
 
     def _weights(self, spec: ModelSpec) -> tuple[str, str, str] | None:
         """``(volume, mount path, weights directory)`` when weights come from a Beam Volume."""
@@ -370,8 +393,7 @@ class BeamPodProvider(ModelEndpointProvider):
             str(int(self.config.get("port", DEFAULT_PORT))),
             "--context-length",
             str(context),
-            "--tp-size",
-            str(plan.gpu_count or 1),
+            *([] if self._layout(spec).explicit else ["--tp-size", str(plan.gpu_count or 1)]),
             "--max-running-requests",
             str(plan.max_concurrency or DEFAULT_MAX_CONCURRENT),
             *[str(arg) for arg in extra],

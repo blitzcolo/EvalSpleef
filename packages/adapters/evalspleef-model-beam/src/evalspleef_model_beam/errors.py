@@ -30,6 +30,12 @@ class LaunchFailed(EndpointUnavailable):
     """The launcher could not deploy the Pod (no capacity, image build, SDK failure, timeout)."""
 
 
+class ParallelismMismatch(SpleefError):
+    """The parallel layout of the engine arguments does not fit the requested GPU count."""
+
+    disposition = "manual"
+
+
 class PlanInputMissing(SpleefError):
     """The plan cannot be computed because a required deployment parameter is missing."""
 
