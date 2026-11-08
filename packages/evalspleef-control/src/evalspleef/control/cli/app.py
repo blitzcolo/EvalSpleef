@@ -18,13 +18,14 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
 import typer
 
 from evalspleef.control.batch import BatchDriver, BatchRunResult, build_freeze_record, freeze_guards
+from evalspleef.control.batch.operations import OperationRefused, TrialOperations
 from evalspleef.control.config import ConfigError
 from evalspleef.control.endpoints import make_endpoint_id, probe_failures
 from evalspleef.control.events import verify_projection
@@ -56,12 +57,14 @@ models_app = typer.Typer(no_args_is_help=True)
 providers_app = typer.Typer(no_args_is_help=True)
 hosts_app = typer.Typer(no_args_is_help=True)
 batch_app = typer.Typer(no_args_is_help=True)
+trials_app = typer.Typer(no_args_is_help=True)
 gateway_app = typer.Typer(no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(models_app, name="models")
 app.add_typer(providers_app, name="providers")
 app.add_typer(hosts_app, name="hosts")
 app.add_typer(batch_app, name="batch")
+app.add_typer(trials_app, name="trials")
 app.add_typer(gateway_app, name="gateway")
 
 
@@ -1523,6 +1526,126 @@ def gateway_serve(ctx: typer.Context) -> None:
         )
         raise typer.Exit(EXIT_USAGE)
     os.execvpe("spleef-gateway", ["spleef-gateway", *ctx.args], os.environ)
+
+
+# -- trials -----------------------------------------------------------------------
+
+
+def _store_settings(
+    store_url: str | None, events_url: str | None, state_dir: Path | None
+) -> Settings:
+    return _settings(
+        Path("config/models.yaml"),
+        None,
+        None,
+        Path("tasks"),
+        None,
+        store_url,
+        events_url,
+        state_dir,
+    )
+
+
+async def _trial_operation(
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    action: Callable[[TrialOperations], Awaitable[str]],
+) -> int:
+    from datetime import UTC, datetime
+
+    async with AppContext(_store_settings(store_url, events_url, state_dir)) as ctx:
+        operations = TrialOperations(
+            events=ctx.events,
+            trials=ctx.trials,
+            grades=ctx.grades,
+            now=lambda: datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        try:
+            typer.echo(await action(operations))
+        except OperationRefused as exc:
+            raise DomainError(str(exc)) from exc
+        return EXIT_SUCCESS
+
+
+@trials_app.command("list")
+def trials_list(
+    batch_id: str = typer.Option(..., "--batch-id"),
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """List the trials of a batch with state, validity and the latest grade."""
+
+    async def run() -> int:
+        async with AppContext(_store_settings(store_url, events_url, state_dir)) as ctx:
+            for row in await ctx.trials.list_by_batch(batch_id):
+                grades = await ctx.grades.list_by_trial(row.trial_id)
+                latest = (
+                    f"v{grades[-1].version} {grades[-1].tier} ({grades[-1].decided_by})"
+                    if grades
+                    else "-"
+                )
+                typer.echo(f"{row.trial_id}\t{row.state}\t{row.validity}\t{latest}")
+            return EXIT_SUCCESS
+
+    _run(run())
+
+
+@trials_app.command("regrade")
+def trials_regrade(
+    trial_id: str = typer.Option(..., "--trial-id"),
+    reason: str = typer.Option(..., "--reason"),
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """Re-run grading on the recorded inputs and append a grade version (appendix B.6)."""
+
+    async def action(ops: TrialOperations) -> str:
+        row = await ops.regrade(trial_id, reason=reason)
+        return f"{trial_id}  grade v{row.version}: {row.tier} ({row.rule_id})"
+
+    _run(_trial_operation(store_url, events_url, state_dir, action))
+
+
+@trials_app.command("void")
+def trials_void(
+    trial_id: str = typer.Option(..., "--trial-id"),
+    reason: str = typer.Option(..., "--reason"),
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """Invalidate a trial along the legal path; it leaves the leaderboard (appendix B.6)."""
+
+    async def action(ops: TrialOperations) -> str:
+        state = await ops.void(trial_id, reason=reason)
+        return f"{trial_id}  -> {state}"
+
+    _run(_trial_operation(store_url, events_url, state_dir, action))
+
+
+@trials_app.command("resolve")
+def trials_resolve(
+    trial_id: str = typer.Option(..., "--trial-id"),
+    tier: str = typer.Option(..., "--tier", help="P, A, B+, B, C+, C, D or F"),
+    penalty: int = typer.Option(..., "--penalty"),
+    reviewer: str = typer.Option(..., "--reviewer"),
+    reason: str = typer.Option(..., "--reason"),
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+) -> None:
+    """Record a human decision for a paused trial, or override a scored one (appendix B.7)."""
+
+    async def action(ops: TrialOperations) -> str:
+        row = await ops.resolve(
+            trial_id, tier=tier, penalty=penalty, reviewer=reviewer, reason=reason
+        )
+        return f"{trial_id}  grade v{row.version}: {row.tier} (human, {reviewer})"
+
+    _run(_trial_operation(store_url, events_url, state_dir, action))
 
 
 # -- entry point ------------------------------------------------------------------

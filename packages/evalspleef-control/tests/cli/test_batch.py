@@ -101,3 +101,26 @@ def test_batch_run_and_report(
     with sqlite3.connect(Path(env).parent / "store.sqlite3") as db:
         (row_extensions,) = db.execute("SELECT extensions FROM trial").fetchone()
     assert json.loads(row_extensions)["versions"] == versions
+
+    # The trial paused for a human; the operator commands decide and then void it.
+    trial_id = "logic-001.demo.scripted.e1.t01"
+    listed = cli_runner.invoke(app, ["trials", "list", "--batch-id", "2026-11-b1"])
+    assert f"{trial_id}\tpaused_manual\tmanual\t-" in listed.output
+    decision = ["--tier", "B", "--penalty", "4", "--reviewer", "alice"]
+    resolved = cli_runner.invoke(
+        app,
+        ["trials", "resolve", "--trial-id", trial_id, *decision, "--reason", "judge outage, read"],
+    )
+    assert resolved.exit_code == 0, resolved.output
+    listed = cli_runner.invoke(app, ["trials", "list", "--batch-id", "2026-11-b1"])
+    assert f"{trial_id}\tscored\tvalid\tv1 B (human)" in listed.output
+    voided = cli_runner.invoke(
+        app, ["trials", "void", "--trial-id", trial_id, "--reason", "task bug found"]
+    )
+    assert voided.exit_code == 0, voided.output
+    listed = cli_runner.invoke(app, ["trials", "list", "--batch-id", "2026-11-b1"])
+    assert f"{trial_id}\tinvalid\tinvalid" in listed.output
+    refused = cli_runner.invoke(
+        app, ["trials", "regrade", "--trial-id", trial_id, "--reason", "after void"]
+    )
+    assert refused.exit_code == 1

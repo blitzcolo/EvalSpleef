@@ -37,7 +37,7 @@ from evalspleef.core.feedback import (
     consume_decision,
     validate_feedback_message,
 )
-from evalspleef.core.grading import compute_grade
+from evalspleef.core.grade_inputs import GradingInputs
 from evalspleef.core.models import (
     Budget,
     BudgetUsage,
@@ -817,11 +817,11 @@ class _TrialRun:
             )
         self.usage.judge_cost_usd += final.judge_cost_usd
         pack = self.setup.pack
-        outcome = compute_grade(
+        inputs = GradingInputs(
             trial_id=self.trial.trial_id,
-            defects=self.tracker.defects,
-            hard_gates=final.hard_gates,
-            feedback_rounds=self.history,
+            defects=tuple(self.tracker.defects),
+            hard_gates=tuple(final.hard_gates),
+            feedback_rounds=tuple(self.history),
             budget=self.budget,
             usage=self.usage,
             cheat=bool(self.cheat),
@@ -830,14 +830,16 @@ class _TrialRun:
             cannot_continue=cannot_continue,
             judge_consistency_value=final.judge_consistency,
             judge_samples=final.judge_samples,
-            decided_at=_iso(self.owner.clock.now()),
             rubric_version=pack.rubric.rubric_version,
             task_version=pack.version,
             pricing_table_version=pack.budget.pricing_table_version,
         )
+        outcome = inputs.grade(decided_at=_iso(self.owner.clock.now()))
         grade = outcome.grade
         if grade is None:
-            return await self._pause(list(outcome.manual_reasons) or ["no grade produced"])
+            return await self._pause(
+                list(outcome.manual_reasons) or ["no grade produced"], inputs=inputs
+            )
         await self._advance(
             "score",
             EventType.GRADE_COMPUTED,
@@ -847,6 +849,9 @@ class _TrialRun:
                 "penalty": grade.penalty,
                 "flags": [flag.value for flag in grade.flags],
                 "cost": grade.cost.to_dict(),
+                "grade": grade.to_dict(),
+                # Recorded so a regrade can re-run the pure grading on the same inputs.
+                "inputs": inputs.to_dict(),
             },
         )
         record_grade(self.machine.record, grade)
@@ -898,10 +903,17 @@ class _TrialRun:
         await self._terminal_invalid(reason)
         return TrialOutcome("invalid", record=self._record_dict(), reason=reason)
 
-    async def _pause(self, reasons: list[str]) -> TrialOutcome:
-        await self._advance(
-            "pause", EventType.INCIDENT_OPENED, {"kind": "manual_review", "reasons": reasons}
-        )
+    async def _pause(
+        self, reasons: list[str], *, inputs: GradingInputs | None = None
+    ) -> TrialOutcome:
+        payload: dict[str, Any] = {
+            "kind": "manual_review",
+            "reasons": reasons,
+            "cost": self.usage.cost.to_dict(),
+        }
+        if inputs is not None:
+            payload["inputs"] = inputs.to_dict()
+        await self._advance("pause", EventType.INCIDENT_OPENED, payload)
         return TrialOutcome("paused_manual", record=self._record_dict(), reason="; ".join(reasons))
 
     async def _terminal_invalid(self, reason: str) -> None:
