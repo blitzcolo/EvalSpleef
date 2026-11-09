@@ -103,6 +103,7 @@ Every line below comes from a command run during this build, with the exit code 
 | remote-mock (hostd in front of the mock sandbox) | 24 | 0 | 9 | double behind a real transport |
 | tart-fake | 21 | 0 | 12 | fake |
 | apple-container-fake | 25 | 0 | 8 | fake |
+| apple-container-live (`container` 1.6.1, guest kernel 6.18.35, 2026-11-09) | 26 | 0 | 7 | real Apple Container |
 | libvirt-fake | 26 | 0 | 7 | fake |
 | hyperv-fake | 21 | 0 | 12 | fake |
 | windows-sandbox-fake | 23 | 0 | 10 | fake |
@@ -131,7 +132,7 @@ Every line below comes from a command run during this build, with the exit code 
 | Compose stack and Helm chart | `docker compose config` validates the compose file; the chart was checked structurally and never rendered by Helm |
 | Beam Pod model endpoint (`beam-pod`) | Run for real on 2026-11-08 (deploy, status, chat, gateway probe, Volume weights, long-context runs, terminate); multi-GPU layouts only against the fakes, because the workspace refuses multi-GPU containers |
 | Isolation preflight probes | Docker I1-I9 run as commands in real containers (adapter test and every e2e trial); other adapters' probes are described and waived |
-| Novita Dedicated and Serverless GPU, Novita Agent Sandbox (all three discontinued 2026-11-09), Hugging Face, E2B self-host, Tart, Hyper-V, libvirt, apple-container, Windows Sandbox, Kubernetes, device pool | Transport fakes only: **not verified on a real host or account** |
+| Novita Dedicated and Serverless GPU, Novita Agent Sandbox (all three discontinued 2026-11-09), Hugging Face, E2B self-host, Tart, Hyper-V, libvirt, Windows Sandbox, Kubernetes, device pool | Transport fakes only: **not verified on a real host or account** |
 
 ## Known limits
 
@@ -221,7 +222,7 @@ Everything from the review's unfinished list that could be fixed in code here is
 | --- | --- |
 | AC-01 | partly: a gated Hugging Face model at a pinned revision was served for real on a Beam RTX 5090 (`beam-pod`) and probed through the gateway (10/14); no Novita GPU had capacity, the public and private cases and a batch on a self-served model have not run |
 | AC-02 | partly: gateway budgets proven with a fake upstream; every leaderboard column now carries its cost basis (`cost_bases`, end to end on real Docker) and the drill-down carries model source and revision; not run against a real priced vendor batch since |
-| AC-03 | partly: the Docker half runs for real; the Novita adapter passes conformance on the real account and packs now map to Novita templates (D10), but no batch has run on a Novita sandbox, and none will: Novita is discontinued (2026-11-09), so the second real carrier for AC-03 is an open decision |
+| AC-03 | met on this Mac with docker and apple-container as the two real carriers (2026-11-09, `docs/evidence/ac03-carriers.md`; fake model and judge, images moved from Docker with identical digests, no platform-enforced template fingerprint yet). History: the Docker half runs for real; the Novita adapter passes conformance on the real account and packs now map to Novita templates (D10), but no batch has run on a Novita sandbox, and none will: Novita is discontinued (2026-11-09), so the second real carrier for AC-03 is an open decision |
 | AC-04, AC-05 | not met: need a Mac mini with Tart and a Hyper-V host |
 | AC-06 | met for Docker and remote-over-Docker (real) and the five in-repo doubles; the other 14 targets pass against transport fakes written together with their adapters |
 | AC-07 | not met: needs an outside engineer |
@@ -328,6 +329,17 @@ logic-001 now finishes for both models (it stayed Pending in batch 2026-11-b2); 
 Spend per the gateway events: 4.89 USD in total, 3.10 for the judge and 1.77 for the agents. The judge sent 2.25M input tokens, 1.79M of them cache reads (prompt caching), and 178K output tokens, 171K of them adaptive thinking. One judge call failed with a gateway-to-Anthropic ConnectTimeout (504) and the trial was retried automatically; three requests of a v4-pro trial were refused by its key budget (429 `budget.rejected`).
 
 Defects this run exposed, fixed with regression tests: the run guide's `SPLEEF_GATEWAY_URL` ended in `/v1` (every probe 404ed); the Claude judge route could not be admitted until streaming and `response_format` were implemented; the cost ledger booked each trial the judge client's running total, so `spleef batch costs` showed 19.93 USD against 4.89 USD of real spend (`GatewayJudgeClient.complete_metered` and per-session totals now book each run's own charge). Not done: the cost reconciliation against a vendor bill (`mismatch` here only because no bill was supplied), mid-stream retries, and the manual review of the two logic-001 cells.
+
+### Apple Container and the execution environment (2026-11-09)
+
+| Item | Regression check |
+| --- | --- |
+| `container` 1.6.1 installed with Homebrew, service started with `container system start --enable-kernel-install`; the recommended guest kernel is Linux 6.18.35 (aarch64). The user kept that default; a custom 7.x kernel was considered and declined | `container run --rm python:3.12-slim echo ok` prints ok; `uname -r` in the guest prints 6.18.35 |
+| The apple-container adapter ran against the real CLI for the first time; six defects the fake hid are fixed behind the SandboxProvider interface: `off` mapped to a host-only network that reached host services (now `--network none`); `container cp` wrote under the tmpfs mounts and past `--read-only` (transfers are now tar streams over exec); a timeout left the guest command running (process group killed in the VM); two JSON shape differences; no real create-failure path. The isolation profile now says what the carrier gives: L3 (a VM and guest kernel per container), no pids limit, no disk quota | one regression test per defect, each failing on the old source; live conformance 26 passed, 0 failed, 7 not applicable (no whitelist proxy, dynamic network policy, snapshots, GUI, ports) |
+| AC-03 exposed two more adapter defects the conformance cases cannot see (a directory uploaded as `/workspace`; a writable `/verify` for verifier sandboxes), fixed with offline and live regression tests | `tests/e2e/test_carrier_parity.py` (opt-in `SPLEEF_E2E_APPLE_CONTAINER=1`): same grades on both carriers, clean canaries, per-carrier environment records |
+| Every trial and batch now records where it ran: `SandboxProvider.environment()` (host, runtime, guest facts in `spi/environment.py`, default "unreported"), guest facts measured inside each sandbox at provisioning, written to `trial.versions.execution_environment`, the batch freeze record and `release/versions.json`; implemented for Docker, the mock and apple-container | real-Docker e2e asserts host, runtime and guest kernel on every row; three mutations each fail their test |
+
+Open: the conformance kit has no case for uploading a directory as a mount point or for a verifier-role sandbox (both defects above lived in the Docker and Apple adapters), and C-NET-01 probes one address, which the old host-only mapping could satisfy; `spleef batch run` exits 0 when every trial is invalid; hostd `RemoteProvider` and the other adapters still report "unreported"; `schemas/trial.schema.json` keeps `result.versions` closed, so the environment lives in the event and `extensions`; the Apple store gets its images from a Docker export in the test, so the cross-carrier template fingerprint check and a carrier-neutral template builder (D10) are still missing.
 
 ### Real surfaces
 
