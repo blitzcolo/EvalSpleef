@@ -1,8 +1,8 @@
 """Public data plane: trial-key auth, budget enforcement and protocol endpoints.
 
 Exposes OpenAI Chat Completions, OpenAI Responses and Anthropic Messages on the public
-route names ``ep_<endpoint_id>`` while every upstream endpoint speaks Chat Completions
-(TECH-DESIGN 6.3, FR-MOD-07). Every response carries ``x-spleef-gateway-version``; usage
+route names ``ep_<endpoint_id>`` while upstream endpoints speak Chat Completions, or
+Anthropic Messages for routes declaring ``anthropic_messages`` (TECH-DESIGN 6.3, FR-MOD-07). Every response carries ``x-spleef-gateway-version``; usage
 is recorded per request and charged against the trial key's budget.
 """
 
@@ -20,10 +20,13 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from evalspleef.spi.gateway import COST_HEADER, ENDPOINT_MISMATCH, UsageRecord
 
 from .protocols import (
+    AnthropicToChatStream,
     ChatToAnthropicStream,
     ChatToResponsesStream,
     anthropic_error_envelope,
     anthropic_request_to_chat,
+    anthropic_response_to_chat,
+    chat_request_to_anthropic,
     chat_response_to_anthropic,
     chat_response_to_responses,
     openai_error_envelope,
@@ -34,12 +37,15 @@ from .proxy import (
     UpstreamCredentialError,
     apply_default_params,
     open_upstream_stream,
+    parse_data_line,
     post_upstream,
     projection_for,
     provider_lock_mismatch,
+    route_controls,
 )
 from .state import (
     COLD_START_HEADER,
+    DROPPED_PARAMS_HEADER,
     EVENT_BUDGET_REJECTED,
     EVENT_ENDPOINT_MISMATCH,
     EVENT_REQUEST_COMPLETED,
@@ -238,7 +244,7 @@ def _int_of(value: Any) -> int:
 
 def _usage_counts(usage: dict[str, Any] | None) -> dict[str, int]:
     if not usage:
-        return {"input": 0, "output": 0, "cached": 0, "reasoning": 0}
+        return {"input": 0, "output": 0, "cached": 0, "reasoning": 0, "cache_write": 0}
     input_tokens = _int_of(usage.get("prompt_tokens")) or _int_of(usage.get("input_tokens"))
     output_tokens = _int_of(usage.get("completion_tokens")) or _int_of(usage.get("output_tokens"))
     prompt_details = usage.get("prompt_tokens_details")
@@ -254,6 +260,7 @@ def _usage_counts(usage: dict[str, Any] | None) -> dict[str, int]:
         "output": output_tokens,
         "cached": cached,
         "reasoning": reasoning,
+        "cache_write": _int_of(usage.get("cache_creation_input_tokens")),
     }
 
 
@@ -283,6 +290,7 @@ async def _record_usage(
             input_tokens=counts["input"],
             output_tokens=counts["output"],
             cached_tokens=counts["cached"],
+            cache_write_tokens=counts["cache_write"],
         )
         if charge
         else 0.0
@@ -355,13 +363,13 @@ async def _handle(
     if isinstance(resolved, Response):
         return resolved
     model, entry = resolved
-    if entry.route.protocol != "chat_completions":
+    if entry.route.protocol not in ("chat_completions", "anthropic_messages"):
         return _error_response(
             flavor,
             502,
             "unsupported_upstream_protocol",
             f"route {model!r} declares upstream protocol {entry.route.protocol!r};"
-            " only chat_completions upstreams can be forwarded",
+            " only chat_completions and anthropic_messages upstreams can be forwarded",
         )
 
     round_ = _round_of(request)
@@ -418,12 +426,15 @@ async def _transport_failure(
     return _error_response(flavor, 502, "upstream_error", f"upstream connection failed: {exc!r}")
 
 
-def _upstream_error_payload(payload: dict[str, Any]) -> tuple[str, str | None]:
+def _upstream_error_payload(
+    payload: dict[str, Any], *, anthropic_upstream: bool = False
+) -> tuple[str, str | None]:
     error = payload.get("error")
     if not isinstance(error, dict):
         return "upstream error", None
     message = error.get("message")
-    code = error.get("code")
+    # Anthropic error objects carry their kind in ``type`` and have no ``code``.
+    code = error.get("type") if anthropic_upstream else error.get("code")
     return (
         message if isinstance(message, str) else "upstream error",
         code if isinstance(code, str) else None,
@@ -441,7 +452,19 @@ async def _forward(
     flavor: Flavor,
     responses: bool,
 ) -> Response:
-    upstream_body = apply_default_params(entry.route, {**body, "model": entry.route.model})
+    route = entry.route
+    controls = route_controls(route)
+    upstream_body = apply_default_params(route, {**body, "model": route.model})
+    dropped = [name for name in controls.drop_params if name in upstream_body]
+    for name in dropped:
+        del upstream_body[name]
+    dropped_headers = {DROPPED_PARAMS_HEADER: ",".join(dropped)} if dropped else {}
+    anthropic_upstream = route.protocol == "anthropic_messages"
+    if anthropic_upstream:
+        try:
+            upstream_body = chat_request_to_anthropic(upstream_body, cache_ttl=controls.cache_ttl)
+        except ValueError as exc:
+            return _error_response(flavor, 400, "invalid_request", str(exc))
     started_at = state.clock.now()
     if upstream_body.get("stream"):
         return await _forward_stream(
@@ -454,6 +477,8 @@ async def _forward(
             started_at=started_at,
             flavor=flavor,
             responses=responses,
+            include_usage=_client_wants_usage(body),
+            extra_headers=dropped_headers,
         )
     try:
         upstream, cold_start_ms = await post_upstream(
@@ -469,6 +494,11 @@ async def _forward(
         payload: dict[str, Any] = upstream.json()
     except ValueError:
         payload = {}
+    chat_payload = (
+        anthropic_response_to_chat(payload)
+        if anthropic_upstream and upstream.status_code == 200
+        else payload
+    )
 
     if upstream.status_code == 200 and provider_lock_mismatch(entry.route, payload):
         await _emit_mismatch(state, key, entry, model, payload.get("model"))
@@ -478,7 +508,9 @@ async def _forward(
             entry=entry,
             model=model,
             round_=round_,
-            usage=payload.get("usage") if isinstance(payload.get("usage"), dict) else None,
+            usage=chat_payload.get("usage")
+            if isinstance(chat_payload.get("usage"), dict)
+            else None,
             latency_ms=latency_ms,
             status_code=502,
             cold_start_ms=cold_start_ms,
@@ -501,8 +533,8 @@ async def _forward(
             cold_start_ms=cold_start_ms,
             charge=False,
         )
-        message, code = _upstream_error_payload(payload)
-        return _error_response(flavor, upstream.status_code, code, message)
+        message, code = _upstream_error_payload(payload, anthropic_upstream=anthropic_upstream)
+        return _error_response(flavor, upstream.status_code, code, message, dropped_headers or None)
 
     cost = await _record_usage(
         state,
@@ -510,23 +542,28 @@ async def _forward(
         entry=entry,
         model=model,
         round_=round_,
-        usage=payload.get("usage") if isinstance(payload.get("usage"), dict) else None,
+        usage=chat_payload.get("usage") if isinstance(chat_payload.get("usage"), dict) else None,
         latency_ms=latency_ms,
         status_code=200,
         cold_start_ms=cold_start_ms,
         charge=True,
-        upstream_model=_upstream_model(payload),
+        upstream_model=_upstream_model(chat_payload),
     )
     if responses:
-        result: dict[str, Any] = chat_response_to_responses(payload, model=model)
+        result: dict[str, Any] = chat_response_to_responses(chat_payload, model=model)
     elif flavor == "anthropic":
-        result = chat_response_to_anthropic(payload, model=model)
+        result = chat_response_to_anthropic(chat_payload, model=model)
     else:
-        result = payload
-    headers = {COST_HEADER: repr(cost)}
+        result = chat_payload
+    headers = {COST_HEADER: repr(cost), **dropped_headers}
     if cold_start_ms > 0:
         headers[COLD_START_HEADER] = str(cold_start_ms)
     return JSONResponse(result, status_code=200, headers=headers)
+
+
+def _client_wants_usage(body: dict[str, Any]) -> bool:
+    options = body.get("stream_options")
+    return isinstance(options, dict) and options.get("include_usage") is True
 
 
 async def _emit_mismatch(
@@ -559,6 +596,8 @@ async def _forward_stream(
     started_at: float,
     flavor: Flavor,
     responses: bool,
+    include_usage: bool,
+    extra_headers: dict[str, str],
 ) -> Response:
     try:
         opened = await open_upstream_stream(state, entry, body, endpoint_id=key.endpoint_id)
@@ -586,7 +625,9 @@ async def _forward_stream(
             cold_start_ms=opened.cold_start_ms,
             charge=False,
         )
-        message, code = _upstream_error_payload(payload)
+        message, code = _upstream_error_payload(
+            payload, anthropic_upstream=entry.route.protocol == "anthropic_messages"
+        )
         return _error_response(flavor, upstream.status_code, code, message)
 
     first_chunk = opened.first_chunk or {}
@@ -610,6 +651,20 @@ async def _forward_stream(
             flavor, 502, "endpoint_mismatch", "upstream response violates the provider lock"
         )
 
+    if entry.route.protocol == "anthropic_messages":
+        return _anthropic_upstream_stream(
+            state,
+            key,
+            entry,
+            opened,
+            model,
+            round_,
+            started_at,
+            flavor=flavor,
+            responses=responses,
+            include_usage=include_usage,
+            extra_headers=extra_headers,
+        )
     if flavor == "anthropic":
         return _converted_stream(
             state,
@@ -652,14 +707,21 @@ def _mid_stream_error(
     status = 504 if timed_out else 502
     code = "upstream_timeout" if timed_out else "upstream_error"
     message = f"upstream {'timed out' if timed_out else 'connection failed'} mid-stream: {exc!r}"
+    return status, _stream_error_event(kind, code, message)
+
+
+def _stream_error_event(
+    kind: Literal["chat", "anthropic", "responses"], code: str, message: str
+) -> str:
+    """The SSE error event in the stream's own protocol."""
     if kind == "anthropic":
         body = {"type": "error", "error": {"type": "api_error", "message": message}}
-        return status, "event: error\ndata: " + json.dumps(body) + "\n\n"
+        return "event: error\ndata: " + json.dumps(body) + "\n\n"
     if kind == "responses":
         body = {"type": "error", "code": code, "message": message}
-        return status, "event: error\ndata: " + json.dumps(body) + "\n\n"
+        return "event: error\ndata: " + json.dumps(body) + "\n\n"
     body = {"error": {"message": message, "type": "server_error", "code": code}}
-    return status, "\ndata: " + json.dumps(body) + "\n\n"
+    return "\ndata: " + json.dumps(body) + "\n\n"
 
 
 def _upstream_model(chunk: dict[str, Any]) -> str:
@@ -717,6 +779,93 @@ def _passthrough_stream(
 
     return StreamingResponse(
         generate(), media_type="text/event-stream", headers=_stream_headers(opened)
+    )
+
+
+def _anthropic_upstream_stream(
+    state: GatewayState,
+    key: StoredKey,
+    entry: RouteEntry,
+    opened: OpenedStream,
+    model: str,
+    round_: int,
+    started_at: float,
+    *,
+    flavor: Flavor,
+    responses: bool,
+    include_usage: bool,
+    extra_headers: dict[str, str],
+) -> StreamingResponse:
+    """Anthropic Messages SSE upstream -> chat chunks -> the client's own streaming protocol."""
+    # The Anthropic and Responses converters read the usage chunk, so they always get it.
+    upstream = AnthropicToChatStream(
+        include_usage=include_usage or flavor == "anthropic" or responses
+    )
+    client_converter: ChatToAnthropicStream | ChatToResponsesStream | None
+    kind: Literal["chat", "anthropic", "responses"]
+    if responses:
+        client_converter, kind = ChatToResponsesStream(model=model), "responses"
+    elif flavor == "anthropic":
+        client_converter, kind = ChatToAnthropicStream(model=model), "anthropic"
+    else:
+        client_converter, kind = None, "chat"
+
+    def render(chunks: list[dict[str, Any]]) -> list[str]:
+        if client_converter is None:
+            return ["data: " + json.dumps(chunk) + "\n\n" for chunk in chunks]
+        return [event for chunk in chunks for event in client_converter.feed(chunk)]
+
+    async def generate() -> AsyncIterator[str]:
+        status = 200
+        try:
+            async for line in opened.iter_lines():
+                event = parse_data_line(line)
+                if event is None:
+                    continue
+                for out in render(upstream.feed(event)):
+                    yield out
+                if upstream.error is not None:
+                    break
+            if upstream.error is not None:
+                status = 502
+                error_type, error_message = upstream.error
+                yield _stream_error_event(
+                    kind,
+                    "upstream_error",
+                    f"upstream error mid-stream: {error_type}: {error_message}",
+                )
+            else:
+                for out in render(upstream.finish()):
+                    yield out
+                if client_converter is None:
+                    yield "data: [DONE]\n\n"
+                else:
+                    for out in client_converter.finish():
+                        yield out
+        except httpx.TransportError as exc:
+            status, event_text = _mid_stream_error(kind, exc)
+            yield event_text
+        finally:
+            await opened.aclose()
+            await _record_usage(
+                state,
+                key=key,
+                entry=entry,
+                model=model,
+                round_=round_,
+                usage=upstream.usage,
+                latency_ms=_latency_ms(state, started_at),
+                status_code=status,
+                cold_start_ms=opened.cold_start_ms,
+                charge=True,
+                upstream_model=_upstream_model(opened.first_chunk or {}),
+                error_code=_STREAM_FAILURE_CODES.get(status),
+            )
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={**(_stream_headers(opened) or {}), **extra_headers},
     )
 
 

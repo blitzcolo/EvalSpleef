@@ -39,6 +39,11 @@ Public function table
 from __future__ import annotations
 
 from .anthropic import ChatToAnthropicStream, anthropic_request_to_chat, chat_response_to_anthropic
+from .anthropic_upstream import (
+    AnthropicToChatStream,
+    anthropic_response_to_chat,
+    chat_request_to_anthropic,
+)
 from .errors import (
     BUDGET_CODES,
     anthropic_error_envelope,
@@ -64,11 +69,14 @@ PUBLIC_FUNCTION_TABLE: dict[str, str] = {
 __all__ = [
     "BUDGET_CODES",
     "PUBLIC_FUNCTION_TABLE",
+    "AnthropicToChatStream",
     "ChatToAnthropicStream",
     "ChatToResponsesStream",
     "anthropic_error_envelope",
     "anthropic_error_type",
     "anthropic_request_to_chat",
+    "anthropic_response_to_chat",
+    "chat_request_to_anthropic",
     "chat_response_to_anthropic",
     "chat_response_to_responses",
     "openai_error_envelope",

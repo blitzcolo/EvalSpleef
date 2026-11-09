@@ -29,6 +29,8 @@ class PriceSpec:
     cached_per_mtok: float = 0.0
     basis: Literal["api", "ref-price", "assumed"] = "api"
     table_version: str = ""
+    cache_write_per_mtok: float | None = None
+    """Price of tokens written to a prompt cache; ``None`` bills them at ``input_per_mtok``."""
 
 
 @dataclass(frozen=True)

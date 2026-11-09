@@ -93,6 +93,7 @@ class HttpGatewayAdmin(GatewayAdmin):
             "cached_per_mtok": price.cached_per_mtok,
             "basis": price.basis,
             "table_version": price.table_version,
+            "cache_write_per_mtok": price.cache_write_per_mtok,
         }
         response = await self._client.put(
             f"{self._base_url}/admin/routes/{name}/price",

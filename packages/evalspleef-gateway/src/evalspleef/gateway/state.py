@@ -38,6 +38,7 @@ RATE_WINDOW_S = 60.0
 
 COLD_START_HEADER = "x-spleef-cold-start-ms"
 STOP_REASON_HEADER = "x-spleef-stop-reason"
+DROPPED_PARAMS_HEADER = "x-spleef-dropped-params"
 ROUND_HEADER = "x-spleef-round"
 GATEWAY_VERSION_HEADER = "x-spleef-gateway-version"
 
@@ -113,14 +114,23 @@ def compute_cost(
     input_tokens: int,
     output_tokens: int,
     cached_tokens: int,
+    cache_write_tokens: int = 0,
 ) -> float:
-    """Cost in USD from the frozen per-route price table; zero when no price is set."""
+    """Cost in USD from the frozen per-route price table; zero when no price is set.
+
+    ``input_tokens`` is the whole prompt: cache reads and cache writes are priced at their
+    own rates and removed from the plain input bucket.
+    """
     if price is None:
         return 0.0
-    billable_input = max(input_tokens - cached_tokens, 0)
+    write_price = (
+        price.input_per_mtok if price.cache_write_per_mtok is None else price.cache_write_per_mtok
+    )
+    billable_input = max(input_tokens - cached_tokens - cache_write_tokens, 0)
     cost = (
         billable_input * price.input_per_mtok
         + cached_tokens * price.cached_per_mtok
+        + cache_write_tokens * write_price
         + output_tokens * price.output_per_mtok
     ) / MTok
     return round(cost, 12)

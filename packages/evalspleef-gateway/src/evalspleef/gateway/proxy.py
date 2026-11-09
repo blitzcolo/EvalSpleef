@@ -1,6 +1,7 @@
 """Upstream forwarding: one endpoint speaks Chat Completions, with cold-start absorption.
 
-The gateway always forwards as ``POST {api_base}/chat/completions``. When the route has
+The gateway forwards as ``POST {api_base}/chat/completions``, or as ``POST {api_base}/messages``
+for a route whose protocol is ``anthropic_messages``. When the route has
 ``cold_start_window_s > 0`` an HTTP 503 answer or a connect timeout is retried every
 ``state.cold_start_interval_s`` seconds until the window ends (TECH-DESIGN 6.3): the
 client sees a single slow request and the absorbed time is reported as
@@ -13,7 +14,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -87,8 +88,41 @@ class OpenedStream:
             yield line
 
 
+ANTHROPIC_VERSION = "2026-10-21"
+
+#: Route ``default_params`` keys that steer the gateway and are never sent upstream.
+PROMPT_CACHING_KEY = "prompt_caching"
+DROP_PARAMS_KEY = "drop_params"
+ROUTE_CONTROL_KEYS = frozenset({PROMPT_CACHING_KEY, DROP_PARAMS_KEY})
+
+
 def chat_url(route: UpstreamRoute) -> str:
     return f"{route.api_base.rstrip('/')}/chat/completions"
+
+
+def upstream_url(route: UpstreamRoute) -> str:
+    """The URL a request to this route is posted to, by upstream protocol."""
+    if route.protocol == "anthropic_messages":
+        return f"{route.api_base.rstrip('/')}/messages"
+    return chat_url(route)
+
+
+@dataclass(frozen=True)
+class RouteControls:
+    """Gateway-side route switches read from ``default_params``."""
+
+    cache_ttl: Literal["5m", "1h"] | None
+    drop_params: tuple[str, ...]
+
+
+def route_controls(route: UpstreamRoute) -> RouteControls:
+    """``prompt_caching``: absent or true -> 5 minutes, ``"1h"`` -> 1 hour, false -> off."""
+    caching = route.default_params.get(PROMPT_CACHING_KEY, True)
+    ttl: Literal["5m", "1h"] | None = "1h" if caching == "1h" else "5m"
+    if caching is False or caching is None:
+        ttl = None
+    drop = route.default_params.get(DROP_PARAMS_KEY) or ()
+    return RouteControls(cache_ttl=ttl, drop_params=tuple(str(name) for name in drop))
 
 
 def upstream_headers(state: GatewayState, route: UpstreamRoute) -> dict[str, str]:
@@ -96,13 +130,20 @@ def upstream_headers(state: GatewayState, route: UpstreamRoute) -> dict[str, str
         api_key = state.secrets.resolve(route.api_key_ref)
     except Exception as exc:
         raise UpstreamCredentialError(str(exc)) from exc
-    return {"Authorization": f"Bearer {api_key}", **dict(route.extra_headers)}
+    extra = dict(route.extra_headers)
+    if route.protocol == "anthropic_messages":
+        headers = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION}
+        overridden = {name.lower() for name in extra}
+        return {**{k: v for k, v in headers.items() if k not in overridden}, **extra}
+    return {"Authorization": f"Bearer {api_key}", **extra}
 
 
 def apply_default_params(route: UpstreamRoute, body: dict[str, Any]) -> dict[str, Any]:
     """Route defaults with the body winning, except ``max_tokens`` which is a ceiling."""
     merged = dict(body)
     for key, value in route.default_params.items():
+        if key in ROUTE_CONTROL_KEYS:
+            continue
         if key == "max_tokens" and isinstance(value, int):
             requested = merged.get("max_tokens")
             if not isinstance(requested, int) or requested > value:
@@ -149,7 +190,7 @@ async def _should_retry(
         await state.emit(
             EVENT_ENDPOINT_COLD_START,
             endpoint_id=endpoint_id,
-            url=chat_url(route),
+            url=upstream_url(route),
             window_s=route.cold_start_window_s,
         )
     if state.clock.now() - started_at + state.cold_start_interval_s > route.cold_start_window_s:
@@ -160,7 +201,7 @@ async def _should_retry(
 
 #: Upstream statuses retried with exponential backoff (PRD appendix B.6: provider rate
 #: limits and 5xx are retried up to five times before the trial sees them).
-RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
 
 
 async def _backoff(state: GatewayState, response: httpx.Response, attempt: int) -> bool:
@@ -186,7 +227,7 @@ async def post_upstream(
     attempts = 0
     while True:
         try:
-            response = await state.client.post(chat_url(route), json=body, headers=headers)
+            response = await state.client.post(upstream_url(route), json=body, headers=headers)
         except httpx.ConnectTimeout:
             if route.cold_start_window_s > 0 and await _should_retry(
                 state, route, started_at, retried, endpoint_id=endpoint_id
@@ -223,7 +264,9 @@ async def open_upstream_stream(
     retried = False
     attempts = 0
     while True:
-        request = state.client.build_request("POST", chat_url(route), json=body, headers=headers)
+        request = state.client.build_request(
+            "POST", upstream_url(route), json=body, headers=headers
+        )
         try:
             response = await state.client.send(request, stream=True)
         except httpx.ConnectTimeout:
@@ -254,11 +297,28 @@ async def open_upstream_stream(
         lock_field = route.provider_lock.response_field if route.provider_lock else None
         cold_start_ms = int((state.clock.now() - started_at) * 1000) if retried else 0
         return await OpenedStream.open(
-            response, cold_start_ms=cold_start_ms, lock_field=lock_field, parse=_parse_data_line
+            response,
+            cold_start_ms=cold_start_ms,
+            lock_field=lock_field,
+            parse=parse_message_start
+            if route.protocol == "anthropic_messages"
+            else parse_data_line,
         )
 
 
-def _parse_data_line(line: str) -> dict[str, Any] | None:
+def parse_message_start(line: str) -> dict[str, Any] | None:
+    """The ``message`` object of an Anthropic ``message_start`` data line, else ``None``.
+
+    It carries the upstream model and id, which is what the provider lock inspects.
+    """
+    event = parse_data_line(line)
+    if event is None or event.get("type") != "message_start":
+        return None
+    message = event.get("message")
+    return message if isinstance(message, dict) else None
+
+
+def parse_data_line(line: str) -> dict[str, Any] | None:
     if not line.startswith("data: "):
         return None
     payload = line[len("data: ") :]

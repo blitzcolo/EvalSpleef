@@ -248,12 +248,27 @@ def price_for_spec(spec: ModelSpec) -> PriceSpec:
         value = mapping.get(name)
         return float(value) if isinstance(value, int | float) else 0.0
 
+    cache_write = mapping.get("cache_write_per_mtok")
     return PriceSpec(
         input_per_mtok=per_mtok("input_per_mtok"),
         output_per_mtok=per_mtok("output_per_mtok"),
         cached_per_mtok=per_mtok("cached_per_mtok"),
         basis=basis,
         table_version=table_version,
+        cache_write_per_mtok=float(cache_write) if isinstance(cache_write, int | float) else None,
+    )
+
+
+def judge_limits(spec: ModelSpec) -> tuple[int, float]:
+    """Output-token cap and read timeout of a judge client, from ``deployment.params``.
+
+    A reasoning judge spends output tokens on thinking before the verdict and can take
+    minutes, so ``judge_max_tokens`` and ``judge_timeout_s`` raise the client defaults.
+    """
+    params = spec.deployment.params
+    return (
+        int(params.get("judge_max_tokens", JUDGE_MAX_TOKENS)),
+        float(params.get("judge_timeout_s", JUDGE_TIMEOUT_S)),
     )
 
 
@@ -737,6 +752,7 @@ class AppContext:
                 if isinstance(spec.source, VendorSource)
                 else spec.deployment.adapter
             )
+            max_tokens, timeout_s = judge_limits(spec)
             clients[slug] = GatewayJudgeClient(
                 endpoint_id=endpoint_id,
                 gateway_url=judge_gateway_url,
@@ -744,6 +760,8 @@ class AppContext:
                 family=spec.family,
                 api_key=key.secret,
                 name=public_name(endpoint_id),
+                max_tokens=max_tokens,
+                timeout_s=timeout_s,
             )
         return clients
 
@@ -752,7 +770,6 @@ class AppContext:
     ) -> dict[str, dict[str, Any]]:
         """Model- and batch-level ``trial.versions`` fields for each endpoint of ``plan``.
 
-            max_tokens, timeout_s = judge_limits(spec)
         Resolved once when the batch runs, from the registered model spec, the
         endpoint handle, its frozen probe report and the freeze record (PRD
         FR-MOD-09, rule 8 of AGENTS.md: record reproducibility fields at creation).
@@ -760,8 +777,6 @@ class AppContext:
         manager = self.endpoint_manager()
         seeds: dict[str, dict[str, Any]] = {}
         for cell in plan.runnable_cells:
-                max_tokens=max_tokens,
-                timeout_s=timeout_s,
             endpoint_id = cell.model.endpoint_id
             if endpoint_id is None or endpoint_id in seeds:
                 continue

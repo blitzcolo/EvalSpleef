@@ -70,6 +70,7 @@ class PriceIn(BaseModel):
     cached_per_mtok: float = 0.0
     basis: Literal["api", "ref-price", "assumed"] = "api"
     table_version: str = ""
+    cache_write_per_mtok: float | None = None
 
     def to_price(self) -> PriceSpec:
         return PriceSpec(
@@ -78,6 +79,7 @@ class PriceIn(BaseModel):
             cached_per_mtok=self.cached_per_mtok,
             basis=self.basis,
             table_version=self.table_version,
+            cache_write_per_mtok=self.cache_write_per_mtok,
         )
 
 

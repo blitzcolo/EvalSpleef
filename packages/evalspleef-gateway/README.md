@@ -30,6 +30,42 @@ are not touched by the HTTP layer.
   `endpoint.mismatch` and flags the usage record (status 502).
 - **No bodies persisted**: usage records carry tokens, latency, status and cost only.
 
+## Anthropic Messages upstream
+
+A route with `protocol: anthropic_messages` is called as `POST {api_base}/messages` with
+`x-api-key` and `anthropic-version: 2026-10-21` (the route's `extra_headers` may override
+the version; no `Authorization` header is sent). Chat Completions clients keep speaking
+chat: the request is converted (system/developer messages become `system`, `stop` becomes
+`stop_sequences`) and the reply is converted back with usage folded into chat shape.
+Cache writes are reported in the non-standard `usage.cache_creation_input_tokens` and priced
+by `PriceSpec.cache_write_per_mtok` (unset: the input price); cache reads are recorded as
+`cached_tokens`.
+
+Two route-level keys in `default_params` steer the gateway for every protocol and are never
+sent upstream:
+
+- `prompt_caching`: on by default for Anthropic routes (top-level `cache_control`,
+  5-minute TTL); `"1h"` selects the 1-hour TTL, `false` turns it off.
+- `drop_params`: body keys removed before conversion, for models that reject them (for
+  example `["temperature"]`). Removed names are listed in the `x-spleef-dropped-params`
+  response header.
+
+Streaming (`stream: true`) is supported: the Anthropic SSE events are converted to Chat
+Completions chunks (`text_delta` -> `delta.content`, `thinking_delta` ->
+`delta.reasoning_content`, the mapped `finish_reason`, a usage-only chunk when the client set
+`stream_options.include_usage`, then `[DONE]`). `stream_options` is consumed by the gateway and
+never forwarded. Usage comes from the cumulative usage on `message_delta`, falling back to
+`message_start`, and is charged exactly like a non-streaming reply. An upstream `error` event
+or a dropped connection ends the stream with an error event and a 502/504 usage record.
+
+Structured output: `response_format: {"type": "json_schema", ...}` becomes
+`output_config.format = {"type": "json_schema", "schema": ...}`, merged into any
+`output_config` the route defaults supply (for example `effort`). The OpenAI `name` and
+`strict` have no Anthropic equivalent and are dropped. `json_object` and other types are a 400.
+
+Limits: plain text only. Tools, tool messages, images, `n > 1`, `logprobs`, `logit_bias`,
+`seed`, penalties and `user` are rejected with a 400 naming the field instead of being dropped.
+
 ## Layout
 
 | Module | Purpose |
