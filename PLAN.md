@@ -243,8 +243,8 @@ Ordered by dependency. Estimates are rough, for one engineer who knows the code.
 | 13 | LoRA adapters on dedicated endpoints (PRD P1) | a carrier that serves them | 10 | 3-5 days |
 | 14 | Manual review of the two logic-001 cells of batch 2026-11-b3 | a human reviewer | nothing | hours |
 | 15 | Last vendor names in neutral packages: the Novita bill import in the ledger (changing its CLI option changes the PRD) and the gateway's `anthropic` client-flavour literal; template kinds for tart, hyperv, libvirt, device-pool and hostd's codec | a PRD decision for the bill option | nothing | 1-2 days |
-| 16 | Inference performance metrics in every report (standing requirement, design below): gateway TTFT and ITL fields, a `spleef models bench` command and a fuller P-12 probe, `release/perf.json` and a report section | nothing | nothing | 3-5 days (estimate); first real numbers are in `docs/evidence/beam-1m-kv.md` |
-| 17 | Gaps the Beam run found: a per-route upstream timeout in the gateway (the fixed 120 s blocks long-context and thinking-mode requests), the `models retire` exit code for an endpoint that never got a route, the Hugging Face mirror default (cannot work with a read token), keeping the engine log of every paid run at teardown | nothing | 16 for the timeout (same gateway code) | 2-3 days (estimate) |
+| 16 | Inference performance metrics: built 2026-11-09 (see "Inference performance metrics: results"). Left: run `bench` on a GPU endpoint through the gateway, check the Postgres migration on a database populated before the change, stream tool calls through the Anthropic Messages converter (D8) | GPU spend for the live bench | nothing | 1-2 days (estimate) |
+| 17 | Gaps the Beam run found (the per-route upstream timeout is done): the `models retire` exit code for an endpoint that never got a route, the Hugging Face mirror default (cannot work with a read token), keeping the engine log of every paid run at teardown | nothing | nothing | 1-2 days (estimate) |
 
 ### Design: the `agent_judge` component (decided 2026-11-09, not built)
 
@@ -311,17 +311,17 @@ All three are content work on hash-locked packs: files per PRD E.1 (`task.yaml`,
 
 Also on the backlog: finish the `TODO(run-on-host)` items the packs list in their `notes.md` once a carrier can run them. Example: web-001's `hidden-tests/run.sh` falls back to a static contract check when `@playwright/test` and Chromium are missing, so its interactive acceptance needs an image that has them.
 
-### Design: inference performance metrics in every report (standing requirement 2026-11-09, not built)
+### Inference performance metrics in every report (standing requirement 2026-11-09, built the same day)
 
 The user asked that every GPU cloud inference run records, from now on, these metrics in the report for later reference: system prefill throughput and system decode throughput (tok/s), single-request steady-state prefill and decode speed (tok/s), single-request TTFT, ITL and TPOT, TTFT, ITL and TPOT under full load, and end-to-end request time, "etc.". Like the execution environment record, this is a platform capability, not a note.
 
-**Today.** The gateway's usage record carries only the total `latency_ms`. The probe client measures `ttft_s` for its own streaming probes. TECH-DESIGN 6.4 specifies probe P-12 as TTFT and tokens per second (p50 and p95) at concurrency 1, 4 and 16 for sizing replicas (PRD line 269 says "record"). No report carries inter-token latency, system throughput or a saturated-load measurement.
+**Before this work** the gateway's usage record carried only the total `latency_ms`, the probe client measured `ttft_s` for its own streaming probes, and TECH-DESIGN 6.4 specified P-12 as TTFT and tokens per second (p50 and p95) at concurrency 1, 4 and 16. No report carried inter-token latency, system throughput or a saturated-load measurement. **Built** as designed below (core `29a325c`, gateway `91eacda`, control `d6d2e46`, follow-ups `990b8da` and `d1371fc`); see "Inference performance metrics: results".
 
 **Definitions** (streaming requests, one clock: the gateway's monotonic clock; numbers below are defaults to tune on real runs):
 
 | Metric | Definition |
 | --- | --- |
-| TTFT | request received by the gateway until the first streamed chunk that carries generated text (`content` or `reasoning_content`) |
+| TTFT | request received by the gateway until the first streamed chunk that carries generated text: non-empty `content` or `reasoning_content`, or a tool call's function name or arguments (decided 2026-11-09 because many agent turns answer only with a tool call). Role-only, empty, finish-only and usage-only chunks do not count |
 | ITL | gap between two consecutive generated-text chunks of one request; reported over all gaps of a sample set as mean, p50, p95, p99 |
 | TPOT | (t_last - t_first) / (output_tokens - 1), with `output_tokens` from the usage chunk (reasoning tokens included) |
 | E2E | request received until the last chunk (or the whole body when not streaming) |
@@ -494,6 +494,21 @@ Evidence: `docs/evidence/beam-1m-kv.md`. Config: `config/examples/real-beam/`. P
 | Adapter defects fixed, each with a regression test | `validate` rejected every Hugging Face model with `hf_checker_missing` although the endpoint manager runs that check itself; `upstream()` dropped `default_params`, so the thinking switch could not reach the route |
 
 Open, found by this run: no CLI command moves an API-mode endpoint from deploying to verifying (`EndpointManager.refresh()` has no caller; part of the resident service); `models retire` exits 1 for an endpoint that never got a gateway route; the gateway's 120 s upstream timeout is hard-coded; Hugging Face mirror creation is on by default and cannot work with a read token, so self-served specs need `mirror: false`; engine logs of paid runs are not stored automatically. Not proven: a 1M pool on a single GPU; four simultaneous ~250K requests end to end through Beam's ingress; any long-context request through the gateway; thinking-mode quality; the real Beam invoice.
+
+### Inference performance metrics: results (2026-11-09)
+
+| Item | Result |
+| --- | --- |
+| Core (`core/perf.py`, pure, standard library) | metrics are a function of stored raw samples; cached tokens are not prefill work; a request that was not streamed has no TTFT, ITL or TPOT. Fed the raw files of the Beam run it reproduces `docs/evidence/beam-1m-kv.md` section 6 with zero mismatches: saturation at concurrency 4 (the next step gains 0.86%), 8.92 USD per million output tokens. Mutation: cached tokens counted as prefill work fails `test_cached_tokens_are_not_prefill_work` with `assert 1000.0 == 800.0` (reproduced independently) |
+| Gateway | times every request on its own clock; `ttft_ms`, `e2e_ms`, `tpot_ms` and ITL aggregates go into the usage record, the `request.completed` event and `/admin/usage`; old stores gain the columns in place; a route may set `upstream_timeout_s` (default 120 s) |
+| `spleef models bench` and P-12 | single requests with unique seeded prefixes, then a closed-loop sweep that stops at saturation; the raw samples and their sha256 are stored with the result in the immutable `endpoint_benchmark` table; P-12 uses the same sampler; `bench` refuses an endpoint that has no gateway route yet |
+| Release | `release/perf.json` and an "Inference performance" section in the report: the latest benchmark with its facts, plus in-batch distributions over all batch requests (how many had a TTFT, throughput over the batch's busy windows labelled observed and not saturated); API endpoints are labelled as including the network and provider queueing |
+| Bug fixed that was older than this work | a client that hung up right after `[DONE]` made Starlette cancel the stream, and with a store that really waits (SQLite) the usage record and the charge were silently dropped: streamed spend was not booked and budgets did not bind. End-of-request accounting now runs in a task the gateway state holds, behind a shield, drained on close. Regression test fails before the fix; confirmed on real DeepSeek (85 of 85 probe requests and 12 of 12 bench streams recorded, 0 of 12 before) |
+| Probe accounting | probe requests were booked at 0 USD because the route was priced only after the probe passed (85 DeepSeek probe requests: 0.00 USD booked against about 0.01 USD of tokens), so the probe key's cap could not bind. The price is now set right after the route is published; mutation: dropping the call fails the new test with `KeyError: "no price for route ..."` |
+| Tool-call deltas | count as generated text, so tool-only agent turns have a TTFT; the gateway and the control sampler each carry a classifier (the gateway may not import core), pinned by the same 16 cases in both test suites; a tool-only turn has TTFT through the chat, messages and responses endpoints |
+| Real DeepSeek bench (`deepseek-flash`, spend about 0.04 USD, probes with context cut to 16,384 and max output to 4,096 in a temporary copy of the example config) | single request about 1,430 input tokens: TTFT 1.40 s, prefill about 1,025 tok/s, decode about 170 tok/s, TPOT 5.9 ms. Concurrency 4 (the highest planned level, throughput still rising, so not saturated): system prefill 2,118 tok/s, system decode 189 tok/s, TTFT p50 1.16 s, TPOT p50 6.8 ms, E2E p50 2.03 s. A per-token API has no hourly price, so no cost per million tokens. The prompt generator's tokens-per-line figure is calibrated on Qwen, so a 2048-token target gave about 1,430 real tokens; the stored record has the real counts |
+
+Not proven: a live `bench` on an hourly-priced GPU endpoint (cost per million tokens is tested with core fixtures and the Beam data only); in-batch TTFT, ITL and TPOT for shells that do not stream (they get E2E only); judge traffic is not in the in-batch figures (judges use their own keys); a stream body generator cancelled while suspended at a `yield`; the Postgres migration on a database populated before this change; tool-call turns on a route whose upstream speaks Anthropic Messages (the converter drops `tool_use` events, the D8 remainder).
 
 ### Real surfaces
 
