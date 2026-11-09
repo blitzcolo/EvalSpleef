@@ -1,0 +1,36 @@
+# providers.yaml for a real-model development batch: DeepSeek models under test,
+# Claude Sonnet 5.5 as the judge, local Docker sandboxes. Keys are env:// references
+# only; export them in the shell that runs the gateway and the CLI
+# (set -a; . ~/.config/evalspleef/secrets.env; set +a).
+model_accounts:
+  deepseek:
+    adapter: openai-compatible
+    base_url: https://api.deepseek.com
+    api_key_ref: env://DEEPSEEK_API_KEY
+  anthropic:
+    adapter: openai-compatible
+    base_url: https://api.anthropic.com/v1
+    api_key_ref: env://ANTHROPIC_API_KEY
+    params:
+      protocol: anthropic_messages # the gateway forwards to POST /v1/messages with x-api-key
+      default_params:
+        output_config: {effort: high} # Sonnet 5.5 default; stated so the batch records it
+        drop_params: [temperature, top_p, top_k] # Sonnet 5.5 answers 400 to sampling parameters
+        # prompt_caching defaults to on for anthropic_messages routes; "1h" or false change it
+
+sandbox_instances:
+  local-docker:
+    adapter: docker
+    config:
+      runtime: runc
+    limits:
+      max_concurrency: 4
+
+routes:
+  - when: {os: linux}
+    prefer: [local-docker]
+  - when: {role: verifier}
+    prefer: [local-docker]
+
+gateway:
+  internal_url: "${SPLEEF_GATEWAY_URL}"

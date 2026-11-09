@@ -1,0 +1,61 @@
+# models.yaml for a real-model development batch (see providers.yaml next to it).
+# Prices are USD per million tokens at DeepSeek's peak rates (the conservative side) and at
+# Claude Sonnet 5.5's list rates; declared_context_tokens is the ceiling the probes bisect from,
+# kept at 131072 so probe P-09 does not send million-token prompts.
+models:
+  - slug: deepseek-flash
+    spec_version: 1
+    family: deepseek
+    roles: [target]
+    source: {type: vendor, vendor: deepseek, model_id: deepseek-flash}
+    deployment:
+      adapter: openai-compatible
+      account: deepseek
+      params:
+        model: deepseek-flash
+        pricing: {input_per_mtok: 0.30, output_per_mtok: 1.20, cached_per_mtok: 0.006}
+    declared_context_tokens: 131072
+    declared_max_output_tokens: 32768
+    pricing_ref: "api:deepseek@2026-11"
+    license: proprietary
+    owner: eval-dev
+
+  - slug: deepseek-v4-pro
+    spec_version: 1
+    family: deepseek
+    roles: [target]
+    source: {type: vendor, vendor: deepseek, model_id: deepseek-v4-pro}
+    deployment:
+      adapter: openai-compatible
+      account: deepseek
+      params:
+        model: deepseek-v4-pro
+        pricing: {input_per_mtok: 1.32, output_per_mtok: 3.96, cached_per_mtok: 0.044}
+    declared_context_tokens: 131072
+    declared_max_output_tokens: 32768
+    pricing_ref: "api:deepseek@2026-11"
+    license: proprietary
+    owner: eval-dev
+
+  - slug: claude-sonnet-5-5
+    spec_version: 1
+    family: anthropic
+    roles: [judge]
+    source: {type: vendor, vendor: anthropic, model_id: claude-sonnet-5-5}
+    deployment:
+      adapter: openai-compatible
+      account: anthropic
+      params:
+        model: claude-sonnet-5-5
+        judge_max_tokens: 8192 # adaptive thinking spends output tokens before the verdict
+        judge_timeout_s: 180 # a high-effort verdict can take over a minute
+        pricing:
+          input_per_mtok: 2.00
+          output_per_mtok: 10.00
+          cached_per_mtok: 0.10 # cache read
+          cache_write_per_mtok: 2.50 # 5-minute cache write
+    declared_context_tokens: 131072
+    declared_max_output_tokens: 16384
+    pricing_ref: "api:anthropic@2026-11"
+    license: proprietary
+    owner: eval-dev

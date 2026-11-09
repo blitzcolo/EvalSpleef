@@ -106,7 +106,7 @@ uv run spleef gateway serve
 In a second shell:
 
 ```bash
-export SPLEEF_GATEWAY_URL=http://127.0.0.1:8701/v1           # providers.yaml gateway.internal_url
+export SPLEEF_GATEWAY_URL=http://127.0.0.1:8701              # data-plane root without /v1 (providers.yaml gateway.internal_url)
 export SPLEEF_GATEWAY_ADMIN_URL=http://127.0.0.1:8702
 export SPLEEF_GATEWAY_ADMIN_TOKEN=...                         # the same token
 export SPLEEF_STORE_URL=sqlite:///$PWD/.state/store.sqlite3   # or a postgresql:// URL

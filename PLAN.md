@@ -192,7 +192,7 @@ Everything from the review's unfinished list that could be fixed in code here is
 | Resident control-plane service (D11): health loop, alerts (orphan sandbox, quota, HF token expiry, frequent cold starts, lost heartbeat), the 24 h assisted-ticket expiry, the periodic `reap(labels={batch})`, the manual-pause expiry on a timer, batch lifecycle events and a persisted batch state | NFR-09, FR-OPS-03, FR-MOD-03, B.1, B.8 | the control plane is a command line; every scheduled duty needs a process that owns time, leader election and restart semantics | 2-3 weeks |
 | Resume a paused trial into `running` | B.6 | sandboxes are destroyed when a trial ends; resuming needs sandbox retention for 30 minutes and a live agent session, which only the resident service can hold. A human decision (`spleef trials resolve`) and the timeout (`spleef trials expire-paused`) work today | with the service |
 | Pause dispatch while an endpoint sleeps | FR-MOD-06.2 | the cold-start wait is now kept out of the wall clock; pausing the queue needs endpoint state pushed to the scheduler | 2-3 days, with the service |
-| Anthropic Messages and OpenAI Responses upstream passthrough (D8) | FR-MOD-07.1 | the gateway converts every client protocol to chat completions upstream; passthrough needs per-protocol usage parsing, cost and budget accounting and stream relaying | 1 week |
+| D8 remainder: tools and `tool_choice` on an Anthropic Messages upstream, Anthropic-flavoured clients with tools (native shells), an OpenAI Responses upstream | FR-MOD-07.1 | a text-only Anthropic upstream with streaming and structured output exists since 2026-11-09 (see "Claude judge through the gateway"); tool-call translation and Responses passthrough are not built | 3-5 days (estimate) |
 | OpenTelemetry beyond the control plane: spans for the gateway, runners and hostd processes, OTLP over gRPC, a collector in the deployed stack | NFR-10 | the control plane's SPI calls are traced since 2026-11-09 (OTLP/HTTP, proven against a local collector); no other process is instrumented by that change | 2-3 days (estimate) |
 | Egress enforcement on Docker, what is left: the platform creating the internal network and the proxy per run, a firewall rule, the gateway domain added automatically for in-sandbox shells, HTTPS/TLS and mirror rewriting inside containers | TD 7.3, FR-SBX-03 | the adapter now exports the proxy variables and the topology is proven on real Docker (2026-11-09), but an operator still builds the network and the proxy by hand and nothing adds the gateway domain | 3-5 days (estimate) |
 | Multi-carrier template registry and cross-carrier fingerprint check; Tart and VHDX template builds | TD 7.6 | the registry maps OCI digests to Novita templates; Tart and VHDX need their own builders and hosts | 1-2 weeks plus hosts |
@@ -299,6 +299,35 @@ Everything from the review's unfinished list that could be fixed in code here is
 | New dependency `opentelemetry-exporter-otlp-proto-http` in `evalspleef-control` | `uv lock --check` exit 0 |
 
 Not verified in this round: HTTPS to TLS upstreams through the proxy, package-mirror rewriting inside containers, a non-local collector or OTLP over gRPC, and the other `OTEL_EXPORTER_OTLP_*` variables (headers, timeout). The egress and tracing e2e ran on this Mac's Docker Desktop, not on native Linux dockerd.
+
+### Claude judge through the gateway (2026-11-09)
+
+| Item | Regression check |
+| --- | --- |
+| A text-only `anthropic_messages` upstream in the gateway: chat requests go to `POST {api_base}/messages` with `x-api-key` and `anthropic-version`; top-level `cache_control` is on by default (`prompt_caching`: false or "1h" in the route defaults); `drop_params` removes parameters a model rejects and the answer lists them in `x-spleef-dropped-params`; `output_config` (effort) passes through; `response_format` json_schema maps to `output_config.format`; streaming converts to chat chunks (thinking as `reasoning_content`, usage chunk with `include_usage`); tools, `tool_choice`, `seed`, images, `n` and `json_object` answer 400 naming the field | mutations, each failing its test: `cache_control` dropped, `Authorization` sent instead of `x-api-key`, cache writes priced at the input price, `response_format` mapping dropped, `thinking_delta` sent as content, `cache_creation_input_tokens` ignored in the stream cost (the `cache_control` and `response_format` ones reproduced independently) |
+| Cache-aware cost: `PriceSpec.cache_write_per_mtok`, `compute_cost(cache_write_tokens=...)`; cache reads are recorded as `cached_tokens`, writes only change the cost (the usage store schema is unchanged) | costs computed by hand from the Sonnet 5.5 price table (2.00 input, 10.00 output, 0.10 cache read, 2.50 cache write) |
+| `judge_max_tokens` and `judge_timeout_s` in a judge model's `deployment.params` size the judge client (adaptive thinking spends output tokens before the verdict) | `test_judge_limits`; mutation: ignoring the params fails it |
+| The run guide told operators to export `SPLEEF_GATEWAY_URL` with `/v1`; the probe client appends `/v1/chat/completions`, so every probe answered 404 | the real batch stopped at `models probe`; the guide now gives the data-plane root without `/v1` |
+
+Live evidence on 2026-11-09, a real gateway process in front of api.anthropic.com, model `claude-sonnet-5-5`, effort high: the same ~3,750-token prompt three times wrote 3,749 cache tokens (cost 0.0094205 USD) and then read 3,749 twice (0.0004229 USD each), matching the hand computation, the gateway usage records and `x-spleef-cost`; two streamed calls wrote 3,747 (0.0100555) and read 3,747 (0.0011927); a `json_schema` request returned `{"answer":"Paris","confidence":10}`. The route is admitted as a judge: P-01, P-02, P-07 and P-14 pass.
+
+Open on this upstream: tools and `tool_choice`, `seed`, images, `n` and `json_object` are rejected by design (the judge route fails P-03 to P-06, P-11 and P-13, none of them required); no mid-stream retries; a request that sets only `max_completion_tokens` reserves 0 tokens in admission (older gap); 1-hour cache writes are priced at `cache_write_per_mtok`; the Responses upstream still answers 502.
+
+### Real-model batch 2026-11-b3 (DeepSeek under test, Claude Sonnet 5.5 judge, 2026-11-09)
+
+Config in `config/examples/real-deepseek/`; local Docker sandboxes, a real gateway process, `deepseek-flash` and `deepseek-v4-pro` on logic-001, data-001 and debug-001, 2 epochs, single judge vendor allowed explicitly. All steps exited 0 after the fixes below (`validate`, `register`, `probe`, `plan`, `freeze`, `run`, `report`); the event projection check covered 14 trial rows.
+
+| Cell | deepseek-flash | deepseek-v4-pro |
+| --- | --- | --- |
+| data-001 | 0 / Perfect (0.02 USD) | 0 / Perfect (0.14 USD) |
+| debug-001 | 0 / Perfect (0.01 USD) | 0 / Perfect (0.17 USD) |
+| logic-001 | 3 / Failed (0.03 USD), manual review | 0 / B (0.04 USD), manual review |
+
+logic-001 now finishes for both models (it stayed Pending in batch 2026-11-b2); its two cells wait in the manual queue because their epochs span 3 and 4 tiers. Probes: flash 11/14, v4-pro 10/14 (genuine model limits: tool_choice, strict json_schema, seed); the judge route passes the required P-01, P-02, P-07 and P-14.
+
+Spend per the gateway events: 4.89 USD in total, 3.10 for the judge and 1.77 for the agents. The judge sent 2.25M input tokens, 1.79M of them cache reads (prompt caching), and 178K output tokens, 171K of them adaptive thinking. One judge call failed with a gateway-to-Anthropic ConnectTimeout (504) and the trial was retried automatically; three requests of a v4-pro trial were refused by its key budget (429 `budget.rejected`).
+
+Defects this run exposed, fixed with regression tests: the run guide's `SPLEEF_GATEWAY_URL` ended in `/v1` (every probe 404ed); the Claude judge route could not be admitted until streaming and `response_format` were implemented; the cost ledger booked each trial the judge client's running total, so `spleef batch costs` showed 19.93 USD against 4.89 USD of real spend (`GatewayJudgeClient.complete_metered` and per-session totals now book each run's own charge). Not done: the cost reconciliation against a vendor bill (`mismatch` here only because no bill was supplied), mid-stream retries, and the manual review of the two logic-001 cells.
 
 ### Real surfaces
 

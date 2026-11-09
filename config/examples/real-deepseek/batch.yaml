@@ -1,0 +1,18 @@
+# batch.yaml for a real-model development batch: two DeepSeek models on three Linux packs,
+# judged by Claude Sonnet 5.5 through the gateway.
+batch: 2026-11-b3
+models: [deepseek-flash, deepseek-v4-pro]
+shells:
+  unified: terminus
+  native: {}
+tasks:
+  include: [logic-001, data-001, debug-001]
+epochs: 2 # docs/03 9.9 ranks a cell only with >= 2 valid epochs
+budget:
+  max_total_usd: 90 # worst case = every trial spends its pack cap (88 USD); expect a few dollars
+endpoint_policy:
+  warm_before_run: true
+  retire_after: terminate
+judges: [claude-sonnet-5-5]
+allow_single_judge_vendor: true # development run: one judge vendor (appendix C.5 wants two)
+pricing_table: "2026-11"
