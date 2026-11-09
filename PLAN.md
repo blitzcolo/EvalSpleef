@@ -243,6 +243,7 @@ Ordered by dependency. Estimates are rough, for one engineer who knows the code.
 | 13 | LoRA adapters on dedicated endpoints (PRD P1) | a carrier that serves them | 10 | 3-5 days |
 | 14 | Manual review of the two logic-001 cells of batch 2026-11-b3 | a human reviewer | nothing | hours |
 | 15 | Last vendor names in neutral packages: the Novita bill import in the ledger (changing its CLI option changes the PRD) and the gateway's `anthropic` client-flavour literal; template kinds for tart, hyperv, libvirt, device-pool and hostd's codec | a PRD decision for the bill option | nothing | 1-2 days |
+| 16 | Inference performance metrics in every report (standing requirement, design below): gateway TTFT and ITL fields, a `spleef models bench` command and a fuller P-12 probe, `release/perf.json` and a report section | nothing; start after `lane-beam` is delivered, because its paid batch runs the control and gateway code | nothing | 3-5 days (estimate) |
 
 ### Design: the `agent_judge` component (decided 2026-11-09, not built)
 
@@ -308,6 +309,36 @@ All three are content work on hash-locked packs: files per PRD E.1 (`task.yaml`,
 | ios-001 | platform: SwiftUI plus a server | XCUITest and API tests, simulator screenshots, carrier `tart-macos` (Xcode and simulator) | Tart on a macOS host |
 
 Also on the backlog: finish the `TODO(run-on-host)` items the packs list in their `notes.md` once a carrier can run them. Example: web-001's `hidden-tests/run.sh` falls back to a static contract check when `@playwright/test` and Chromium are missing, so its interactive acceptance needs an image that has them.
+
+### Design: inference performance metrics in every report (standing requirement 2026-11-09, not built)
+
+The user asked that every GPU cloud inference run records, from now on, these metrics in the report for later reference: system prefill throughput and system decode throughput (tok/s), single-request steady-state prefill and decode speed (tok/s), single-request TTFT, ITL and TPOT, TTFT, ITL and TPOT under full load, and end-to-end request time, "etc.". Like the execution environment record, this is a platform capability, not a note.
+
+**Today.** The gateway's usage record carries only the total `latency_ms`. The probe client measures `ttft_s` for its own streaming probes. TECH-DESIGN 6.4 specifies probe P-12 as TTFT and tokens per second (p50 and p95) at concurrency 1, 4 and 16 for sizing replicas (PRD line 269 says "record"). No report carries inter-token latency, system throughput or a saturated-load measurement.
+
+**Definitions** (streaming requests, one clock: the gateway's monotonic clock; numbers below are defaults to tune on real runs):
+
+| Metric | Definition |
+| --- | --- |
+| TTFT | request received by the gateway until the first streamed chunk that carries generated text (`content` or `reasoning_content`) |
+| ITL | gap between two consecutive generated-text chunks of one request; reported over all gaps of a sample set as mean, p50, p95, p99 |
+| TPOT | (t_last - t_first) / (output_tokens - 1), with `output_tokens` from the usage chunk (reasoning tokens included) |
+| E2E | request received until the last chunk (or the whole body when not streaming) |
+| Single-request prefill tok/s | (input_tokens - cached_tokens) / TTFT at concurrency 1 with a unique prefix, so there is no prefix-cache hit; it includes scheduling overhead, so it is a lower bound of the engine's raw prefill speed |
+| Single-request decode tok/s | 1 / TPOT at concurrency 1 |
+| System prefill throughput tok/s | sum of uncached input tokens of the requests completed in the steady window / window length, at saturation |
+| System decode throughput tok/s | sum of output tokens of the requests in the same window / window length |
+| Full-load TTFT, ITL, TPOT, E2E | the per-request metrics above, taken inside the saturated window, p50 / p95 / p99 |
+| Saturation | concurrency is raised step by step until system decode throughput stops rising (next step gains less than 5%) or requests start to fail or time out; the steady window drops the first and last 10% of the run |
+| Derived: cost per million output tokens at saturation | the endpoint's hourly price / (system decode throughput * 3.6) |
+
+**Where it is measured, and why.**
+
+1. **The gateway, passively, for every request** (it is the one data-plane choke point, so every carrier and vendor is measured the same way and no adapter needs code). New per-request fields: `ttft_ms`, `e2e_ms`, `output_tokens`, and ITL aggregates (mean, p95, max). A request that was not streamed records TTFT, ITL and TPOT as null, never as an estimate; the gateway does not change a client's streaming mode, and the report states how many requests had a TTFT.
+2. **An active benchmark, through the gateway** (`spleef models bench`, and the P-12 probe extended to the same code): concurrency 1 with unique prefixes for the single-request numbers, then the saturation sweep for the system and full-load numbers, at declared (input length, output length) pairs. Prompts come from a seeded generator whose seed and lengths are stored. The record keeps the raw per-request timestamps, and every reported number is a pure function of them, so it can be recomputed (like grading).
+3. **The report.** A new `release/perf.json` and an "Inference performance" section in the report: per endpoint, the benchmark table and the in-batch distributions (TTFT, ITL, TPOT, E2E percentiles over all batch requests, and the throughput observed over the batch's busy windows, labelled observed and not saturated), next to the hardware facts the version record already holds (GPU type and count, engine and version, flags, model revision, quantization, KV pool size when the engine reports it). API vendors are measured the same way and labelled as including network and provider queueing.
+
+The first real numbers come from the Beam run of `lane-beam` (2026-11-b4), which was asked to collect them with these definitions from client-side scripts; they land in `docs/evidence/beam-1m-kv.md` and become the check data for the implementation.
 
 ### Acceptance criteria status
 
