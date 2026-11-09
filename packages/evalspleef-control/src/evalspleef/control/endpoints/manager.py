@@ -561,9 +561,13 @@ class EndpointManager:
         current = handle.state
         route = provider.upstream(handle)
         handle.state = current
-        await self._gateway.upsert_route(name, route)
-
         spec = handle.model
+        await self._gateway.upsert_route(name, route)
+        # Priced before the first probe request: the price is frozen by the spec, not by the
+        # probe outcome, so probe traffic is costed and the probe key's budget binds. A failed
+        # probe removes the route, and the price with it.
+        await self._gateway.set_price(name, self._price_for(spec))
+
         report = await self._probes.run(
             ProbeTarget(
                 endpoint_id=endpoint_id,
@@ -590,7 +594,6 @@ class EndpointManager:
             )
             return report
 
-        await self._gateway.set_price(name, self._price_for(spec))
         if handle.state in (S.VERIFYING, S.DEGRADED):
             await self._transition(
                 handle,

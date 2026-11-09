@@ -8,7 +8,13 @@ from typing import Any
 import pytest
 
 from evalspleef.control.endpoints import InvalidTransition, make_endpoint_id, public_name
-from evalspleef.control.probes import ProbeConfig, iso_utc, report_from_row
+from evalspleef.control.probes import (
+    ProbeConfig,
+    ProbeRunner,
+    ProbeTarget,
+    iso_utc,
+    report_from_row,
+)
 from evalspleef.spi.errors import EndpointMismatch
 from evalspleef.spi.model import EndpointState, ModelSpec
 
@@ -218,3 +224,40 @@ async def test_registering_twice_is_idempotent_and_operations_check_the_state(
         await world.manager.probe(first.endpoint_id)  # nothing attached yet
     with pytest.raises(InvalidTransition):
         await world.manager.warm([first.endpoint_id], 1)  # not READY
+
+
+async def test_probe_traffic_is_costed_at_the_route_price_from_the_first_request(
+    make_world: MakeWorld, spec_factory: SpecFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The route is priced before the probe runs, whatever the outcome, so the gateway costs
+    probe requests and the probe key's budget binds (they were booked at 0 USD before)."""
+    world = await make_world(mode="external", reported_model="drifted-model")
+    probe_costs: list[float] = []
+    run = ProbeRunner.run
+
+    async def priced_run(self: ProbeRunner, target: ProbeTarget) -> Any:
+        # What the gateway does with a request on this route while the probe runs.
+        usage = world.admin.record_usage(
+            trial_id=f"probe-{target.endpoint_id}",
+            round=0,
+            route_name=target.model_name,
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+        )
+        probe_costs.append(usage.cost_usd)
+        return await run(self, target)
+
+    monkeypatch.setattr(ProbeRunner, "run", priced_run)
+    handle = await world.manager.register(spec_factory())
+    endpoint_id, name = handle.endpoint_id, public_name(handle.endpoint_id)
+
+    await world.manager.probe(endpoint_id)  # fails P-14: the upstream reports another model
+    assert (await world.manager.get(endpoint_id)).state is EndpointState.PROBE_FAILED
+    assert name not in world.admin.routes
+
+    world.server.reported_model = MODEL_ID
+    await world.manager.probe(endpoint_id)
+    assert (await world.manager.get(endpoint_id)).state is EndpointState.READY
+
+    # 1M input at 1.0 + 1M output at 2.0 USD per million, during both probes.
+    assert probe_costs == [pytest.approx(3.0), pytest.approx(3.0)]
