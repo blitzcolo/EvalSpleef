@@ -97,6 +97,26 @@ def test_gateway_client_and_step_book_the_gateway_charge(pack_factory, tmp_path:
     assert run.cost_usd == pytest.approx(judge_items * 5 * 0.25)
 
 
+def test_a_shared_client_books_each_run_only_its_own_charge(pack_factory, tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = {
+            "choices": [{"message": {"content": json.dumps({"verdict": True})}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+        return httpx.Response(200, json=body, headers={COST_HEADER: "0.25"})
+
+    pack: TaskPack = pack_factory("logic-001")
+    export = WorkspaceExport(tree=tmp_path, artifacts=(), issues=(), file_count=0, total_bytes=0)
+    judge_items = len([item for item in pack.rubric.items if item.kind.value == "llm_judge"])
+    step = JudgeStep(
+        {"vendor-a": _judge_client(handler)}, target_family="fam-target", allow_single_vendor=True
+    )
+    first = step.run(pack, export, scratch_dir=tmp_path / "judge-1")
+    second = step.run(pack, export, scratch_dir=tmp_path / "judge-2")
+    assert first.cost_usd == pytest.approx(judge_items * 5 * 0.25)
+    assert second.cost_usd == pytest.approx(first.cost_usd)
+
+
 def test_gateway_client_raises_on_client_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"error": {"message": "bad"}})

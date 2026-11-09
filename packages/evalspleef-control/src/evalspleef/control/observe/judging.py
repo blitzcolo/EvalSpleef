@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import threading
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -85,6 +86,20 @@ class _PricedJudge(Protocol):
     def total_output_tokens(self) -> int: ...
 
 
+JUDGE_MAX_TOKENS = 1024
+JUDGE_TIMEOUT_S = 60.0
+
+
+@dataclass(frozen=True)
+class MeteredCompletion:
+    """One judge reply and what exactly that call cost."""
+
+    text: str
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+
+
 class GatewayJudgeClient:
     """Synchronous :class:`JudgeClient` speaking to one judge endpoint via the gateway.
 
@@ -101,9 +116,9 @@ class GatewayJudgeClient:
         family: str,
         api_key: str | None = None,
         name: str | None = None,
-        timeout_s: float = 60.0,
+        timeout_s: float = JUDGE_TIMEOUT_S,
         connect_timeout_s: float = 5.0,
-        max_tokens: int = 1024,
+        max_tokens: int = JUDGE_MAX_TOKENS,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.endpoint_id = endpoint_id
@@ -140,8 +155,11 @@ class GatewayJudgeClient:
     def close(self) -> None:
         self._client.close()
 
-    def complete(self, prompt: str) -> str:
+    def complete_metered(self, prompt: str) -> MeteredCompletion:
         """One-shot chat completion; usage tokens accumulate for cost accounting.
+
+        The result carries the cost of this call alone, because the client is shared by
+        every trial of a batch and its running totals cannot tell the trials apart.
 
         A timeout, a dropped connection, a rate limit or a 5xx is a provider failure the
         batch retries (``EndpointUnavailable``), not a reason to invalidate the trial.
@@ -163,9 +181,11 @@ class GatewayJudgeClient:
                 f"judge {self.model} answered {response.status_code}: {response.text[:200]}"
             )
         response.raise_for_status()
+        call_cost = 0.0
         # A malformed header charges nothing; the ledger reconciles against bills.
         with contextlib.suppress(ValueError):
-            self._cost_usd += float(response.headers.get(COST_HEADER, "0"))
+            call_cost = float(response.headers.get(COST_HEADER, "0"))
+        self._cost_usd += call_cost
         body = response.json()
         choices = body.get("choices")
         if not isinstance(choices, list) or not choices:
@@ -173,10 +193,17 @@ class GatewayJudgeClient:
         message = choices[0].get("message", {})
         content = message.get("content", "")
         usage = body.get("usage", {})
+        call_input = call_output = 0
         if isinstance(usage, dict):
-            self._input_tokens += int(usage.get("prompt_tokens", 0) or 0)
-            self._output_tokens += int(usage.get("completion_tokens", 0) or 0)
-        return content if isinstance(content, str) else str(content)
+            call_input = int(usage.get("prompt_tokens", 0) or 0)
+            call_output = int(usage.get("completion_tokens", 0) or 0)
+        self._input_tokens += call_input
+        self._output_tokens += call_output
+        text = content if isinstance(content, str) else str(content)
+        return MeteredCompletion(text, call_cost, call_input, call_output)
+
+    def complete(self, prompt: str) -> str:
+        return self.complete_metered(prompt).text
 
 
 def evidence_digest(export: WorkspaceExport) -> str:
@@ -257,11 +284,11 @@ class JudgeStep:
         digest = evidence_digest(export)
         session_id = uuid.uuid4().hex
         snapshot = self._snapshot(pack, items, digest, session_id, scratch_dir)
+        sessions = {
+            vendor: _SessionClient(client, session_id) for vendor, client in self._clients.items()
+        }
         panel = JudgePanel(
-            {
-                vendor: _SessionClient(client, session_id)
-                for vendor, client in self._clients.items()
-            },
+            sessions,
             target_model=self._target_model or pack.task_id,
             target_family=self._target_family,
             k=self._k,
@@ -277,7 +304,7 @@ class JudgeStep:
             )
             for item in result.items
         )
-        cost = self._cost()
+        cost = self._cost(sessions)
         return JudgeRun(
             results=verdicts,
             snapshot_sha256=snapshot[0],
@@ -309,18 +336,17 @@ class JudgeStep:
         path.write_text(text, encoding="utf-8")
         return hashlib.sha256(text.encode("utf-8")).hexdigest(), path
 
-    def _cost(self) -> float:
-        """Judge spend: an explicit price table wins, else what the gateway charged."""
+    def _cost(self, sessions: Mapping[str, _SessionClient]) -> float:
+        """Spend of this run only: an explicit price table wins, else what the gateway charged."""
         total = 0.0
-        for vendor, client in self._clients.items():
+        for vendor, session in sessions.items():
             price = self._prices.get(vendor)
             if price is None:
-                total += float(getattr(client, "total_cost_usd", 0.0))
+                total += session.cost_usd
                 continue
-            input_tokens = getattr(client, "total_input_tokens", 0)
-            output_tokens = getattr(client, "total_output_tokens", 0)
             total += (
-                input_tokens * price.input_per_mtok + output_tokens * price.output_per_mtok
+                session.input_tokens * price.input_per_mtok
+                + session.output_tokens * price.output_per_mtok
             ) / 1_000_000
         return total
 
@@ -334,7 +360,34 @@ class _SessionClient:
         self.name = getattr(inner, "name", "judge")
         self.provider = getattr(inner, "provider", self.name)
         self.family = getattr(inner, "family", self.name)
+        self._lock = threading.Lock()
+        self.cost_usd = 0.0
+        self.input_tokens = 0
+        self.output_tokens = 0
 
     def complete(self, prompt: str) -> str:
         tagged = f"judge_session: {self._session_id}\n\n{prompt}"
-        return self._inner.complete(tagged)
+        metered = getattr(self._inner, "complete_metered", None)
+        if metered is not None:
+            call: MeteredCompletion = metered(tagged)
+            self._add(call.cost_usd, call.input_tokens, call.output_tokens)
+            return call.text
+        before = self._totals()
+        text = self._inner.complete(tagged)
+        after = self._totals()
+        self._add(after[0] - before[0], after[1] - before[1], after[2] - before[2])
+        return text
+
+    def _totals(self) -> tuple[float, int, int]:
+        inner = self._inner
+        return (
+            float(getattr(inner, "total_cost_usd", 0.0)),
+            int(getattr(inner, "total_input_tokens", 0)),
+            int(getattr(inner, "total_output_tokens", 0)),
+        )
+
+    def _add(self, cost_usd: float, input_tokens: int, output_tokens: int) -> None:
+        with self._lock:
+            self.cost_usd += cost_usd
+            self.input_tokens += input_tokens
+            self.output_tokens += output_tokens

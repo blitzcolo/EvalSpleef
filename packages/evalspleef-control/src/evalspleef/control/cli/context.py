@@ -65,6 +65,7 @@ from evalspleef.control.events import EventStore, open_event_store
 from evalspleef.control.hf import HuggingFaceChecker
 from evalspleef.control.leases import LeaseManager
 from evalspleef.control.observe import Evaluator
+from evalspleef.control.observe.judging import JUDGE_MAX_TOKENS, JUDGE_TIMEOUT_S
 from evalspleef.control.probes import ProbeRunner, ProbeTarget, report_from_row
 from evalspleef.control.probes.clock import SystemClock
 from evalspleef.control.providers import ProviderRegistry
@@ -751,6 +752,7 @@ class AppContext:
     ) -> dict[str, dict[str, Any]]:
         """Model- and batch-level ``trial.versions`` fields for each endpoint of ``plan``.
 
+            max_tokens, timeout_s = judge_limits(spec)
         Resolved once when the batch runs, from the registered model spec, the
         endpoint handle, its frozen probe report and the freeze record (PRD
         FR-MOD-09, rule 8 of AGENTS.md: record reproducibility fields at creation).
@@ -758,6 +760,8 @@ class AppContext:
         manager = self.endpoint_manager()
         seeds: dict[str, dict[str, Any]] = {}
         for cell in plan.runnable_cells:
+                max_tokens=max_tokens,
+                timeout_s=timeout_s,
             endpoint_id = cell.model.endpoint_id
             if endpoint_id is None or endpoint_id in seeds:
                 continue
