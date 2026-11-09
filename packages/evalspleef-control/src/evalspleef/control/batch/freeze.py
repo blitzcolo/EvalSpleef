@@ -3,6 +3,14 @@
 Any change to a frozen input needs a new batch, so the hash is a SHA-256 over the canonical JSON
 (sorted keys, no whitespace, UTF-8) of the version matrix. ``frozen_at`` and ``batch_id`` are
 record metadata and stay out of the hash: the same inputs always hash the same.
+
+``provider_environments`` (host, sandbox runtime and guest of every provider instance the batch
+can use, ``SandboxProvider.environment()``) is part of the hash: a runtime upgrade or a
+different machine is a different batch. It stays deterministic because providers report only
+stable facts; volatile readings (memory in use, uptime, load, running containers, clocks) are
+never collected in the first place, so nothing has to be excluded here. An empty mapping is
+left out of the hashed matrix, so records frozen before environments were recorded keep the
+hash they were stored with.
 """
 
 from __future__ import annotations
@@ -73,10 +81,17 @@ class FreezeRecord:
     judges: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     """Judge model slug -> spec version, endpoint id, family and weights revision."""
     frozen_at: str = ""
+    provider_environments: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    """Provider instance -> environment record (``control.environment``)."""
+
+    def _matrix_fields(self) -> tuple[str, ...]:
+        if self.provider_environments:
+            return (*_MATRIX_FIELDS, "provider_environments")
+        return _MATRIX_FIELDS
 
     def matrix(self) -> dict[str, Any]:
         """The hashed part of the record as plain JSON types."""
-        return {name: _plain(getattr(self, name)) for name in _MATRIX_FIELDS}
+        return {name: _plain(getattr(self, name)) for name in self._matrix_fields()}
 
     @property
     def version_matrix_hash(self) -> str:
@@ -88,7 +103,8 @@ class FreezeRecord:
     def diff(self, other: FreezeRecord) -> tuple[str, ...]:
         """Names of the frozen inputs that differ from ``other``."""
         mine, theirs = self.matrix(), other.matrix()
-        return tuple(name for name in _MATRIX_FIELDS if mine[name] != theirs[name])
+        names = (*_MATRIX_FIELDS, "provider_environments")
+        return tuple(name for name in names if mine.get(name) != theirs.get(name))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,6 +125,7 @@ def build_freeze_record(
     isolation_profiles: Mapping[str, IsolationProfile],
     judges: Mapping[str, Mapping[str, Any]] | None = None,
     frozen_at: str = "",
+    provider_environments: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> FreezeRecord:
     """Freeze the inputs of the runnable cells of ``plan``.
 
@@ -147,4 +164,9 @@ def build_freeze_record(
         task_versions={cell.task.task_id: cell.task.version for cell in cells},
         judges={slug: dict(judge) for slug, judge in (judges or {}).items()},
         frozen_at=frozen_at,
+        provider_environments={
+            instance: dict(record)
+            for instance, record in (provider_environments or {}).items()
+            if instance in instances
+        },
     )

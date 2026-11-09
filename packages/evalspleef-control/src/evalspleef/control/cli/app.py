@@ -1317,6 +1317,9 @@ async def _freeze_record(ctx: AppContext, plan: Any, batch_config: Any) -> Any:
         }
     )
     real_profiles = {instance: registry.isolation_profile(instance) for instance in instances}
+    # Host, runtime and guest of every instance the batch may use, from the context's
+    # one-per-run snapshot that the trials of this run record as well.
+    environments = {instance: await ctx.environments().get(instance) for instance in instances}
     digests = {
         cell.task.template.ref: {instance: cell.task.template.digest for instance in instances}
         for cell in plan.runnable_cells
@@ -1342,6 +1345,7 @@ async def _freeze_record(ctx: AppContext, plan: Any, batch_config: Any) -> Any:
         isolation_profiles=real_profiles,
         judges=judges,
         frozen_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        provider_environments=environments,
     )
 
 

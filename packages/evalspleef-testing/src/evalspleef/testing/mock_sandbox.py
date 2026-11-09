@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from evalspleef.spi.caps import Arch, Isolation, NetMode, OSFamily
+from evalspleef.spi.environment import ExecutionEnvironment, MachineFacts, RuntimeFacts
 from evalspleef.spi.errors import (
     CapabilityNotSupported,
     PolicyNotEnforceable,
@@ -50,6 +51,32 @@ _SANDBOX_BASE_ENV = {
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
 }
+
+#: What every mock provider reports from ``environment()``: fixed fake facts, so tests can
+#: assert what the control plane records. Sandboxes still run on the real machine, so a
+#: guest *measured* inside a mock sandbox reports the test host, not these values.
+MOCK_ENVIRONMENT = ExecutionEnvironment(
+    host=MachineFacts(
+        os="linux",
+        os_version="Mock Linux 1.0",
+        kernel="6.0.0-mock",
+        arch="x86_64",
+        cpu_model="Mock CPU",
+        cpu_count=8,
+        memory_bytes=16 << 30,
+        machine_model="mock-machine-1",
+    ),
+    runtime=RuntimeFacts(name="mock-sandbox", version="1.0.0"),
+    guest=MachineFacts(
+        os="linux",
+        os_version="Mock Guest 1.0",
+        kernel="6.0.0-mock",
+        arch="x86_64",
+        cpu_count=4,
+        memory_bytes=8 << 30,
+    ),
+    extra={"carrier": "local-subprocess"},
+)
 
 # Cap on in-memory accumulation per exec before truncation kicks in; guards against runaway
 # producers while staying far above any realistic test assertion.
@@ -480,6 +507,9 @@ class MockSandboxProvider(SandboxProvider):
                 "I16": waived("not applicable to a local test double"),
             },
         )
+
+    async def environment(self) -> ExecutionEnvironment:
+        return MOCK_ENVIRONMENT
 
     async def preflight(self) -> dict[str, Any]:
         live = sum(1 for s in self._sandboxes.values() if s.alive)

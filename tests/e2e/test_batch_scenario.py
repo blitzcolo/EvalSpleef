@@ -9,6 +9,7 @@ immediately without tool calls.
 from __future__ import annotations
 
 import json
+import platform
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -29,6 +30,19 @@ B_FAMILY = {"B+", "B", "C+", "C"}
 EMPTY_RULE_IDS = {"G-BUDGET-F", "G-ABORT-04"}
 EPOCHS = 2  # docs/03 9.9: a cell needs >= 2 valid epochs to be ranked
 TRIALS = len(TASK_IDS) * 2 * EPOCHS
+HOST_OS_FAMILY = {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}
+
+
+def _docker_fact(command: str, template: str) -> str:
+    """One engine fact straight from the docker CLI, independent of the adapter."""
+    result = subprocess.run(
+        ["docker", command, "--format", template],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    return result.stdout.strip()
 
 
 def _grade_rows(store: Path) -> dict[str, dict[str, Any]]:
@@ -166,6 +180,26 @@ def test_full_batch_on_local_docker(e2e: Any) -> None:
         assert versions["deployment_adapter"] == "openai-compatible"
         assert versions["freeze_hash"].startswith("sha256:")
 
+    # The execution environment of every trial comes from the real Docker run: the engine's
+    # own report and the guest each sandbox measured, checked against the docker CLI.
+    engine_version = _docker_fact("version", "{{.Server.Version}}")
+    engine_kernel = _docker_fact("info", "{{.KernelVersion}}")
+    for versions in row_versions:
+        environment = versions["execution_environment"]
+        provider = environment["provider"]
+        assert provider["status"] == "reported", provider
+        assert provider["host"]["os"] == HOST_OS_FAMILY[platform.system()]
+        assert provider["runtime"] == {"name": "docker", "version": engine_version}
+        for role in ("agent", "verifier"):
+            sandbox = environment["sandboxes"][role]
+            assert sandbox["status"] == "measured", sandbox
+            assert sandbox["guest"]["kernel"] == engine_kernel
+            assert sandbox["guest"]["os"] == "linux"
+    example = row_versions[0]["execution_environment"]
+    (REPORTS / "execution-environment.json").write_text(
+        json.dumps(example, indent=2, sort_keys=True), encoding="utf-8"
+    )
+
     # The release package (FR-RPT-2/4) drills every cell down to its sources.
     drilldown = json.loads((release / "drilldown.json").read_text(encoding="utf-8"))
     assert len(drilldown) == 6
@@ -179,6 +213,9 @@ def test_full_batch_on_local_docker(e2e: Any) -> None:
     assert len(probes) == 2 and all(p["total"] > 0 for p in probes.values())
     manifest = json.loads((release / "versions.json").read_text(encoding="utf-8"))
     assert len(manifest["trials"]) == TRIALS and manifest["freeze"]["batch_id"] == BATCH_ID
+    frozen_engine = manifest["provider_environments"]["local-docker"]
+    assert frozen_engine["runtime"] == {"name": "docker", "version": engine_version}
+    assert frozen_engine["guest"]["kernel"] == engine_kernel
     assert "## local-docker (docker)" in (release / "isolation.md").read_text(encoding="utf-8")
     costs = json.loads((release / "costs.json").read_text(encoding="utf-8"))
     assert {kind["kind"] for kind in costs["kinds"]} == {"tokens", "gpu", "sandbox", "infra"}

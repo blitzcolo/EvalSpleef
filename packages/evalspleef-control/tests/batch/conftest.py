@@ -143,6 +143,8 @@ class FakeExecutor:
         self.arrived: asyncio.Queue[str] = asyncio.Queue()
         self.leases_seen: dict[str, tuple[str, str]] = {}
         """Trial id -> (agent lease id, verifier lease id)."""
+        self.extra_versions: dict[str, Any] = {}
+        """Recorded on every start event next to :func:`fake_versions`."""
 
     async def run_trial(self, trial: PlannedTrial, leases: TrialLeases) -> TrialOutcome:
         self.calls.append(trial.trial_id)
@@ -170,7 +172,11 @@ class FakeExecutor:
                         trial_id=trial.trial_id,
                         payload={
                             "transition": {"event": event, "from": before, "to": after},
-                            **({"versions": fake_versions(trial)} if event == "start" else {}),
+                            **(
+                                {"versions": {**fake_versions(trial), **self.extra_versions}}
+                                if event == "start"
+                                else {}
+                            ),
                         },
                     )
                 )

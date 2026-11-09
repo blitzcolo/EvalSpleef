@@ -45,6 +45,18 @@ FULL = {
     "hostd_version": "0.1.0",
     "runner_mode": "remote-tools",
     "harbor": "web-001-separate",
+    "execution_environment": {
+        "provider": {
+            "status": "reported",
+            "host": {"os": "macos", "os_version": "27.2"},
+            "runtime": {"name": "docker", "version": "29.9.2"},
+            "guest": {"kernel": "7.0.14-linuxkit"},
+            "extra": {},
+        },
+        "sandboxes": {
+            "agent": {"provider_instance": "docker-local", "status": "unmeasured", "reason": "x"}
+        },
+    },
 }
 
 
@@ -75,6 +87,12 @@ def test_nullable_v3_fields_stay_null() -> None:
     assert payload["harbor"] is None
     assert payload["replicas_planned"] is None
     assert payload["context_length_effective"] is None
+
+
+def test_execution_environment_is_absent_until_recorded() -> None:
+    assert TrialVersions.from_dict(REQUIRED_V2).to_dict()["execution_environment"] is None
+    malformed = TrialVersions.from_dict({**REQUIRED_V2, "execution_environment": "docker"})
+    assert malformed.execution_environment is None
 
 
 def test_numeric_fields_are_coerced() -> None:

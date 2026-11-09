@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
@@ -238,6 +239,31 @@ async def test_trial_rows_carry_the_versions_recorded_at_start(build) -> None:
     }
     # A trial that failed before its agent started has no versions to copy.
     assert "versions" not in rows["web-002.alpha.terminus.e1.t01"].extensions
+
+
+async def test_the_verifier_guest_measured_at_lease_joins_the_trial_row(build) -> None:
+    h = await build()
+    agent_entry = {"provider_instance": "docker-a", "status": "measured", "guest": {}}
+    h.executor.extra_versions = {
+        "execution_environment": {"provider": {}, "sandboxes": {"agent": agent_entry}}
+    }
+
+    await h.freeze_and_run()
+
+    (row,) = await h.trials.list_by_batch(BATCH)
+    sandboxes = row.extensions["versions"]["execution_environment"]["sandboxes"]
+    (verifier_event,) = [
+        e
+        for e in await h.events_of(EventType.SANDBOX_PROVISIONED)
+        if e.payload["role"] == "verifier"
+    ]
+    assert sandboxes["agent"] == agent_entry
+    assert sandboxes["verifier"] == {
+        "provider_instance": "docker-a",
+        **verifier_event.payload["guest"],
+    }
+    assert sandboxes["verifier"]["status"] == "measured"
+    assert sandboxes["verifier"]["guest"]["kernel"] == os.uname().release
 
 
 async def test_non_infrastructure_errors_are_not_retried(build) -> None:

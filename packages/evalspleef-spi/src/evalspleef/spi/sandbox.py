@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .caps import AllowKind, Arch, Isolation, NetMode, OSFamily
+from .environment import ExecutionEnvironment
 from .errors import CapabilityNotSupported
 from .isolation import IsolationProfile
 from .secrets import SecretResolver
@@ -203,6 +204,17 @@ class SandboxProvider(ABC):
 
     async def create_from_snapshot(self, snapshot_id: str, spec: SandboxSpec) -> Sandbox:
         raise CapabilityNotSupported("snapshot")
+
+    async def environment(self) -> ExecutionEnvironment:
+        """Host, runtime and guest this instance runs sandboxes on (reproducibility).
+
+        Only stable facts: never memory in use, uptime or load. The default reports
+        nothing (every field ``None``); an adapter fills in what its carrier can tell
+        and leaves the rest ``None``. A carrier whose engine runs on another machine
+        must not report the control-plane machine as its host. Raise a ``SpleefError``
+        when the carrier cannot be asked; the control plane records the reason.
+        """
+        return ExecutionEnvironment()
 
     @abstractmethod
     async def list(self, labels: Mapping[str, str]) -> list[dict[str, Any]]: ...

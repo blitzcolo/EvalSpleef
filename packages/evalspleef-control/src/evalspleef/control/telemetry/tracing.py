@@ -22,6 +22,7 @@ from typing import Any, overload
 from opentelemetry import trace as _trace
 from opentelemetry.trace import Tracer
 
+from evalspleef.spi.environment import ExecutionEnvironment
 from evalspleef.spi.model import (
     DeploymentPlan,
     EndpointHandle,
@@ -235,6 +236,10 @@ class TracedSandboxProvider(_SpanMixin, SandboxProvider):
     async def preflight(self) -> dict[str, Any]:
         with self._start_span("preflight", self._inner):
             return await self._inner.preflight()
+
+    async def environment(self) -> ExecutionEnvironment:
+        with self._start_span("environment", self._inner):
+            return await self._inner.environment()
 
     async def create(self, spec: SandboxSpec) -> Sandbox:
         with self._start_span("create", spec) as span:

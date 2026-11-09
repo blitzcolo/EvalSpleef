@@ -11,6 +11,7 @@ from .caps import (
     RuntimeRequirements,
     ToolCallingRequirement,
 )
+from .environment import ExecutionEnvironment, MachineFacts, RuntimeFacts, local_host_facts
 from .errors import (
     CapabilityNotSupported,
     EndpointMismatch,
@@ -80,6 +81,7 @@ __all__ = [
     "EndpointState",
     "EndpointUnavailable",
     "ExecResult",
+    "ExecutionEnvironment",
     "ExecutionMode",
     "GatewayAdmin",
     "HFAccessChecker",
@@ -87,6 +89,7 @@ __all__ = [
     "InvariantEntry",
     "Isolation",
     "IsolationProfile",
+    "MachineFacts",
     "ManagementMode",
     "ModelCapabilities",
     "ModelEndpointProvider",
@@ -104,6 +107,7 @@ __all__ = [
     "QuotaExceeded",
     "Resources",
     "RunnerBudget",
+    "RuntimeFacts",
     "RuntimeRequirements",
     "Sandbox",
     "SandboxCapabilities",
@@ -126,5 +130,6 @@ __all__ = [
     "ValidationReport",
     "VendorSource",
     "admit_model",
+    "local_host_facts",
     "match_requirements",
 ]

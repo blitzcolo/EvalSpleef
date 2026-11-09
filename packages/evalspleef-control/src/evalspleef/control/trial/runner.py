@@ -61,6 +61,7 @@ from evalspleef.spi.gateway import ENDPOINT_MISMATCH, GatewayAdmin, TrialKey
 from evalspleef.spi.runner import AgentRunner, RunnerBudget, ShellTurn, StopReason, TokenUsage
 
 from ..batch.executor import LeaseHandle, PlannedTrial, TrialExecutor, TrialLeases, TrialOutcome
+from ..environment import ProviderEnvironments, sandbox_record, with_sandbox
 from ..events import EventStore
 from ..leases import LeaseInvariantError
 from ..taskpack.models import Budget as PackBudget
@@ -258,7 +259,10 @@ class TrialRunner(TrialExecutor):
         leak_checker: LeakChecker | None = None,
         owns_terminal_events: bool = False,
         scratch_root: Path | None = None,
+        environments: ProviderEnvironments | None = None,
     ) -> None:
+        """``environments`` shares the batch run's provider environment snapshot with the
+        freeze record; without it the runner collects its own, once per instance."""
         self.events = events
         self.gateway = gateway
         self.providers = providers
@@ -272,6 +276,7 @@ class TrialRunner(TrialExecutor):
         self.leak_checker: LeakChecker = leak_checker or RegexLeakChecker()
         self.owns_terminal_events = owns_terminal_events
         self.scratch_root = scratch_root
+        self.environments = environments or ProviderEnvironments(providers)
 
     async def run_trial(self, trial: PlannedTrial, leases: TrialLeases) -> TrialOutcome:
         return await _TrialRun(self, trial, leases).execute()
@@ -387,7 +392,8 @@ class _TrialRun:
         )
         self.agent_runner = owner.runner_factory(trial)
         self.heartbeats = self.agent_runner.watch_heartbeat(self._beat)
-        self.versions = self._trial_versions(self.agent_runner).to_dict()
+        provider_environment = await owner.environments.get(self.agent.provider_instance)
+        self.versions = self._trial_versions(self.agent_runner, provider_environment).to_dict()
         await self._advance(
             "start",
             EventType.TRIAL_STARTED,
@@ -1179,8 +1185,14 @@ class _TrialRun:
             )
         )
 
-    def _trial_versions(self, shell: AgentRunner) -> TrialVersions:
-        """What this trial runs against (PRD FR-MOD-09), recorded when the agent starts."""
+    def _trial_versions(
+        self, shell: AgentRunner, provider_environment: Mapping[str, Any]
+    ) -> TrialVersions:
+        """What this trial runs against (PRD FR-MOD-09), recorded when the agent starts.
+
+        ``execution_environment`` pairs the provider's report (host, runtime, guest as the
+        runtime sees it) with the guest the agent sandbox itself reported at lease time.
+        """
         known = {f.name for f in fields(TrialVersions)}
         seed = {key: value for key, value in self.setup.versions.items() if key in known}
         pack = self.setup.pack
@@ -1202,18 +1214,31 @@ class _TrialRun:
             "provider_instance": self.agent.provider_instance,
             "template_digest": template.digest,
             "runner_mode": next(iter(modes)) if len(modes) == 1 else None,
+            "execution_environment": {
+                "provider": dict(provider_environment),
+                "sandboxes": {
+                    "agent": sandbox_record(self.agent.provider_instance, self.agent.guest)
+                },
+            },
         }
         return TrialVersions(**values)
 
     def _record_dict(self) -> dict[str, Any]:
         record = self.machine.record
+        verifier = self.leases.verifier
         if self.versions is not None:
-            record.extensions["versions"] = dict(self.versions)
+            versions: dict[str, Any] = dict(self.versions)
+            if verifier is not None:
+                versions = with_sandbox(
+                    versions,
+                    "verifier",
+                    sandbox_record(verifier.provider_instance, verifier.guest),
+                )
+            record.extensions["versions"] = versions
         basis = self.setup.versions.get("cost_basis")
         if basis is not None:
             # The price basis of the agent's route, so the report labels the cost (FR-RPT-3).
             record.extensions["cost_basis"] = str(basis)
-        verifier = self.leases.verifier
         record.extensions["flow"] = {
             "agent_lease_id": self.agent.lease_id,
             "provider_instance": self.agent.provider_instance,

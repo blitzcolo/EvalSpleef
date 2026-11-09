@@ -26,6 +26,7 @@ from evalspleef.core.state import IllegalTransition, evaluate_terminal, event_pa
 from evalspleef.spi.errors import SpleefError
 from evalspleef.spi.isolation import IsolationProfile
 
+from ..environment import sandbox_record, with_sandbox
 from ..events import EventStore, replay_trial_machine
 from ..leases import LeasedSandbox, LeaseManager, LeaseRequest, LeaseRole
 from ..ledger import CostEntry, CostKind, CostLedger
@@ -72,7 +73,12 @@ def _is_infra_failure(error: SpleefError) -> bool:
 
 def _handle(leased: LeasedSandbox) -> LeaseHandle:
     return LeaseHandle(
-        leased.lease_id, leased.role, leased.instance, leased.host_id, leased.sandbox
+        leased.lease_id,
+        leased.role,
+        leased.instance,
+        leased.host_id,
+        leased.sandbox,
+        guest=leased.guest,
     )
 
 
@@ -541,11 +547,29 @@ class BatchDriver:
         )
 
     async def _started_versions(self, trial: PlannedTrial) -> Mapping[str, Any] | None:
-        """``trial.versions`` as the executor recorded it when the agent started, if it did."""
+        """``trial.versions`` as the executor recorded it when the agent started, if it did.
+
+        The verifier sandbox is created after ``trial.started``; its guest measurement is
+        in its own ``sandbox.provisioned`` event and joins the execution environment here.
+        """
         events = await self._events.read(self._plan.batch_id, trial_id=trial.trial_id)
         started = [e for e in events if e.type is EventType.TRIAL_STARTED]
         versions = started[-1].payload.get("versions") if started else None
-        return versions if isinstance(versions, Mapping) else None
+        if not isinstance(versions, Mapping):
+            return None
+        verifiers = [
+            e.payload
+            for e in events
+            if e.type is EventType.SANDBOX_PROVISIONED and e.payload.get("role") == "verifier"
+        ]
+        if verifiers:
+            last = verifiers[-1]
+            guest = last.get("guest")
+            record = sandbox_record(
+                str(last.get("provider")), guest if isinstance(guest, Mapping) else None
+            )
+            return with_sandbox(versions, "verifier", record)
+        return versions
 
     async def _finish(
         self, trial: PlannedTrial, outcome: TrialOutcome, retry: RetryDecision | None

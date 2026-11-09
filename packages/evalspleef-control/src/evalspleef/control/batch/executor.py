@@ -62,6 +62,8 @@ class LeaseHandle:
     provider_instance: str
     host_id: str | None
     sandbox: Sandbox
+    guest: Mapping[str, Any] | None = None
+    """The guest measured when the lease was created (``sandbox.provisioned``), if it was."""
 
 
 class TrialLeases:

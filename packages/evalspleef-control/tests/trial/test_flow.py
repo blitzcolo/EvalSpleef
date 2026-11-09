@@ -90,7 +90,29 @@ async def test_trial_versions_are_recorded_when_the_agent_starts(
     assert versions["endpoint_id"] == h.trial.endpoint_id
     assert versions["grader_version"].startswith("evalspleef-core@")
     assert outcome.record is not None
-    assert outcome.record["extensions"]["versions"] == versions
+    record_versions = outcome.record["extensions"]["versions"]
+    # The verifier opened after trial.started joins the record's execution environment.
+    assert {k: v for k, v in record_versions.items() if k != "execution_environment"} == {
+        k: v for k, v in versions.items() if k != "execution_environment"
+    }
+    assert set(record_versions["execution_environment"]["sandboxes"]) == {"agent", "verifier"}
+
+
+async def test_the_execution_environment_is_recorded_when_the_agent_starts(
+    harness_factory: Any, rnd: Any
+) -> None:
+    h = await harness_factory(rounds=[rnd()])
+    await h.run()
+
+    (started,) = await h.of_type("trial.started")
+    environment = started.payload["versions"]["execution_environment"]
+    # The provider's own report, collected from the instance the agent runs on.
+    assert environment["provider"]["status"] == "reported"
+    assert environment["provider"]["runtime"] == {"name": "mock-sandbox", "version": "1.0.0"}
+    # This harness hands the runner leases that were never measured: recorded, with a reason.
+    agent = environment["sandboxes"]["agent"]
+    assert agent["provider_instance"] == "alpha"
+    assert agent["status"] == "unmeasured" and agent["reason"]
 
 
 async def test_each_event_type_appears_in_order(harness_factory: Any, rnd: Any) -> None:

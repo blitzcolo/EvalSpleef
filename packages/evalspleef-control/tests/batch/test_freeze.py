@@ -49,6 +49,43 @@ async def test_changing_a_frozen_input_changes_the_hash(build, frozen_input: str
     assert changed.diff(h.freeze) == (frozen_input,)
 
 
+def _environment(runtime_version: str) -> dict[str, Any]:
+    return {
+        "status": "reported",
+        "host": {"os": "macos", "os_version": "27.2", "memory_bytes": 1 << 34},
+        "runtime": {"name": "docker", "version": runtime_version},
+        "guest": {"kernel": "7.0.14-linuxkit"},
+        "extra": {},
+    }
+
+
+async def test_identical_environments_hash_identically_and_a_runtime_change_does_not(
+    build,
+) -> None:
+    h = await build(n_models=2, n_tasks=2)
+    environments = {"docker-a": _environment("29.9.2"), "unused-instance": _environment("1")}
+
+    first = h.refreeze(provider_environments=environments)
+    again = h.refreeze(provider_environments={"docker-a": _environment("29.9.2")})
+    upgraded = h.refreeze(provider_environments={"docker-a": _environment("29.10.0")})
+
+    # Only instances the plan can use are frozen.
+    assert set(first.provider_environments) == {"docker-a"}
+    assert first.to_dict()["provider_environments"]["docker-a"]["runtime"]["version"] == ("29.9.2")
+    assert again.version_matrix_hash == first.version_matrix_hash
+    assert upgraded.version_matrix_hash != first.version_matrix_hash
+    assert upgraded.diff(first) == ("provider_environments",)
+    assert first.diff(h.freeze) == ("provider_environments",)
+
+
+async def test_a_record_without_environments_keeps_its_earlier_hash(build) -> None:
+    h = await build(n_models=2, n_tasks=2)
+
+    # Records frozen before environments were recorded hash only the earlier fields.
+    assert "provider_environments" not in h.freeze.matrix()
+    assert "provider_environments" not in h.freeze.to_dict()
+
+
 async def test_rebuilding_from_the_same_inputs_gives_the_same_hash(build) -> None:
     h = await build(n_models=2, n_tasks=2)
 

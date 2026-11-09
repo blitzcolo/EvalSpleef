@@ -89,6 +89,7 @@ def _drilldown(inputs: ReleaseInputs) -> list[dict[str, Any]]:
                 "inference_engine": versions.get("inference_engine"),
                 "sandbox_adapter": versions.get("sandbox_adapter"),
                 "provider_instance": instance,
+                "execution_environment": versions.get("execution_environment"),
                 "declared_isolation": _level(profile.get("declared_isolation")),
                 "verified_isolation": _level(profile.get("verified_isolation")),
                 "cost_basis": spec.pricing_ref.split(":", 1)[0] if spec else None,
@@ -103,8 +104,11 @@ def _level(value: Any) -> str | None:
 
 
 def _versions(inputs: ReleaseInputs) -> dict[str, Any]:
+    # ``None`` when the batch was frozen before provider environments were recorded.
+    environments = (inputs.freeze or {}).get("provider_environments")
     return {
         "freeze": dict(inputs.freeze or {}),
+        "provider_environments": dict(environments) if isinstance(environments, Mapping) else None,
         "trials": {row.trial_id: dict(_versions_of(row)) for row in inputs.trials},
     }
 

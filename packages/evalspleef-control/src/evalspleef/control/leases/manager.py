@@ -8,6 +8,11 @@ destroys the sandbox in a ``finally`` path and records ``teardown.started`` and
 every ten minutes and records ``sandbox.orphan.reaped``.
 
 Invariant I10: a verifier runs in its own sandbox with ``network=off``, never in the agent's.
+
+Right after ``create`` every sandbox is measured through the Sandbox SPI (kernel, OS release,
+CPUs, memory as the guest sees them, :func:`~evalspleef.control.environment.measure_guest`);
+the result travels in ``sandbox.provisioned`` and on the lease, and a guest that cannot be
+measured is recorded as ``unmeasured`` with the reason instead of failing the lease.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from evalspleef.spi.sandbox import (
     TemplateRef,
 )
 
+from ..environment import measure_guest
 from ..events import EventStore
 from ..store.repos import SandboxLeaseRepository
 from ..store.rows import SandboxLeaseRow
@@ -103,6 +109,8 @@ class LeasedSandbox:
     created_at: str
     destroyed: bool = False
     teardown_error: str | None = None
+    guest: dict[str, Any] | None = None
+    """The guest measured right after create (``measure_guest``); ``None`` until measured."""
 
 
 @dataclass(frozen=True)
@@ -212,6 +220,7 @@ class LeaseManager:
         self._max_ttl_s = max(self._max_ttl_s, leased.ttl_s)
         try:
             self._active[lease_id] = leased
+            leased.guest = await measure_guest(sandbox, spec.os)
             await self._leases.insert(
                 SandboxLeaseRow(
                     lease_id=lease_id,
@@ -234,6 +243,7 @@ class LeaseManager:
                 "sandbox_id": sandbox.id,
                 "template_digest": request.template.digest,
                 "ttl_s": leased.ttl_s,
+                "guest": leased.guest,
             }
             if request.role == "agent":
                 # The agent lease is the trial's pending -> leased transition.

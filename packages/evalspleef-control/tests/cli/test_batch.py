@@ -122,7 +122,10 @@ def test_batch_run_and_report(
     assert versions["sandbox_adapter"] and versions["provider_instance"]
     with sqlite3.connect(Path(env).parent / "store.sqlite3") as db:
         (row_extensions,) = db.execute("SELECT extensions FROM trial").fetchone()
-    assert json.loads(row_extensions)["versions"] == versions
+    row_versions = json.loads(row_extensions)["versions"]
+    # The verifier sandbox is leased after trial.started; its measured guest joins the row.
+    row_versions["execution_environment"]["sandboxes"].pop("verifier", None)
+    assert row_versions == versions
 
     # The cost ledger has the trial's spend; a bill that disagrees fails the reconciliation.
     costs = cli_runner.invoke(app, ["batch", "costs", "--batch-id", "2026-11-b1", "--json"])

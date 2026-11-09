@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import replace
 
 import pytest
@@ -46,6 +47,46 @@ async def test_provision_labels_ttl_row_and_events(env, request_for) -> None:
     assert provisioned.payload["lease_id"] == leased.lease_id
     assert provisioned.payload["sandbox_id"] == leased.sandbox.id
     await env.manager.teardown(leased)
+
+
+async def test_every_new_sandbox_is_measured_and_the_guest_recorded(env, request_for) -> None:
+    agent = await env.manager.provision(request_for())
+    verifier = await env.manager.provision(request_for(role="verifier"))
+
+    provisioned = await env.events_of(EventType.SANDBOX_PROVISIONED)
+    assert [event.payload["role"] for event in provisioned] == ["agent", "verifier"]
+    for leased, event in zip((agent, verifier), provisioned, strict=True):
+        # The mock runs commands on this machine, so the guest is this machine's kernel.
+        assert event.payload["guest"]["status"] == "measured"
+        assert event.payload["guest"]["guest"]["kernel"] == os.uname().release
+        assert leased.guest == event.payload["guest"]
+    await env.manager.teardown(verifier)
+    await env.manager.teardown(agent)
+
+
+class _UnmeasurableProvider(MockSandboxProvider):
+    """Creates sandboxes that vanish before anything can run in them."""
+
+    async def create(self, spec: SandboxSpec) -> Sandbox:
+        sandbox = await super().create(spec)
+        mock_sandbox(sandbox).mark_lost()
+        return sandbox
+
+
+async def test_an_unmeasurable_guest_is_recorded_and_the_lease_still_succeeds(
+    env, request_for
+) -> None:
+    provider = _UnmeasurableProvider("docker-a", {}, env.provider.secrets, clock=env.clock)
+    manager = env.make_manager({"docker-a": provider})
+
+    leased = await manager.provision(request_for())
+
+    (provisioned,) = await env.events_of(EventType.SANDBOX_PROVISIONED)
+    assert provisioned.payload["guest"]["status"] == "unmeasured"
+    assert "SandboxLost" in provisioned.payload["guest"]["reason"]
+    assert leased.guest == provisioned.payload["guest"]
+    assert await env.event_types(TRIAL) == ["trial.leased", "sandbox.provisioned"]
+    await manager.teardown(leased)
 
 
 async def test_provision_boots_the_carrier_template_and_records_it(env, request_for) -> None:

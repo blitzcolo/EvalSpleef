@@ -26,6 +26,14 @@ from typing import Any
 import aiodocker
 
 from evalspleef.spi.caps import Arch, Isolation, NetMode, OSFamily
+from evalspleef.spi.environment import (
+    ExecutionEnvironment,
+    MachineFacts,
+    RuntimeFacts,
+    local_host_facts,
+    normalise_arch,
+    os_family,
+)
 from evalspleef.spi.errors import (
     CapabilityNotSupported,
     PolicyNotEnforceable,
@@ -49,6 +57,9 @@ from .sandbox import DockerSandbox
 
 _LABEL_KEY_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 _ZERO_DIGEST = "sha256:" + "0" * 64
+#: Engine endpoints on this machine; any other scheme (tcp, ssh, http) may be remote.
+_LOCAL_ENGINE_SCHEMES = ("unix://", "npipe://")
+_ENGINE_CALL_TIMEOUT_S = 30.0
 
 _ARCH_ALIASES = {
     "aarch64": Arch.ARM64,
@@ -205,6 +216,53 @@ class DockerProvider(SandboxProvider):
             "egress_network": self._egress_network,
             "max_concurrency": self._max_concurrency,
         }
+
+    async def environment(self) -> ExecutionEnvironment:
+        """Engine version, the engine's kernel and OS, and the host when the engine is local.
+
+        The guest is the machine containers run on as the daemon reports it (the Docker
+        Desktop VM on macOS, the host itself on Linux). Host facts come from this process
+        only when the engine listens on a local socket: a remote engine's host is not
+        this machine, so it stays unreported. Only stable daemon facts are kept (no
+        container counts, clock or memory in use).
+        """
+        client = self.client()
+        try:
+            version = await asyncio.wait_for(client.version(), _ENGINE_CALL_TIMEOUT_S)
+            info = await asyncio.wait_for(client.system.info(), _ENGINE_CALL_TIMEOUT_S)
+        except Exception as exc:
+            raise SpleefError(f"docker engine facts unavailable: {exc}") from exc
+        local = str(client.docker_host).startswith(_LOCAL_ENGINE_SCHEMES)
+        host = await asyncio.to_thread(local_host_facts) if local else MachineFacts()
+        extra = {
+            "engine_endpoint": "local" if local else "remote",
+            "oci_runtime": self._runtime,
+        }
+        platform_name = (version.get("Platform") or {}).get("Name")
+        if platform_name:
+            extra["engine_platform"] = str(platform_name)
+        if version.get("ApiVersion"):
+            extra["api_version"] = str(version["ApiVersion"])
+        for component in version.get("Components") or ():
+            name, component_version = component.get("Name"), component.get("Version")
+            if name and component_version and name != "Engine":
+                extra[f"component.{name}"] = str(component_version)
+        cpus, memory = info.get("NCPU"), info.get("MemTotal")
+        return ExecutionEnvironment(
+            host=host,
+            runtime=RuntimeFacts(
+                name="docker", version=version.get("Version") or info.get("ServerVersion")
+            ),
+            guest=MachineFacts(
+                os=os_family(info.get("OSType") or version.get("Os")),
+                os_version=info.get("OperatingSystem") or None,
+                kernel=info.get("KernelVersion") or version.get("KernelVersion") or None,
+                arch=normalise_arch(info.get("Architecture") or version.get("Arch")),
+                cpu_count=cpus if isinstance(cpus, int) else None,
+                memory_bytes=memory if isinstance(memory, int) else None,
+            ),
+            extra=extra,
+        )
 
     # -- test-side controls (used by the conformance injectors) -------------------
 

@@ -8,6 +8,11 @@ The v2 fields come from ``schemas/trial.schema.json``; the v3 fields come from
 PRD FR-MOD-09 and TECH-DESIGN section 11.  Only ``inference_engine`` uses the
 PRD's explicit ``"unknown"`` sentinel: Novita does not expose which engine
 (vLLM or SGLang) it started, so the field must still be recorded.
+
+``execution_environment`` records where the trial ran: the provider's report of host,
+sandbox runtime and guest, and the guest each sandbox measured when it was created
+(``{"provider": {...}, "sandboxes": {"agent": {...}, "verifier": {...}}}``). It is a
+plain JSON mapping because the control plane builds it from SPI records.
 """
 
 from __future__ import annotations
@@ -30,6 +35,11 @@ def _optional_str(data: Mapping[str, Any], key: str) -> str | None:
 def _optional_int(data: Mapping[str, Any], key: str) -> int | None:
     value = data.get(key)
     return None if value is None else int(value)
+
+
+def _optional_mapping(data: Mapping[str, Any], key: str) -> dict[str, Any] | None:
+    value = data.get(key)
+    return dict(value) if isinstance(value, Mapping) else None
 
 
 @dataclass(frozen=True)
@@ -84,6 +94,9 @@ class TrialVersions:
     runner_mode: str | None = None
     harbor: str | None = None
 
+    # Execution environment: host, runtime and measured guests (AGENTS.md rule 8).
+    execution_environment: Mapping[str, Any] | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Serialise every field; absent optional values stay ``None``."""
         return {
@@ -121,6 +134,9 @@ class TrialVersions:
             "hostd_version": self.hostd_version,
             "runner_mode": self.runner_mode,
             "harbor": self.harbor,
+            "execution_environment": (
+                None if self.execution_environment is None else dict(self.execution_environment)
+            ),
         }
 
     @classmethod
@@ -169,4 +185,5 @@ class TrialVersions:
             hostd_version=_optional_str(data, "hostd_version"),
             runner_mode=_optional_str(data, "runner_mode"),
             harbor=_optional_str(data, "harbor"),
+            execution_environment=_optional_mapping(data, "execution_environment"),
         )

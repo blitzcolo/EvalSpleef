@@ -61,6 +61,7 @@ from evalspleef.control.endpoints import (
     make_endpoint_id,
     public_name,
 )
+from evalspleef.control.environment import ProviderEnvironments
 from evalspleef.control.events import EventStore, open_event_store
 from evalspleef.control.hf import HuggingFaceChecker
 from evalspleef.control.leases import LeaseManager
@@ -99,6 +100,7 @@ from evalspleef.control.trial.prepare import PREFLIGHT_INVARIANTS
 from evalspleef.core.batch import BatchState
 from evalspleef.core.canary import CanaryRegistry
 from evalspleef.core.judge import JudgeClient
+from evalspleef.spi.environment import ExecutionEnvironment
 from evalspleef.spi.gateway import GatewayAdmin, PriceSpec, TrialKey, UsageRecord
 from evalspleef.spi.isolation import InvariantEntry, IsolationProfile
 from evalspleef.spi.model import EndpointState, HFSource, ModelSpec, UpstreamRoute, VendorSource
@@ -441,6 +443,9 @@ class _BridgedProvider(SandboxProvider):
     async def preflight(self) -> dict[str, Any]:
         return await self._inner.preflight()
 
+    async def environment(self) -> ExecutionEnvironment:
+        return await self._inner.environment()
+
     async def create(self, spec: SandboxSpec) -> Sandbox:
         return await self._inner.create(spec)
 
@@ -543,6 +548,7 @@ class AppContext:
         self._providers_config: ProvidersFileConfig | None = None
         self._providers: ProviderRegistry | None = None
         self._probe_runner: ProbeRunner | None = None
+        self._environments: ProviderEnvironments | None = None
         self.preflight_bridges: list[str] = []
 
     async def __aenter__(self) -> AppContext:
@@ -601,6 +607,16 @@ class AppContext:
             self._providers = ProviderRegistry(self.providers_config(), self.secrets)
             self.preflight_bridges = _waive_prose_probes(self._providers)
         return self._providers
+
+    def environments(self) -> ProviderEnvironments:
+        """Provider environment records, collected once per instance for this command.
+
+        A batch run builds one context, so its freeze record and every trial share the
+        same snapshot of host, runtime and guest facts.
+        """
+        if self._environments is None:
+            self._environments = ProviderEnvironments(self.providers)
+        return self._environments
 
     @property
     def providers(self) -> ProviderRegistry:
@@ -873,6 +889,7 @@ class AppContext:
             evaluator=evaluator,
             canary=CanaryRegistry(),
             clock=SystemClock(),
+            environments=self.environments(),
             **kwargs,
         )
 
