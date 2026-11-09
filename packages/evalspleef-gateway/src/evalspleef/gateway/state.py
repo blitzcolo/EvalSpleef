@@ -18,7 +18,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets as secrets_mod
+import time
 from collections import deque
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -172,6 +174,8 @@ class GatewayState:
         self.usage_store = usage_store
         self.secrets = secrets
         self.clock: Clock = clock if clock is not None else SystemClock()
+        self.perf_now: Callable[[], float] = clock.now if clock is not None else time.perf_counter
+        """Monotonic seconds for request timing; follows an injected clock so tests drive it."""
         self.cold_start_interval_s = cold_start_interval_s
         self.upstream_timeout_s = upstream_timeout_s
         self.provider_max_retries = provider_max_retries
@@ -188,6 +192,7 @@ class GatewayState:
         self._in_flight: dict[str, BudgetProjection] = {}
         self._rate_windows: dict[str, deque[tuple[float, int]]] = {}
         self._rate_lock = asyncio.Lock()
+        self._accounting: set[asyncio.Task[Any]] = set()
         self._closed = False
 
     # -- lifecycle -------------------------------------------------------------
@@ -196,8 +201,28 @@ class GatewayState:
         if self._closed:
             return
         self._closed = True
+        await self.settle()
         if self._owns_client:
             await self.client.aclose()
+
+    # -- end-of-request accounting -------------------------------------------------
+
+    def account(self, work: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+        """Run end-of-request accounting to completion in its own task.
+
+        A streaming response is cancelled when its client disconnects (Starlette, ASGI < 2.4),
+        often right after ``[DONE]``; awaiting the usage record and the charge inside the
+        cancelled stream would drop them. The task is held here until it finishes.
+        """
+        task = asyncio.ensure_future(work)
+        self._accounting.add(task)
+        task.add_done_callback(self._accounting.discard)
+        return task
+
+    async def settle(self) -> None:
+        """Wait for the accounting still in flight (shutdown, tests)."""
+        while self._accounting:
+            await asyncio.gather(*list(self._accounting), return_exceptions=True)
 
     # -- routes and prices -------------------------------------------------------
 

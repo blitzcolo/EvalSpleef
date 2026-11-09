@@ -45,6 +45,8 @@ class OpenedStream:
     buffered_lines: list[str]
     first_chunk: dict[str, Any] | None
     cold_start_ms: int
+    buffered_at: list[float] = field(default_factory=list)
+    """Arrival time of each buffered line on the gateway's timing clock."""
     _line_iter: AsyncIterator[str] | None = field(default=None, init=False, repr=False)
     _closed: bool = field(default=False, init=False)
 
@@ -56,12 +58,14 @@ class OpenedStream:
         cold_start_ms: int,
         lock_field: str | None,
         parse: Callable[[str], dict[str, Any] | None],
+        now: Callable[[], float],
     ) -> OpenedStream:
         """Consume SSE lines until the first chunk carrying ``lock_field`` appears."""
         stream = cls(response, [], None, cold_start_ms)
         stream._line_iter = response.aiter_lines()
         async for line in stream._line_iter:
             stream.buffered_lines.append(line)
+            stream.buffered_at.append(now())
             chunk = parse(line)
             if isinstance(chunk, dict) and (lock_field is None or lock_field in chunk):
                 stream.first_chunk = chunk
@@ -80,12 +84,19 @@ class OpenedStream:
         return self._iter_lines()
 
     async def _iter_lines(self) -> AsyncIterator[str]:
-        for line in self.buffered_lines:
+        async for line, _ in self.iter_timed_lines():
             yield line
+
+    async def iter_timed_lines(self) -> AsyncIterator[tuple[str, float | None]]:
+        """Like :meth:`iter_lines`, with the arrival time of buffered lines (``None``: now)."""
+        for line, at in zip(self.buffered_lines, self.buffered_at, strict=False):
+            yield line, at
+        for line in self.buffered_lines[len(self.buffered_at) :]:
+            yield line, None
         if self._line_iter is None:
             return
         async for line in self._line_iter:
-            yield line
+            yield line, None
 
 
 ANTHROPIC_VERSION = "2026-10-21"
@@ -93,7 +104,9 @@ ANTHROPIC_VERSION = "2026-10-21"
 #: Route ``default_params`` keys that steer the gateway and are never sent upstream.
 PROMPT_CACHING_KEY = "prompt_caching"
 DROP_PARAMS_KEY = "drop_params"
-ROUTE_CONTROL_KEYS = frozenset({PROMPT_CACHING_KEY, DROP_PARAMS_KEY})
+UPSTREAM_TIMEOUT_KEY = "upstream_timeout_s"
+"""Read timeout for this route's upstream calls; the gateway default (120 s) when unset."""
+ROUTE_CONTROL_KEYS = frozenset({PROMPT_CACHING_KEY, DROP_PARAMS_KEY, UPSTREAM_TIMEOUT_KEY})
 
 
 def chat_url(route: UpstreamRoute) -> str:
@@ -123,6 +136,24 @@ def route_controls(route: UpstreamRoute) -> RouteControls:
         ttl = None
     drop = route.default_params.get(DROP_PARAMS_KEY) or ()
     return RouteControls(cache_ttl=ttl, drop_params=tuple(str(name) for name in drop))
+
+
+def upstream_timeout(route: UpstreamRoute) -> httpx.Timeout | None:
+    """The route's own upstream timeout, or ``None`` to use the gateway client's default.
+
+    Long-context prefill and thinking-mode answers can take minutes before the first byte,
+    so a self-served route can raise the read timeout above the gateway default.
+    """
+    value = route.default_params.get(UPSTREAM_TIMEOUT_KEY)
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        return None
+    seconds = float(value)
+    return httpx.Timeout(seconds, connect=min(10.0, seconds))
+
+
+def _timeout_kwargs(route: UpstreamRoute) -> dict[str, Any]:
+    timeout = upstream_timeout(route)
+    return {} if timeout is None else {"timeout": timeout}
 
 
 def upstream_headers(state: GatewayState, route: UpstreamRoute) -> dict[str, str]:
@@ -227,7 +258,9 @@ async def post_upstream(
     attempts = 0
     while True:
         try:
-            response = await state.client.post(upstream_url(route), json=body, headers=headers)
+            response = await state.client.post(
+                upstream_url(route), json=body, headers=headers, **_timeout_kwargs(route)
+            )
         except httpx.ConnectTimeout:
             if route.cold_start_window_s > 0 and await _should_retry(
                 state, route, started_at, retried, endpoint_id=endpoint_id
@@ -265,7 +298,7 @@ async def open_upstream_stream(
     attempts = 0
     while True:
         request = state.client.build_request(
-            "POST", upstream_url(route), json=body, headers=headers
+            "POST", upstream_url(route), json=body, headers=headers, **_timeout_kwargs(route)
         )
         try:
             response = await state.client.send(request, stream=True)
@@ -303,6 +336,7 @@ async def open_upstream_stream(
             parse=parse_message_start
             if route.protocol == "anthropic_messages"
             else parse_data_line,
+            now=state.perf_now,
         )
 
 

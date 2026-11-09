@@ -14,6 +14,7 @@ from . import KeyStore, StoredKey, UsageStore
 from .codec import (
     KEY_COLUMNS,
     USAGE_COLUMNS,
+    USAGE_TIMING_COLUMNS,
     insert_statement,
     key_from_row,
     key_params,
@@ -66,6 +67,9 @@ class SqliteStore(KeyStore, UsageStore):
         columns = {row[1] for row in self._connection.execute("PRAGMA table_info(usage)")}
         if "error_code" not in columns:  # a store written before the column existed
             self._connection.execute("ALTER TABLE usage ADD COLUMN error_code TEXT")
+        for name, sql_type in USAGE_TIMING_COLUMNS:
+            if name not in columns:
+                self._connection.execute(f"ALTER TABLE usage ADD COLUMN {name} {sql_type}")
         self._connection.commit()
         self._lock = threading.Lock()
 

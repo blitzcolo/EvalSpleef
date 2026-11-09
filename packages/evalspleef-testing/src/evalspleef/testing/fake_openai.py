@@ -13,6 +13,9 @@ vendor. Behaviour is deterministic and scriptable:
 - a context limit with needle recall (echoes the ``needle:`` value from the user message) and
   HTTP 400 ``context_length_exceeded`` beyond it;
 - injected latency and injected errors (next N calls, or a clock-measured window);
+- streaming timing like a serving engine: ``first_chunk_delay_s`` before the first generated
+  chunk and ``chunk_interval_s`` between generated chunks, on the injected clock; prompt-cache
+  hits reported as ``usage.prompt_tokens_details.cached_tokens`` (``cached_prompt_tokens``);
 - Bearer auth check, configurable reported model and system fingerprint, deterministic
   whitespace token accounting and a request log for assertions.
 """
@@ -139,6 +142,9 @@ class FakeOpenAIServer:
         reasoning_content: bool = False,
         long_output_words: int | None = None,
         thinking_tokens: int = 0,
+        first_chunk_delay_s: float = 0.0,
+        chunk_interval_s: float = 0.0,
+        cached_prompt_tokens: int = 0,
     ) -> None:
         self.model = model
         self.reported_model = reported_model if reported_model is not None else model
@@ -152,6 +158,12 @@ class FakeOpenAIServer:
         """Like a reasoning model: this many tokens of ``max_tokens`` go to hidden reasoning
         before any content, so a small budget yields an empty answer."""
         self.latency_s = 0.0
+        self.first_chunk_delay_s = first_chunk_delay_s
+        """Streaming: clock time before the first chunk carrying generated text (prefill)."""
+        self.chunk_interval_s = chunk_interval_s
+        """Streaming: clock time between consecutive generated-text chunks (decode)."""
+        self.cached_prompt_tokens = cached_prompt_tokens
+        """Prompt tokens reported as a prefix-cache hit (capped at the prompt length)."""
         self.requests: list[RecordedRequest] = []
         self._clock: Clock = clock if clock is not None else SystemClock()
         self._scripted: deque[ScriptedReply] = deque()
@@ -321,11 +333,14 @@ class FakeOpenAIServer:
             )
 
         message, finish_reason, completion_tokens = self._generate(body)
-        usage = {
+        usage: dict[str, Any] = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
         }
+        if self.cached_prompt_tokens > 0:
+            cached = min(self.cached_prompt_tokens, prompt_tokens)
+            usage["prompt_tokens_details"] = {"cached_tokens": cached}
         if body.get("stream"):
             include_usage = bool((body.get("stream_options") or {}).get("include_usage"))
             return StreamingResponse(
@@ -523,7 +538,7 @@ class FakeOpenAIServer:
         self,
         message: Mapping[str, Any],
         finish_reason: str,
-        usage: Mapping[str, int],
+        usage: Mapping[str, Any],
     ) -> dict[str, Any]:
         payload = self._envelope(chunk=False)
         payload["choices"] = [
@@ -536,7 +551,7 @@ class FakeOpenAIServer:
         self,
         message: Mapping[str, Any],
         finish_reason: str,
-        usage: Mapping[str, int],
+        usage: Mapping[str, Any],
         include_usage: bool,
     ) -> AsyncIterator[str]:
         base = self._envelope(chunk=True)
@@ -548,14 +563,25 @@ class FakeOpenAIServer:
             choices = [{"index": 0, "delta": dict(delta), "finish_reason": fr}]
             return event({**base, "choices": choices})
 
+        generated = 0
+
+        async def pace() -> None:
+            nonlocal generated
+            delay = self.first_chunk_delay_s if generated == 0 else self.chunk_interval_s
+            generated += 1
+            if delay > 0:
+                await self._clock.sleep(delay)
+
         yield delta_chunk({"role": "assistant"}, None)
         reasoning = message.get("reasoning_content")
         if isinstance(reasoning, str) and reasoning:
+            await pace()
             yield delta_chunk({"reasoning_content": reasoning}, None)
         content = message.get("content")
         if isinstance(content, str) and content:
             for index, word in enumerate(content.split(" ")):
                 piece = word if index == 0 else f" {word}"
+                await pace()
                 yield delta_chunk({"content": piece}, None)
         for index, tool_call in enumerate(message.get("tool_calls") or []):
             yield delta_chunk({"tool_calls": [{**dict(tool_call), "index": index}]}, None)

@@ -63,6 +63,21 @@ class UsageRecord:
     cost_usd: float
     error_code: str | None = None
     """Why the gateway refused or failed the request (for example ``endpoint_mismatch``)."""
+    # Passive timing on the gateway's monotonic clock, from the moment the request reached it.
+    # Records written before these fields existed, refused requests and requests that were
+    # not streamed carry None, never an estimate.
+    ttft_ms: float | None = None
+    """Until the first streamed chunk carrying generated text (content or reasoning)."""
+    e2e_ms: float | None = None
+    """Until the last chunk, or the whole body when not streamed."""
+    tpot_ms: float | None = None
+    """(t_last - t_first) / (output_tokens - 1)."""
+    itl_mean_ms: float | None = None
+    """Inter-token latency: gaps between consecutive generated-text chunks."""
+    itl_p95_ms: float | None = None
+    itl_max_ms: float | None = None
+    itl_count: int | None = None
+    """Number of gaps the ITL aggregates cover."""
 
 
 class GatewayAdmin(ABC):

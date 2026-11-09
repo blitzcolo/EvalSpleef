@@ -170,8 +170,19 @@ class InMemoryGatewayAdmin(GatewayAdmin):
         latency_ms: int = 0,
         status_code: int = 200,
         cold_start_ms: int = 0,
+        ttft_ms: float | None = None,
+        e2e_ms: float | None = None,
+        tpot_ms: float | None = None,
+        itl_mean_ms: float | None = None,
+        itl_p95_ms: float | None = None,
+        itl_max_ms: float | None = None,
+        itl_count: int | None = None,
     ) -> UsageRecord:
-        """Cost one served request from the route's frozen price and append its usage event."""
+        """Cost one served request from the route's frozen price and append its usage event.
+
+        The timing fields mirror what the real gateway measures; they default to None, like a
+        request it did not time.
+        """
         route = self._routes.get(route_name)
         if route is None:
             raise KeyError(f"no route {route_name!r}")
@@ -197,6 +208,13 @@ class InMemoryGatewayAdmin(GatewayAdmin):
             status_code=status_code,
             cold_start_ms=cold_start_ms,
             cost_usd=cost_usd,
+            ttft_ms=ttft_ms,
+            e2e_ms=e2e_ms,
+            tpot_ms=tpot_ms,
+            itl_mean_ms=itl_mean_ms,
+            itl_p95_ms=itl_p95_ms,
+            itl_max_ms=itl_max_ms,
+            itl_count=itl_count,
         )
         self._usage.append(record)
         return record

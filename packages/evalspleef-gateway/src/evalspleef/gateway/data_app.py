@@ -8,9 +8,10 @@ is recorded per request and charged against the trial key's budget.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from typing import Any, Literal
 
 import httpx
@@ -19,6 +20,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from evalspleef.spi.gateway import COST_HEADER, ENDPOINT_MISMATCH, UsageRecord
 
+from .perf import RequestTimer, RequestTiming
 from .protocols import (
     AnthropicToChatStream,
     ChatToAnthropicStream,
@@ -278,12 +280,15 @@ async def _record_usage(
     charge: bool,
     upstream_model: str = "",
     error_code: str | None = None,
+    timer: RequestTimer | None = None,
 ) -> float:
     """Append the usage record, charge the key on success and emit request.completed.
 
     Returns the USD charged, which non-streaming responses report in ``COST_HEADER``.
+    ``timer`` adds the request's timing fields; refusals before forwarding have none.
     """
     counts = _usage_counts(usage)
+    timing = timer.fields(counts["output"]) if timer is not None else RequestTiming()
     cost = (
         compute_cost(
             entry.price,
@@ -312,6 +317,13 @@ async def _record_usage(
         cold_start_ms=cold_start_ms,
         cost_usd=cost,
         error_code=error_code,
+        ttft_ms=timing.ttft_ms,
+        e2e_ms=timing.e2e_ms,
+        tpot_ms=timing.tpot_ms,
+        itl_mean_ms=timing.itl_mean_ms,
+        itl_p95_ms=timing.itl_p95_ms,
+        itl_max_ms=timing.itl_max_ms,
+        itl_count=timing.itl_count,
     )
     await state.append_usage(record)
     await state.emit(
@@ -326,6 +338,8 @@ async def _record_usage(
         status_code=status_code,
         latency_ms=latency_ms,
         cold_start_ms=cold_start_ms,
+        cached_tokens=counts["cached"],
+        **timing.as_dict(),
     )
     return cost
 
@@ -336,6 +350,7 @@ async def _record_usage(
 async def _handle(
     state: GatewayState, request: Request, *, flavor: Flavor, responses: bool = False
 ) -> Response:
+    timer = RequestTimer(state.perf_now)
     anthropic = flavor == "anthropic"
     key = await _authenticate(state, request, flavor=flavor, anthropic=anthropic)
     if isinstance(key, Response):
@@ -386,6 +401,7 @@ async def _handle(
             round_=round_,
             flavor=flavor,
             responses=responses,
+            timer=timer,
         )
     finally:
         await state.release_budget(key.key_id, admitted)
@@ -404,6 +420,7 @@ async def _transport_failure(
     started_at: float,
     flavor: Flavor,
     exc: httpx.TransportError,
+    timer: RequestTimer,
 ) -> Response:
     """Answer an upstream that timed out or dropped the connection: 504 or 502, uncharged."""
     timed_out = isinstance(exc, httpx.TimeoutException)
@@ -420,6 +437,7 @@ async def _transport_failure(
         cold_start_ms=0,
         charge=False,
         error_code="upstream_timeout" if timed_out else "upstream_error",
+        timer=timer,
     )
     if timed_out:
         return _error_response(flavor, 504, "upstream_timeout", f"upstream timed out: {exc!r}")
@@ -451,6 +469,7 @@ async def _forward(
     round_: int,
     flavor: Flavor,
     responses: bool,
+    timer: RequestTimer,
 ) -> Response:
     route = entry.route
     controls = route_controls(route)
@@ -479,6 +498,7 @@ async def _forward(
             responses=responses,
             include_usage=_client_wants_usage(body),
             extra_headers=dropped_headers,
+            timer=timer,
         )
     try:
         upstream, cold_start_ms = await post_upstream(
@@ -487,7 +507,9 @@ async def _forward(
     except UpstreamCredentialError as exc:
         return _error_response(flavor, 502, "upstream_error", f"upstream credential: {exc}")
     except httpx.TransportError as exc:
-        return await _transport_failure(state, key, entry, model, round_, started_at, flavor, exc)
+        return await _transport_failure(
+            state, key, entry, model, round_, started_at, flavor, exc, timer
+        )
 
     latency_ms = _latency_ms(state, started_at)
     try:
@@ -516,6 +538,7 @@ async def _forward(
             cold_start_ms=cold_start_ms,
             charge=False,
             error_code=ENDPOINT_MISMATCH,
+            timer=timer,
         )
         return _error_response(
             flavor, 502, "endpoint_mismatch", "upstream response violates the provider lock"
@@ -532,6 +555,7 @@ async def _forward(
             status_code=upstream.status_code,
             cold_start_ms=cold_start_ms,
             charge=False,
+            timer=timer,
         )
         message, code = _upstream_error_payload(payload, anthropic_upstream=anthropic_upstream)
         return _error_response(flavor, upstream.status_code, code, message, dropped_headers or None)
@@ -548,6 +572,7 @@ async def _forward(
         cold_start_ms=cold_start_ms,
         charge=True,
         upstream_model=_upstream_model(chat_payload),
+        timer=timer,
     )
     if responses:
         result: dict[str, Any] = chat_response_to_responses(chat_payload, model=model)
@@ -598,13 +623,16 @@ async def _forward_stream(
     responses: bool,
     include_usage: bool,
     extra_headers: dict[str, str],
+    timer: RequestTimer,
 ) -> Response:
     try:
         opened = await open_upstream_stream(state, entry, body, endpoint_id=key.endpoint_id)
     except UpstreamCredentialError as exc:
         return _error_response(flavor, 502, "upstream_error", f"upstream credential: {exc}")
     except httpx.TransportError as exc:
-        return await _transport_failure(state, key, entry, model, round_, started_at, flavor, exc)
+        return await _transport_failure(
+            state, key, entry, model, round_, started_at, flavor, exc, timer
+        )
 
     upstream = opened.response
     if upstream.status_code != 200:
@@ -624,6 +652,7 @@ async def _forward_stream(
             status_code=upstream.status_code,
             cold_start_ms=opened.cold_start_ms,
             charge=False,
+            timer=timer,
         )
         message, code = _upstream_error_payload(
             payload, anthropic_upstream=entry.route.protocol == "anthropic_messages"
@@ -646,6 +675,7 @@ async def _forward_stream(
             cold_start_ms=opened.cold_start_ms,
             charge=False,
             error_code=ENDPOINT_MISMATCH,
+            timer=timer,
         )
         return _error_response(
             flavor, 502, "endpoint_mismatch", "upstream response violates the provider lock"
@@ -664,6 +694,7 @@ async def _forward_stream(
             responses=responses,
             include_usage=include_usage,
             extra_headers=extra_headers,
+            timer=timer,
         )
     if flavor == "anthropic":
         return _converted_stream(
@@ -675,6 +706,7 @@ async def _forward_stream(
             model,
             round_,
             _upstream_model(first_chunk),
+            timer,
         )
     if responses:
         return _converted_stream(
@@ -686,13 +718,34 @@ async def _forward_stream(
             model,
             round_,
             _upstream_model(first_chunk),
+            timer,
         )
     return _passthrough_stream(
-        state, key, entry, opened, model, round_, started_at, _upstream_model(first_chunk)
+        state, key, entry, opened, model, round_, started_at, _upstream_model(first_chunk), timer
     )
 
 
 _STREAM_FAILURE_CODES = {504: "upstream_timeout", 502: "upstream_error"}
+
+
+async def _finish_stream(
+    state: GatewayState, opened: OpenedStream, record: Coroutine[Any, Any, float]
+) -> None:
+    """Close the upstream, then record and charge the request, even if the client is gone.
+
+    A client that hangs up (often right after ``[DONE]``) makes Starlette cancel the response,
+    and anyio re-raises that cancellation at every await of this cleanup: with a store that
+    really suspends, the usage record and the charge were lost. The work runs in a task the
+    gateway state holds, and the shield keeps the cancellation from reaching it.
+    """
+
+    async def finish() -> None:
+        try:
+            await opened.aclose()
+        finally:
+            await record
+
+    await asyncio.shield(state.account(finish()))
 
 
 def _mid_stream_error(
@@ -742,39 +795,46 @@ def _passthrough_stream(
     round_: int,
     started_at: float,
     upstream_model: str,
+    timer: RequestTimer,
 ) -> StreamingResponse:
     """Chat Completions streaming: forward SSE lines, then charge from the usage chunk."""
 
     async def generate() -> AsyncIterator[str]:
         usage_holder: dict[str, Any] = {}
         try:
-            async for line in opened.iter_lines():
+            async for line, arrived_at in opened.iter_timed_lines():
                 if line.startswith("data: ") and line[6:] != "[DONE]":
                     try:
                         chunk = json.loads(line[6:])
                     except ValueError:
                         chunk = None
-                    if isinstance(chunk, dict) and isinstance(chunk.get("usage"), dict):
-                        usage_holder["usage"] = chunk["usage"]
+                    if isinstance(chunk, dict):
+                        timer.observe(chunk, arrived_at)
+                        if isinstance(chunk.get("usage"), dict):
+                            usage_holder["usage"] = chunk["usage"]
                 yield line + "\n"
         except httpx.TransportError as exc:
             usage_holder["status"], event = _mid_stream_error("chat", exc)
             yield event
         finally:
-            await opened.aclose()
-            await _record_usage(
+            await _finish_stream(
                 state,
-                key=key,
-                entry=entry,
-                model=model,
-                round_=round_,
-                usage=usage_holder.get("usage"),
-                latency_ms=_latency_ms(state, started_at),
-                status_code=int(usage_holder.get("status", 200)),
-                cold_start_ms=opened.cold_start_ms,
-                charge=True,
-                upstream_model=upstream_model,
-                error_code=_STREAM_FAILURE_CODES.get(int(usage_holder.get("status", 200))),
+                opened,
+                _record_usage(
+                    state,
+                    key=key,
+                    entry=entry,
+                    model=model,
+                    round_=round_,
+                    usage=usage_holder.get("usage"),
+                    latency_ms=_latency_ms(state, started_at),
+                    status_code=int(usage_holder.get("status", 200)),
+                    cold_start_ms=opened.cold_start_ms,
+                    charge=True,
+                    upstream_model=upstream_model,
+                    error_code=_STREAM_FAILURE_CODES.get(int(usage_holder.get("status", 200))),
+                    timer=timer,
+                ),
             )
 
     return StreamingResponse(
@@ -795,6 +855,7 @@ def _anthropic_upstream_stream(
     responses: bool,
     include_usage: bool,
     extra_headers: dict[str, str],
+    timer: RequestTimer,
 ) -> StreamingResponse:
     """Anthropic Messages SSE upstream -> chat chunks -> the client's own streaming protocol."""
     # The Anthropic and Responses converters read the usage chunk, so they always get it.
@@ -818,11 +879,14 @@ def _anthropic_upstream_stream(
     async def generate() -> AsyncIterator[str]:
         status = 200
         try:
-            async for line in opened.iter_lines():
+            async for line, arrived_at in opened.iter_timed_lines():
                 event = parse_data_line(line)
                 if event is None:
                     continue
-                for out in render(upstream.feed(event)):
+                chunks = upstream.feed(event)
+                for chunk in chunks:
+                    timer.observe(chunk, arrived_at)
+                for out in render(chunks):
                     yield out
                 if upstream.error is not None:
                     break
@@ -846,20 +910,24 @@ def _anthropic_upstream_stream(
             status, event_text = _mid_stream_error(kind, exc)
             yield event_text
         finally:
-            await opened.aclose()
-            await _record_usage(
+            await _finish_stream(
                 state,
-                key=key,
-                entry=entry,
-                model=model,
-                round_=round_,
-                usage=upstream.usage,
-                latency_ms=_latency_ms(state, started_at),
-                status_code=status,
-                cold_start_ms=opened.cold_start_ms,
-                charge=True,
-                upstream_model=_upstream_model(opened.first_chunk or {}),
-                error_code=_STREAM_FAILURE_CODES.get(status),
+                opened,
+                _record_usage(
+                    state,
+                    key=key,
+                    entry=entry,
+                    model=model,
+                    round_=round_,
+                    usage=upstream.usage,
+                    latency_ms=_latency_ms(state, started_at),
+                    status_code=status,
+                    cold_start_ms=opened.cold_start_ms,
+                    charge=True,
+                    upstream_model=_upstream_model(opened.first_chunk or {}),
+                    error_code=_STREAM_FAILURE_CODES.get(status),
+                    timer=timer,
+                ),
             )
 
     return StreamingResponse(
@@ -878,6 +946,7 @@ def _converted_stream(
     model: str,
     round_: int,
     upstream_model: str,
+    timer: RequestTimer,
 ) -> StreamingResponse:
     """Wrap a raw upstream stream in a protocol converter (Anthropic or Responses)."""
     converter = converter_type(model=model)
@@ -886,7 +955,7 @@ def _converted_stream(
     async def generate() -> AsyncIterator[str]:
         usage_holder: dict[str, Any] = {}
         try:
-            async for line in opened.iter_lines():
+            async for line, arrived_at in opened.iter_timed_lines():
                 if not line.startswith("data: "):
                     continue
                 payload = line[len("data: ") :]
@@ -898,6 +967,7 @@ def _converted_stream(
                     continue
                 if not isinstance(chunk, dict):
                     continue
+                timer.observe(chunk, arrived_at)
                 if isinstance(chunk.get("usage"), dict):
                     usage_holder["usage"] = chunk["usage"]
                 for event in converter.feed(chunk):
@@ -911,20 +981,24 @@ def _converted_stream(
             usage_holder["status"], event = _mid_stream_error(kind, exc)
             yield event
         finally:
-            await opened.aclose()
-            await _record_usage(
+            await _finish_stream(
                 state,
-                key=key,
-                entry=entry,
-                model=model,
-                round_=round_,
-                usage=usage_holder.get("usage"),
-                latency_ms=_latency_ms(state, started_at),
-                status_code=int(usage_holder.get("status", 200)),
-                cold_start_ms=opened.cold_start_ms,
-                charge=True,
-                upstream_model=upstream_model,
-                error_code=_STREAM_FAILURE_CODES.get(int(usage_holder.get("status", 200))),
+                opened,
+                _record_usage(
+                    state,
+                    key=key,
+                    entry=entry,
+                    model=model,
+                    round_=round_,
+                    usage=usage_holder.get("usage"),
+                    latency_ms=_latency_ms(state, started_at),
+                    status_code=int(usage_holder.get("status", 200)),
+                    cold_start_ms=opened.cold_start_ms,
+                    charge=True,
+                    upstream_model=upstream_model,
+                    error_code=_STREAM_FAILURE_CODES.get(int(usage_holder.get("status", 200))),
+                    timer=timer,
+                ),
             )
 
     return StreamingResponse(

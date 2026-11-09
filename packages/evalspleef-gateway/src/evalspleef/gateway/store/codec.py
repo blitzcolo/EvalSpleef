@@ -15,7 +15,20 @@ KEY_COLUMNS = (
 
 USAGE_COLUMNS = (
     "ts, trial_id, round, endpoint_id, upstream_model, input_tokens, output_tokens, "
-    "cached_tokens, reasoning_tokens, latency_ms, status_code, cold_start_ms, cost_usd, error_code"
+    "cached_tokens, reasoning_tokens, latency_ms, status_code, cold_start_ms, cost_usd, error_code, "
+    "ttft_ms, e2e_ms, tpot_ms, itl_mean_ms, itl_p95_ms, itl_max_ms, itl_count"
+)
+
+#: Usage columns added after the first schema, with their SQL type; added in place on open so
+#: stores written before them keep working, and their old rows read back as NULL.
+USAGE_TIMING_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("ttft_ms", "REAL"),
+    ("e2e_ms", "REAL"),
+    ("tpot_ms", "REAL"),
+    ("itl_mean_ms", "REAL"),
+    ("itl_p95_ms", "REAL"),
+    ("itl_max_ms", "REAL"),
+    ("itl_count", "INTEGER"),
 )
 
 
@@ -80,6 +93,13 @@ def usage_params(record: UsageRecord) -> tuple[Any, ...]:
         record.cold_start_ms,
         record.cost_usd,
         record.error_code,
+        record.ttft_ms,
+        record.e2e_ms,
+        record.tpot_ms,
+        record.itl_mean_ms,
+        record.itl_p95_ms,
+        record.itl_max_ms,
+        record.itl_count,
     )
 
 
@@ -99,4 +119,15 @@ def usage_from_row(row: Any) -> UsageRecord:
         cold_start_ms=int(row[11]),
         cost_usd=float(row[12]),
         error_code=row[13],
+        ttft_ms=_optional_float(row[14]),
+        e2e_ms=_optional_float(row[15]),
+        tpot_ms=_optional_float(row[16]),
+        itl_mean_ms=_optional_float(row[17]),
+        itl_p95_ms=_optional_float(row[18]),
+        itl_max_ms=_optional_float(row[19]),
+        itl_count=None if row[20] is None else int(row[20]),
     )
+
+
+def _optional_float(value: Any) -> float | None:
+    return None if value is None else float(value)

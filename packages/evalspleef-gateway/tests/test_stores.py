@@ -33,6 +33,18 @@ _RECORD = UsageRecord(
     cost_usd=0.001,
 )
 
+_TIMED = replace(
+    _RECORD,
+    trial_id="trial-3",
+    ttft_ms=812.5,
+    e2e_ms=4210.25,
+    tpot_ms=15.4,
+    itl_mean_ms=15.3,
+    itl_p95_ms=46.0,
+    itl_max_ms=97.8,
+    itl_count=255,
+)
+
 _KEY = StoredKey(
     key_id="tk_1",
     secret_sha256="ab" * 32,
@@ -63,6 +75,8 @@ async def _roundtrip(key_store, usage_store) -> None:
     await usage_store.append(replace(_RECORD, trial_id="trial-2"))
     records = await usage_store.for_trial("trial-1")
     assert records == [_RECORD]
+    await usage_store.append(_TIMED)
+    assert await usage_store.for_trial("trial-3") == [_TIMED]
 
 
 async def test_memory_store_roundtrip() -> None:
@@ -215,3 +229,35 @@ async def test_a_store_written_before_error_codes_gains_the_column(tmp_path: Pat
     )
     await store.append(record)
     assert await store.for_trial("trial-1") == [record]
+
+
+async def test_a_store_written_before_timing_fields_gains_them_and_keeps_old_rows(
+    tmp_path: Path,
+) -> None:
+    import sqlite3
+
+    path = tmp_path / "before-timing.sqlite3"
+    old = sqlite3.connect(path)
+    old.execute(
+        "CREATE TABLE usage (seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, "
+        "trial_id TEXT NOT NULL, round INTEGER NOT NULL, endpoint_id TEXT NOT NULL, "
+        "upstream_model TEXT NOT NULL, input_tokens INTEGER NOT NULL, "
+        "output_tokens INTEGER NOT NULL, cached_tokens INTEGER NOT NULL, "
+        "reasoning_tokens INTEGER NOT NULL, latency_ms INTEGER NOT NULL, "
+        "status_code INTEGER NOT NULL, cold_start_ms INTEGER NOT NULL, cost_usd REAL NOT NULL, "
+        "error_code TEXT)"
+    )
+    old.execute(
+        "INSERT INTO usage (ts, trial_id, round, endpoint_id, upstream_model, input_tokens, "
+        "output_tokens, cached_tokens, reasoning_tokens, latency_ms, status_code, "
+        "cold_start_ms, cost_usd, error_code) VALUES "
+        "('2026-01-01T00:00:00+00:00', 'trial-3', 2, 'ep_ep1', 'fake-model', 10, 5, 3, 1, 42, "
+        "200, 0, 0.001, NULL)"
+    )
+    old.commit()
+    old.close()
+    store = SqliteStore(str(path))
+    # The row written before the columns existed reads back with every timing field None.
+    assert await store.for_trial("trial-3") == [replace(_RECORD, trial_id="trial-3")]
+    await store.append(_TIMED)
+    assert (await store.for_trial("trial-3"))[1] == _TIMED

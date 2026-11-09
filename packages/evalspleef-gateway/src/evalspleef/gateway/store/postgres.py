@@ -13,6 +13,7 @@ from . import KeyStore, StoredKey, UsageStore
 from .codec import (
     KEY_COLUMNS,
     USAGE_COLUMNS,
+    USAGE_TIMING_COLUMNS,
     insert_statement,
     key_from_row,
     key_params,
@@ -66,6 +67,9 @@ class PostgresStore(KeyStore, UsageStore):
         async with connection.cursor() as cursor:
             await cursor.execute(_SCHEMA)
             await cursor.execute("ALTER TABLE usage ADD COLUMN IF NOT EXISTS error_code TEXT")
+            for name, sql_type in USAGE_TIMING_COLUMNS:
+                pg_type = "DOUBLE PRECISION" if sql_type == "REAL" else "BIGINT"
+                await cursor.execute(f"ALTER TABLE usage ADD COLUMN IF NOT EXISTS {name} {pg_type}")
         return cls(connection)
 
     async def close(self) -> None:
