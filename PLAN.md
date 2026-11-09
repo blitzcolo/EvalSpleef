@@ -133,7 +133,7 @@ Every line below comes from a command run during this build, with the exit code 
 | Egress proxy | Run for real on 2026-11-09 in a Docker topology (`tests/egress_docker`: an internal network, a dual-homed proxy built from `deploy/docker/egress.Dockerfile`, two origin servers): the allowlisted host is served, the off-list host gets 403 with an audit line, a direct connection has no route, `off` and `full` are unchanged. Not started in the end-to-end batch; HTTPS to TLS upstreams and package-mirror rewriting inside containers are not verified |
 | Docker image templates | logic-001, data-001 and debug-001 built and checked locally; heavy toolchain, macOS and Windows images are not built |
 | Compose stack and Helm chart | `docker compose config` validates the compose file; the chart was checked structurally and never rendered by Helm |
-| Beam Pod model endpoint (`beam-pod`) | Run for real on 2026-11-08 (deploy, status, chat, gateway probe, Volume weights, long-context runs, terminate); multi-GPU layouts only against the fakes, because the workspace refuses multi-GPU containers |
+| Beam Pod model endpoint (`beam-pod`) | Run for real on 2026-11-08 (deploy, status, chat, gateway probe, Volume weights, long-context runs, terminate); multi-GPU ran for real on 2026-11-09 (2 x RTX5090, TP2, KV pool of 1,073,923 tokens, `docs/evidence/beam-1m-kv.md`) after the workspace enabled multi-GPU containers |
 | Isolation preflight probes | Docker I1-I9 run as commands in real containers (adapter test and every e2e trial); other adapters' probes are described and waived |
 | Novita Dedicated and Serverless GPU, Novita Agent Sandbox (all three discontinued 2026-11-09), Hugging Face, E2B self-host, Tart, Hyper-V, libvirt, Windows Sandbox, Kubernetes, device pool | Transport fakes only: **not verified on a real host or account** |
 
@@ -156,7 +156,7 @@ The owner stopped all Novita work: the platform was hard to use and its GPU pool
 | Novita as an OpenAI-compatible upstream (LLM API) | not a target of any planned run; `openai-compatible` keeps working for every other vendor |
 | D10 (OCI image to Novita template mapping), Template Builder | code stays; no further work |
 | PRD items that name Novita: FR-SBX-04, the `novita-dedicated` first-priority deployment, the M0 list | no longer scheduled; the PRD and TECH-DESIGN headers record the change |
-| AC-01 | the deployment path moves to `beam-pod` (a gated model was served for real on 2026-11-08); the public and private cases and a batch on a self-served model are still open |
+| AC-01 | the deployment path moves to `beam-pod` (a gated model was served for real on 2026-11-08); a batch on a self-served Beam model ran on 2026-11-09 (batch 2026-11-b5); the public and private Hugging Face cases are still open |
 | AC-03 (same Linux task on `docker` and `novita-sandbox`) | cannot be met as written; it needs a second real carrier. Open decision for the owner; apple-container and Tart are candidates on this workstation, neither tried yet |
 | AC-10 (reconcile a real Novita bill) | cannot be met; `spleef batch costs --novita-bill` stays as an importer that no real bill will exercise |
 | Open items that disappear | Novita GPU capacity, a batch on a Novita sandbox, Novita Serverless GPU serving |
@@ -214,8 +214,8 @@ Everything from the review's unfinished list that could be fixed in code here is
 | Harbor integration and AC-08 | a Harbor installation |
 | Tart with two macOS VMs for 24 h (AC-04), Hyper-V (AC-05), libvirt, apple-container, Kubernetes, device pool, E2B self-host | the hosts or clusters |
 | Not pursued (Novita discontinued 2026-11-09): a batch on a Novita sandbox; Novita Dedicated and Serverless GPU serving | Novita GPU capacity (every product reported 0 available) |
-| AC-01 public and private Hugging Face models; a full batch on a self-served model | a private repo and GPU time |
-| Multi-GPU (TP2 and above) on Beam | Beam must enable multi-GPU containers for the workspace (`multi_gpu_enabled: false`, max_gpu_count 2, pools not permitted) |
+| AC-01 public and private Hugging Face models (the self-served batch ran on 2026-11-09) | a private repo and GPU time |
+| More than 2 GPUs per container on Beam, and Blackwell cards larger than the RTX 5090 (RTX PRO 6000, B200 and B300 show unavailable in `/gateway/machines`) | Beam capacity; TP2 on 2 x RTX5090 works since 2026-11-09 (`multi_gpu_enabled: true`, at most 2 per container) |
 | Adapter onboarding drill (AC-07) | an engineer outside the core team |
 | Push the pack images to a registry and pin their digests in every pack (`TODO(pin-on-host)`). Decided 2026-11-09: images stay local for now (Docker uses its local build; the Apple Container store gets the same images through a `docker save` export in the parity test) | a registry choice (GHCR, Docker Hub or a private one) and push credentials |
 | Helm rendered by `helm`; compose smoke with every service | a cluster |
@@ -235,7 +235,7 @@ Ordered by dependency. Estimates are rough, for one engineer who knows the code.
 | 7 | OpenTelemetry beyond the control plane (gateway, runners, hostd) | nothing | 4 for a deployed collector | 2-3 days |
 | 8 | hostd dials out over one stream (D3) and `RemoteProvider.environment()` over gRPC; the other adapters implement `environment()` | nothing; real hosts only to verify | nothing | 1-2 weeks |
 | 9 | Judge calibration (kappa or alpha >= 0.70) and regrade agreement (>= 95%) tools (AC-09) | labelled calibration sets from you or reviewers | nothing | 3 days plus data |
-| 10 | AC-01: public and private Hugging Face cases and a full batch on a self-served Beam model (BEAM_TOKEN and HF_TOKEN are in the secrets file) | your OK for GPU spend | nothing | 1-2 days |
+| 10 | AC-01: the public and private Hugging Face cases (the self-served Beam batch ran on 2026-11-09, batch 2026-11-b5); rotate the Beam and Hugging Face tokens that passed through chat on 2026-11-08 | a private repo and GPU spend | nothing | 1 day |
 | 11a | `agent_judge` component (design below, decided 2026-11-09) with the SPI pieces it needs: read-only uploads, declared writable paths, a `judge` lease role, and conformance cases for them | nothing | 1 (kit cases) | 1-1.5 weeks |
 | 11b | Pack authoring: rust and game packs on Linux, the ios pack waits for Tart; see "Pack authoring backlog" | pack authors; hash-locked content | nothing | days per pack |
 | 11c | Push the pack images to a registry and pin their digests (`TODO(pin-on-host)`); deferred by decision, images stay local | a registry choice and credentials | nothing | hours |
@@ -243,7 +243,8 @@ Ordered by dependency. Estimates are rough, for one engineer who knows the code.
 | 13 | LoRA adapters on dedicated endpoints (PRD P1) | a carrier that serves them | 10 | 3-5 days |
 | 14 | Manual review of the two logic-001 cells of batch 2026-11-b3 | a human reviewer | nothing | hours |
 | 15 | Last vendor names in neutral packages: the Novita bill import in the ledger (changing its CLI option changes the PRD) and the gateway's `anthropic` client-flavour literal; template kinds for tart, hyperv, libvirt, device-pool and hostd's codec | a PRD decision for the bill option | nothing | 1-2 days |
-| 16 | Inference performance metrics in every report (standing requirement, design below): gateway TTFT and ITL fields, a `spleef models bench` command and a fuller P-12 probe, `release/perf.json` and a report section | nothing; start after `lane-beam` is delivered, because its paid batch runs the control and gateway code | nothing | 3-5 days (estimate) |
+| 16 | Inference performance metrics in every report (standing requirement, design below): gateway TTFT and ITL fields, a `spleef models bench` command and a fuller P-12 probe, `release/perf.json` and a report section | nothing | nothing | 3-5 days (estimate); first real numbers are in `docs/evidence/beam-1m-kv.md` |
+| 17 | Gaps the Beam run found: a per-route upstream timeout in the gateway (the fixed 120 s blocks long-context and thinking-mode requests), the `models retire` exit code for an endpoint that never got a route, the Hugging Face mirror default (cannot work with a read token), keeping the engine log of every paid run at teardown | nothing | 16 for the timeout (same gateway code) | 2-3 days (estimate) |
 
 ### Design: the `agent_judge` component (decided 2026-11-09, not built)
 
@@ -330,7 +331,7 @@ The user asked that every GPU cloud inference run records, from now on, these me
 | System decode throughput tok/s | sum of output tokens of the requests in the same window / window length |
 | Full-load TTFT, ITL, TPOT, E2E | the per-request metrics above, taken inside the saturated window, p50 / p95 / p99 |
 | Saturation | concurrency is raised step by step until system decode throughput stops rising (next step gains less than 5%) or requests start to fail or time out; the steady window drops the first and last 10% of the run |
-| Derived: cost per million output tokens at saturation | the endpoint's hourly price / (system decode throughput * 3.6) |
+| Derived: cost per million output tokens at saturation | the endpoint's hourly price / (system decode throughput * 0.0036), because tokens per hour = tok/s * 3600 and the unit is one million tokens |
 
 **Where it is measured, and why.**
 
@@ -338,13 +339,13 @@ The user asked that every GPU cloud inference run records, from now on, these me
 2. **An active benchmark, through the gateway** (`spleef models bench`, and the P-12 probe extended to the same code): concurrency 1 with unique prefixes for the single-request numbers, then the saturation sweep for the system and full-load numbers, at declared (input length, output length) pairs. Prompts come from a seeded generator whose seed and lengths are stored. The record keeps the raw per-request timestamps, and every reported number is a pure function of them, so it can be recomputed (like grading).
 3. **The report.** A new `release/perf.json` and an "Inference performance" section in the report: per endpoint, the benchmark table and the in-batch distributions (TTFT, ITL, TPOT, E2E percentiles over all batch requests, and the throughput observed over the batch's busy windows, labelled observed and not saturated), next to the hardware facts the version record already holds (GPU type and count, engine and version, flags, model revision, quantization, KV pool size when the engine reports it). API vendors are measured the same way and labelled as including network and provider queueing.
 
-The first real numbers come from the Beam run of `lane-beam` (2026-11-b4), which was asked to collect them with these definitions from client-side scripts; they land in `docs/evidence/beam-1m-kv.md` and become the check data for the implementation.
+The first real numbers come from the Beam run of `lane-beam` (2026-11-b4), which collected them with these definitions from client-side scripts (raw JSON under the gitignored `.omo/runs/2026-11-b4/perf/`, summary in `docs/evidence/beam-1m-kv.md`); they are the check data for the implementation.
 
 ### Acceptance criteria status
 
 | AC | State |
 | --- | --- |
-| AC-01 | partly: a gated Hugging Face model at a pinned revision was served for real on a Beam RTX 5090 (`beam-pod`) and probed through the gateway (10/14); no Novita GPU had capacity, the public and private cases and a batch on a self-served model have not run |
+| AC-01 | partly: a gated Hugging Face model at a pinned revision was served for real on a Beam RTX 5090 (`beam-pod`) and probed through the gateway (10/14); no Novita GPU had capacity; on 2026-11-09 a 2 x RTX 5090 TP2 layout with a measured KV pool of 1,073,923 tokens was served and a 7-trial batch ran on it (batch 2026-11-b5); the public and private cases have not run |
 | AC-02 | partly: gateway budgets proven with a fake upstream; every leaderboard column now carries its cost basis (`cost_bases`, end to end on real Docker) and the drill-down carries model source and revision; not run against a real priced vendor batch since |
 | AC-03 | met on this Mac with docker and apple-container as the two real carriers (2026-11-09, `docs/evidence/ac03-carriers.md`; fake model and judge, images moved from Docker with identical digests, no platform-enforced template fingerprint yet). History: the Docker half runs for real; the Novita adapter passes conformance on the real account and packs now map to Novita templates (D10), but no batch has run on a Novita sandbox, and none will: Novita is discontinued (2026-11-09), so the second real carrier for AC-03 is an open decision |
 | AC-04, AC-05 | not met: need a Mac mini with Tart and a Hyper-V host |
@@ -475,6 +476,24 @@ Open: the conformance kit has no case for uploading a directory as a mount point
 | An AST guard fails when a string literal or identifier in spi, core, control or gateway equals novita, e2b, anthropic, deepseek or beam; exemptions are listed by file and name and must still match something | `test_vendor_neutrality.py` over 146 files; mutation: putting the old vendor table back into `context.py` fails it |
 
 Still named in neutral packages, and exempted in the guard: the Novita bill import in the cost ledger (`--novita-bill`, from PRD FR-OPS-04 and AC-10) and the gateway's `"anthropic"` client-flavour literal. Open: move bill parsing behind a billing method of the model provider with a neutral `--bill FILE --account NAME` option; rename the gateway flavour to `anthropic_messages`; hostd's codec does not carry `template_kinds` yet; tart, hyperv, libvirt and device-pool should declare their kinds; endpoint rows stored before this change record `deployment_id` as null until they are registered again.
+
+### Beam: a 1M-token KV pool and a self-served batch (2026-11-09)
+
+Evidence: `docs/evidence/beam-1m-kv.md`. Config: `config/examples/real-beam/`. Preset: `beam-rtx5090x2/sglang-tp2-kv1m` in `config/examples/presets.yaml`. The user approved renting NVFP4-capable cards on the condition that the quantized KV pool reaches at least 1M tokens.
+
+| Item | Result |
+| --- | --- |
+| Cards | RTX5090 is the only Blackwell GPU the workspace can launch; RTX PRO 6000, B200 and B300 show unavailable in `/gateway/machines`. No single 32 GB card gets near 1M tokens (about 0.2M). Multi-GPU containers are enabled since 2026-11-09, at most 2. Layout: 2 x RTX5090, TP2, SGLang v0.5.23, radix cache off, 4 running requests, memory fraction 0.93, prefill CUDA graphs and custom all-reduce off (the two cards have no peer access) |
+| Measured KV pool | 1,073,923 FP8 tokens. A try at 0.94 measured 1,093,308 but died while capturing prefill CUDA graphs. Cross-check on 2026-11-09 from the engine's own run log: 4 running requests held 1,006,884 tokens at usage 0.94, which implies a pool between 1,065,486 and 1,076,881. The raw allocation line of the final pod was not kept on disk (only the crashed try's), so the exact figure comes from the evidence file |
+| Long context | one ~248K-token request: TTFT 138.8 s (about 1,790 tok/s prefill), needle found, decode about 70 tok/s. Four ~248K requests overlapping: 1,006,884 tokens resident (94% of the pool), no OOM or eviction, all needles found, aggregate decode 146.7 tok/s. Four submitted at the same instant: two completed, two were cut at 301.7 s by Beam's ingress, which drops a request that sends no bytes for 300 s |
+| Probes | 13/14 with thinking off (P-11 seed determinism fails); 11/14 with thinking on; the required P-01, P-02 and P-14 pass in both |
+| Batch 2026-11-b5 | non-thinking mode, 7 trials, projection check over all 7: data-001 and debug-001 Perfect, logic-001 A (epochs A and P). The thinking-mode batch (b4) failed because every model call hit the gateway's fixed 120 s upstream timeout, so these are non-thinking scores |
+| Spend | 4.65 USD per hour; about 108 minutes of GPU time, about 8.4 USD (computed from container lifetimes, Beam has no usage API), plus about 0.5 USD for the Claude judge |
+| Performance through the gateway | single request at 1K, 8K and 74K input: TTFT 1.23, 3.55 and 28.2 s, prefill 0.9K, 2.5K and 2.6K tok/s, decode about 61-65 tok/s. Saturation at concurrency 4 (8 adds 0.8%): system decode 144.8 tok/s, system prefill 1,204 tok/s. Full load, p50: TTFT 2.9 s, TPOT 18.6 ms, ITL 13.9 ms, E2E 7.7 s. 8.92 USD per million output tokens at saturation. At about 250K input only TTFT, prefill and a rough decode rate exist, measured direct to the Pod |
+| Teardown | Beam deployments and containers lists empty (the lane's receipt and a read-back on 2026-11-09), gateway stopped, no Docker containers left |
+| Adapter defects fixed, each with a regression test | `validate` rejected every Hugging Face model with `hf_checker_missing` although the endpoint manager runs that check itself; `upstream()` dropped `default_params`, so the thinking switch could not reach the route |
+
+Open, found by this run: no CLI command moves an API-mode endpoint from deploying to verifying (`EndpointManager.refresh()` has no caller; part of the resident service); `models retire` exits 1 for an endpoint that never got a gateway route; the gateway's 120 s upstream timeout is hard-coded; Hugging Face mirror creation is on by default and cannot work with a read token, so self-served specs need `mirror: false`; engine logs of paid runs are not stored automatically. Not proven: a 1M pool on a single GPU; four simultaneous ~250K requests end to end through Beam's ingress; any long-context request through the gateway; thinking-mode quality; the real Beam invoice.
 
 ### Real surfaces
 
