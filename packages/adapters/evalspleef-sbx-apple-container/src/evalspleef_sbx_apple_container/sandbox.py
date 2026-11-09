@@ -1,8 +1,15 @@
 """One apple/container VM-backed sandbox (TECH-DESIGN section 7.4.4).
 
-``exec`` runs through ``container exec`` with the CLI process in its own
-session; a timeout kills that whole process group and reports exit code 124.
-Files travel with ``container cp`` and are re-validated locally after download.
+``exec`` runs through ``container exec``. Killing the CLI does not stop the
+guest process (the VM keeps it running), so every command is started under a
+small ``sh`` wrapper that records its pid; the guest process is a session and
+process-group leader, and a timeout kills that group inside the VM before the
+result (exit code 124) is returned.
+
+Files travel as tar streams over ``exec`` stdin/stdout, run as the sandbox user.
+``container cp`` is not used: it reads and writes the VM's root filesystem
+underneath the tmpfs mounts (and past ``--read-only``), so it neither sees
+``/workspace`` nor respects the sandbox's own view of its files.
 """
 
 from __future__ import annotations
@@ -11,6 +18,8 @@ import asyncio
 import contextlib
 import math
 import posixpath
+import secrets
+import tempfile
 import time
 from collections import deque
 from collections.abc import Mapping
@@ -27,17 +36,23 @@ from evalspleef.spi.sandbox import (
 )
 
 from ._cli import ContainerCLI, kill_process_group
-from ._transfer import validate_download
+from ._transfer import build_upload_tar, extract_download_tar
 
 if TYPE_CHECKING:
     from .provider import AppleContainerProvider
 
 _CHUNK = 64 * 1024
 _PUMP_DRAIN_S = 10.0
+_KILL_TIMEOUT_S = 15.0
+_DOWNLOAD_TAR_CAP = 4 << 30
+"""Upper bound on a download stream when the caller sets no ``max_bytes``."""
 
-
-def _exists_or_link(path: Path) -> bool:
-    return path.exists() or path.is_symlink()
+# Records the wrapper's pid (the guest process-group leader) in $0, runs the command,
+# then removes the record. The pid file lives on the sandbox's private /tmp tmpfs.
+_PID_WRAPPER = '{ echo "$$" > "$0"; } 2>/dev/null; "$@"; status=$?; rm -f "$0"; exit "$status"'
+# No "--" before the negative pid: dash's kill builtin rejects it ("Illegal number: -").
+_KILL_GROUP = 'pid="$(cat "$1" 2>/dev/null)"; [ -n "$pid" ] && kill -KILL "-$pid"; rm -f "$1"'
+_UNPACK = 'mkdir -p "$1" && umask 000 && exec tar -xf - -C "$1"'
 
 
 class _CappedBuffer:
@@ -115,9 +130,11 @@ class AppleContainerSandbox(Sandbox):
         max_output_bytes: int = 8 << 20,
     ) -> ExecResult:
         self._check_live()
-        argv = ["sh", "-lc", cmd] if isinstance(cmd, str) else list(cmd)
+        command = ["sh", "-lc", cmd] if isinstance(cmd, str) else list(cmd)
         run_user = user or self.spec.run_as_user
         environment = {**self.spec.env, **self._network_env, **(env or {})}
+        pid_file = f"/tmp/.exec-{secrets.token_hex(8)}.pid"
+        argv = ["sh", "-c", _PID_WRAPPER, pid_file, *command]
 
         args = ["exec"]
         if stdin is not None:
@@ -152,8 +169,10 @@ class AppleContainerSandbox(Sandbox):
             except TimeoutError:
                 timed_out = True
                 await kill_process_group(process)
+                await self._kill_guest_group(pid_file, run_user)
             except asyncio.CancelledError:
                 await kill_process_group(process)
+                await self._kill_guest_group(pid_file, run_user)
                 raise
             await self._drain(stdout_task, stderr_task, feed_task)
         finally:
@@ -174,6 +193,18 @@ class AppleContainerSandbox(Sandbox):
             duration_s=duration_s,
             truncated=stdout.truncated or stderr.truncated,
         )
+
+    async def _kill_guest_group(self, pid_file: str, user: str) -> None:
+        """Kill the timed-out command's process group inside the VM.
+
+        A missing pid file means the command already finished; a kill that cannot
+        run because the container is gone surfaces as ``SandboxLost`` on the next call.
+        """
+        args = ["exec", "--user", user, self.id, "sh", "-c", _KILL_GROUP, "sh", pid_file]
+        try:
+            await self.cli.run(args, timeout_s=_KILL_TIMEOUT_S)
+        except TimeoutError:
+            return
 
     @staticmethod
     async def _pump(
@@ -221,20 +252,25 @@ class AppleContainerSandbox(Sandbox):
         remote_path = PurePosixPath(remote)
         if not remote_path.is_absolute():
             raise TransferError(f"remote path must be absolute, got {remote!r}")
-        if not await asyncio.to_thread(local.exists):
-            raise TransferError(f"local path does not exist: {local}")
-        parent = posixpath.dirname(str(remote_path)) or "/"
-        if parent != "/":
-            made = await self.exec(["mkdir", "-p", parent])
-            if made.exit_code != 0:
-                raise TransferError(f"cannot create remote directory {parent!r}: {made.stderr!r}")
-        result = await self.cli.run(
-            ["cp", str(local), f"{self.id}:{remote}"],
+        if not remote_path.name:
+            raise TransferError(f"remote path must name a file or directory, got {remote!r}")
+        # A directory unpacks INTO the remote path, never over it: tar would otherwise
+        # set the mode and times of an existing root-owned mount point such as
+        # /workspace, which the sandbox user may not do (GNU tar exits 2).
+        into_dir = await asyncio.to_thread(lambda: local.is_dir() and not local.is_symlink())
+        target = str(remote_path) if into_dir else posixpath.dirname(str(remote_path)) or "/"
+        archive = await asyncio.to_thread(
+            build_upload_tar, local, arcname=remote_path.name, contents_only=into_dir
+        )
+        result = await self.exec(
+            ["sh", "-c", _UNPACK, "sh", target],
+            stdin=archive,
             timeout_s=self._provider.transfer_timeout_s,
+            max_output_bytes=1 << 20,
         )
         if result.exit_code != 0:
             raise TransferError(
-                f"upload to {remote!r} failed (exit {result.exit_code}): {result.stderr_text!r}"
+                f"upload to {remote!r} failed (exit {result.exit_code}): {result.stderr!r}"
             )
 
     async def download(self, remote: str, local: Path, *, max_bytes: int | None = None) -> None:
@@ -242,18 +278,38 @@ class AppleContainerSandbox(Sandbox):
         remote_path = PurePosixPath(remote)
         if not remote_path.is_absolute():
             raise TransferError(f"remote path must be absolute, got {remote!r}")
-        local.parent.mkdir(parents=True, exist_ok=True)
-        result = await self.cli.run(
-            ["cp", f"{self.id}:{remote}", str(local)],
-            timeout_s=self._provider.transfer_timeout_s,
-        )
-        if result.exit_code != 0:
-            raise TransferError(
-                f"download of {remote!r} failed (exit {result.exit_code}): {result.stderr_text!r}"
+        if not remote_path.name:
+            raise TransferError(f"remote path must name a file or directory, got {remote!r}")
+        parent = posixpath.dirname(str(remote_path)) or "/"
+        cap = _DOWNLOAD_TAR_CAP if max_bytes is None else max_bytes + (1 << 20)
+        with tempfile.TemporaryFile(prefix="spleef-download-") as spool:
+            written = 0
+            over_cap = False
+
+            def sink(channel: str, data: bytes) -> None:
+                nonlocal written, over_cap
+                if channel != "stdout" or over_cap:
+                    return
+                written += len(data)
+                if written > cap:
+                    over_cap = True
+                    return
+                spool.write(data)
+
+            result = await self.exec(
+                ["tar", "-cf", "-", "-C", parent, f"./{remote_path.name}"],
+                timeout_s=self._provider.transfer_timeout_s,
+                on_output=sink,
+                max_output_bytes=1 << 20,
             )
-        if not await asyncio.to_thread(_exists_or_link, local):
-            raise TransferError(f"download of {remote!r} produced no local path")
-        validate_download(local, max_bytes=max_bytes)
+            if over_cap:
+                raise TransferError(f"download of {remote!r} exceeds the size cap of {cap} bytes")
+            if result.exit_code != 0:
+                raise TransferError(
+                    f"download of {remote!r} failed (exit {result.exit_code}): {result.stderr!r}"
+                )
+            spool.seek(0)
+            await asyncio.to_thread(extract_download_tar, spool, local, max_bytes=max_bytes)
 
     # -- lifecycle --------------------------------------------------------------
 
@@ -268,11 +324,14 @@ class AppleContainerSandbox(Sandbox):
         if info is None:
             return {}
         configuration = info.get("configuration") or {}
+        image = configuration.get("image")
+        # The CLI reports the image as {"reference": ..., "descriptor": {"digest": ...}}.
+        reference = image.get("reference") if isinstance(image, dict) else image
         return {
             "container": self.id,
             "host": "apple-container",
             "template_digest": self.spec.template.digest,
-            "image": configuration.get("image") or self.spec.template.ref,
+            "image": reference or self.spec.template.ref,
             "cpus": configuration.get("resources", {}).get("cpus"),
             "memory_mb": math.floor(
                 int(configuration.get("resources", {}).get("memoryInBytes") or 0) / (1 << 20)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
 from evalspleef_sbx_apple_container import isolation
 from evalspleef_sbx_apple_container.provider import AppleContainerProvider
 
@@ -59,6 +60,23 @@ def test_yaml_matches_python_profile() -> None:
     assert "waived: true" in text
     for entry in profile.waivers().values():
         assert str(entry.reason) in text.replace("\n      ", " ")
+
+
+def test_yaml_entries_match_python_profile() -> None:
+    document = yaml.safe_load(YAML_PATH.read_text(encoding="utf-8"))
+    profile = isolation.isolation_profile()
+    assert document["declared_isolation"] == profile.declared_isolation.name
+    for key, entry in profile.invariants.items():
+        shipped = document["invariants"][key]
+        assert shipped["how"] == entry.how, key
+        assert shipped["probe"] == entry.probe, key
+        assert shipped["waived"] == entry.waived, key
+
+
+def test_preflight_invariants_have_executable_probes() -> None:
+    profile = isolation.isolation_profile()
+    missing = [f"I{n}" for n in range(1, 10) if profile.invariants[f"I{n}"].command is None]
+    assert missing == []
 
 
 def test_linux_probe_script_checks_core_invariants() -> None:

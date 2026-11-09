@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Iterator
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from evalspleef_sbx_apple_container.fake_container import VERSION
 from evalspleef_sbx_apple_container.provider import AppleContainerProvider
 
 from evalspleef.spi.caps import Arch, Isolation, NetMode, OSFamily
@@ -45,7 +50,8 @@ def test_egress_proxy_adds_whitelist_modes(make_provider) -> None:
 
 async def test_preflight(provider: AppleContainerProvider) -> None:
     facts = await provider.preflight()
-    assert facts["version"] == "0.6.0-fake"
+    # The real CLI prints one JSON object per component; the CLI's own entry wins.
+    assert facts["version"] == VERSION
     assert facts["host_os"] == "darwin"
     assert facts["host_arch"] == Arch.ARM64.value
 
@@ -104,12 +110,69 @@ async def test_max_concurrency(
     await third.destroy()
 
 
-async def test_fail_next_create(provider: AppleContainerProvider, spec_factory) -> None:
-    provider.fail_next_creates(1, SandboxCreateError)
-    with pytest.raises(SandboxCreateError):
+async def test_create_fails_when_the_cli_refuses_the_name(
+    provider: AppleContainerProvider, spec_factory
+) -> None:
+    occupied = await provider.cli.run(["create", "--name", "c-taken", "img", "sleep", "infinity"])
+    assert occupied.exit_code == 0, occupied.stderr_text
+    provider.pin_next_sandbox_id("c-taken")
+    with pytest.raises(SandboxCreateError) as raised:
         await provider.create(spec_factory("prov-4a"))
+    assert "already exists" in str(raised.value.detail)
+    # The container holding the name is not the provider's: it must survive the failure.
+    assert await provider.container_exists("c-taken")
     sandbox = await provider.create(spec_factory("prov-4b"))
+    assert sandbox.id != "c-taken"
     await sandbox.destroy()
+
+
+async def test_name_prefix_names_the_container(make_provider, spec_factory) -> None:
+    instance = make_provider(name_prefix="lab-")
+    sandbox = await instance.create(spec_factory("prov-prefix"))
+    try:
+        assert sandbox.id.startswith("lab-")
+    finally:
+        await sandbox.destroy()
+
+
+class _Canary(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"canary")
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+@pytest.fixture
+def host_canary() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Canary)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+async def test_off_network_cannot_reach_host_services(
+    provider: AppleContainerProvider, spec_factory, host_canary: str
+) -> None:
+    # An --internal network is host-only on the real CLI; 'off' must not use it.
+    probe = f"curl -fsS -o /dev/null --max-time 3 {host_canary}"
+    full = await provider.create(spec_factory("prov-net-full", network=NetMode.FULL))
+    try:
+        assert (await full.exec(probe, timeout_s=10)).exit_code == 0
+    finally:
+        await full.destroy()
+    off = await provider.create(spec_factory("prov-net-off"))
+    try:
+        assert (await off.exec(probe, timeout_s=10)).exit_code != 0
+    finally:
+        await off.destroy()
 
 
 async def test_policy_rejections(provider: AppleContainerProvider, spec_factory) -> None:
@@ -184,6 +247,21 @@ async def test_sweep_removes_expired_containers(
     await provider._sweep_once()
     assert await provider.list({"trial": "prov-8"}) == []
     await sandbox.destroy()
+
+
+async def test_sweep_expired_reclaims_only_past_the_lifetime(
+    provider: AppleContainerProvider, spec_factory
+) -> None:
+    sandbox = await provider.create(spec_factory("prov-ttl", max_lifetime_s=600))
+    try:
+        assert await provider.sweep_expired() == 0
+        assert (await sandbox.exec(["true"])).exit_code == 0
+        assert await provider.sweep_expired(now=time.time() + 601) == 1
+        assert await provider.list({"trial": "prov-ttl"}) == []
+        with pytest.raises(SandboxLost):
+            await sandbox.exec(["true"])
+    finally:
+        await sandbox.destroy()
 
 
 async def test_lose_sandbox_makes_exec_raise(

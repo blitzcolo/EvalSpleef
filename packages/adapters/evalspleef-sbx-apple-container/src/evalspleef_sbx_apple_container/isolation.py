@@ -7,8 +7,13 @@ tests. ``probes/linux.sh`` is the Linux preflight probe set (PRD appendix D.2,
 TECH-DESIGN section 7.7): the control plane feeds it to the sandbox over stdin
 and records the per-check results.
 
+Facts below were checked on macOS 27.2 with ``container`` 1.6.1 (guest kernel
+Linux 6.18.35 aarch64): each container is a Virtualization.framework VM with its
+own kernel (L3). The I1-I9 probes are ``$ <command>`` lines that hold in every
+network mode and were run in real containers.
+
 I7 is waived for pids and disk only: the CLI enforces cpu and memory, but has
-no per-VM pids or disk quota.
+no pids limit and no disk quota for a container.
 """
 
 from __future__ import annotations
@@ -26,60 +31,74 @@ _LINUX_PROBE_RESOURCE = "probes/linux.sh"
 def _entries() -> dict[str, InvariantEntry]:
     return {
         "I1": InvariantEntry(
-            how="every trial gets a fresh lightweight VM from an immutable OCI image and "
-            "the container is removed after the trial; the lease id is a label",
-            probe="list(labels) returns exactly one instance per lease while live",
+            how="every trial boots a fresh lightweight VM (its own guest kernel) from an "
+            "immutable OCI image and the container is deleted after the trial; the lease "
+            "id is a label",
+            probe='$ test "$(cut -d. -f1 /proc/uptime)" -lt 900',
         ),
         "I2": InvariantEntry(
-            how="containers start with --read-only; the only writable paths are the tmpfs "
-            "mounts /tmp, /workspace and the agent home",
-            probe="findmnt -no OPTIONS / starts with ro and touch /.__probe fails",
+            how="containers start with --read-only (the root is a read-only ext4 block "
+            "device); the only writable paths are the tmpfs mounts /tmp, /workspace and "
+            "/home/<run_as_user>, plus /verify in verifier-role sandboxes. Files move as tar streams over exec as the sandbox user; "
+            "the host-side 'container cp' writes beneath --read-only and under the tmpfs "
+            "mounts, so the provider never uses it",
+            probe="$ ! touch /.spleef-probe 2>/dev/null",
         ),
         "I3": InvariantEntry(
-            how="the VM disk is per-trial and /workspace, /tmp and the agent home are tmpfs; "
-            "no host directory is ever mounted into the container",
-            probe="findmnt -no FSTYPE /workspace is tmpfs; a marker from one trial is absent "
-            "in the next",
+            how="the VM root is per-trial and /workspace, /tmp, the agent home (and /verify "
+            "for the verifier role) are tmpfs in guest memory; no host directory is shared into the VM (no --volume, "
+            "--mount or virtiofs share)",
+            probe='$ awk \'$2 == "/workspace" { t = $3 } END { exit t != "tmpfs" }\' /proc/mounts',
         ),
         "I4": InvariantEntry(
-            how="every container runs in its own VM and network namespace; NetMode.OFF "
-            "attaches it to an internal network created with 'network create --internal'",
-            probe="curl --max-time 3 https://example.com exits non-zero in an off sandbox",
+            how="every container is its own VM with its own kernel network stack. "
+            "NetMode.OFF runs it with '--network none': loopback only, no route, no DNS, "
+            "no host. NetMode.FULL attaches the 'default' vmnet NAT network. An "
+            "'--internal' network is host-only (the VM reaches every service listening on "
+            "the host), so it is never used for OFF",
+            probe="$ test -z \"$(ls /sys/class/net | grep -Ev '^(lo|eth0)$')\"",
         ),
         "I5": InvariantEntry(
-            how="no --volume/--mount/--ssh flags, no published sockets, --cap-drop ALL and a "
-            "read-only root filesystem on every container",
-            probe="the mount table shows no writable host path and no container socket exists",
+            how="no --volume/--mount/--ssh/--publish/--publish-socket/--virtualization "
+            "flags, --cap-drop ALL (effective capabilities are empty, root included) and a "
+            "read-only root on every container; no container-runtime socket exists in the guest",
+            probe="$ ! grep -q ' virtiofs ' /proc/mounts && grep -Eq '^CapEff:[[:space:]]*0+$' "
+            "/proc/self/status && test ! -S /var/run/docker.sock && test ! -S /run/docker.sock",
         ),
         "I6": InvariantEntry(
-            how="the init process and every exec run as the non-root run_as_user; task images "
-            "must not ship sudo",
-            probe="id -u is not 0 and sudo -n true fails",
+            how="the init process and every exec run as the non-root run_as_user (--user); "
+            "the account must exist in the image (the CLI refuses an unknown user at start) "
+            "and task images must not ship sudo",
+            probe='$ test "$(id -u)" != 0 && ! sudo -n true 2>/dev/null',
         ),
         "I7": InvariantEntry(
-            how="cpu and memory are enforced with '--cpus' and '--memory' (and visible in the "
-            "guest cgroup); the CLI has no pids or disk quota for a container",
-            probe="cat /sys/fs/cgroup/cpu.max and memory.max match the requested resources",
+            how="'--cpus' sets the guest cgroup cpu.max to cpus x 100000 (the VM gets one "
+            "extra vCPU of overhead, so nproc reports cpus + 1); '--memory' sets memory.max "
+            "to exactly memory_mb (the VM's RAM is slightly larger). pids.max stays 'max' "
+            "and there is no disk quota",
+            probe='$ test "$(cat /sys/fs/cgroup/memory.max)" != max && '
+            "test \"$(cut -d' ' -f1 /sys/fs/cgroup/cpu.max)\" != max",
             waived=True,
-            reason="the container CLI sets cpu and memory limits but exposes no per-VM pids "
-            "or disk quota",
-            compensating="C-ISO-05 checks cpu and memory; the host keeps disk headroom and "
-            "the TTL sweep bounds the container lifetime",
+            reason="the container CLI enforces cpu and memory but has no pids limit and no "
+            "disk quota for a container",
+            compensating="each sandbox is its own VM, so pid exhaustion stays inside its own "
+            "guest kernel; every writable path is tmpfs charged to the memory cgroup (a write "
+            "past memory.max is OOM-killed), so writable storage is bounded by memory_mb; the "
+            "TTL sweep bounds the container lifetime",
             approved_by="evaluation lead",
             expires="2027-06-30",
         ),
         "I8": InvariantEntry(
-            how="the provider injects no evaluation identity: container names are neutral and "
-            "only spec.env (task environment) plus proxy settings reach an exec",
-            probe="env contains no TASK/BATCH/MODEL/EVAL-style names (runner-side env -i "
-            "whitelist on top)",
+            how="the provider injects no evaluation identity: only spec.env (task environment) "
+            "plus proxy settings reach an exec. The container name is also the guest "
+            "hostname, so name_prefix must stay neutral (default 'c-')",
+            probe="$ ! env | grep -Eq '^[A-Z_]*(TASK|BATCH|MODEL|EVAL)[A-Z_]*='",
         ),
         "I9": InvariantEntry(
             how="OCI images are referenced by digest in TemplateRef and run as "
-            "ref@sha256:...; the only credential allowed in a sandbox is the per-trial "
-            "gateway key, which the provider never injects",
-            probe="the image reference carries a sha256 digest; env scan shows no long-lived "
-            "credentials",
+            "ref@sha256:... (the CLI pulls and verifies that digest); the only credential "
+            "allowed in a sandbox is the per-trial gateway key, which the provider never injects",
+            probe="$ ! env | grep -Eiq '^[a-z_]*(api_key|secret|token|password)[a-z_]*='",
         ),
         "I10": InvariantEntry(
             how="verifier and judge roles are separate SandboxSpec roles scheduled to their "
@@ -114,8 +133,10 @@ def _entries() -> dict[str, InvariantEntry]:
         "I16": InvariantEntry(
             how="docs_whitelist/package_mirror are only offered when the provider config names "
             "an egress proxy and the policy carries via_proxy; the container then sits on an "
-            "internal network and reaches only the proxy, which logs URLs. Open networking "
-            "stays platform-logged",
+            "internal (host-only) network with no route off the host and is pointed at the "
+            "proxy, which logs URLs. A host-only network also exposes every other service "
+            "listening on the host's address there, so the proxy host must expose nothing "
+            "else on it. Open networking stays platform-logged",
             probe="the egress proxy's url.jsonl has one line per request; direct egress "
             "bypass is not offered",
         ),
