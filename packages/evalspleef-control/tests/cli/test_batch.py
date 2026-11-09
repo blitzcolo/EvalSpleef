@@ -99,7 +99,8 @@ def test_batch_run_and_report(
     assert len(data["cells"]) == 1
     cell = data["cells"][0]
     assert cell["trial_count"] == 1
-    assert cell["status"] in {"scored", "manual", "skip"}
+    # Only the manual-review queue is left, which is a result: the run above exited 0.
+    assert cell["status"] == "manual"
     # trial rows landed in the result store and replay as legal event history
     events_dir = Path(env).parent / "events"
     events_file = events_dir / "2026-11-b1.jsonl"

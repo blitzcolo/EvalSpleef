@@ -126,6 +126,8 @@ uv run spleef batch costs  $C --batch config/batch.yaml
 
 `batch run` checks the batch budget before each trial starts, retries infrastructure failures as new trial records, and leaves endpoints as `endpoint_policy.retire_after` says. Retire self-hosted endpoints explicitly with `spleef models retire` when a run is interrupted, so GPUs do not keep billing.
 
+`batch run` prints the report in every case, then exits 1 with one `error:` line when any runnable cell ended `Pending`: such a cell has no result because every trial of it ended `failed_infra` or `invalid` (the line counts the cells and their trials by state; `spleef trials list --batch-id <id>` shows why each failed). Cells in the manual-review queue (`Manual`), scored cells and skipped cells are results and keep the exit code 0. `batch report` and `batch plan` do not apply this check.
+
 ## 5. After the run
 
 - `spleef trials list --batch-id <id>`: state, validity and latest grade of every trial.

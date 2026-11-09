@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -34,7 +35,8 @@ from evalspleef.control.ledger import CostLedger
 from evalspleef.control.store.rows import GradeRow
 from evalspleef.control.taskpack import lint_task_pack_dir
 from evalspleef.core.batch import BatchGuardFailed
-from evalspleef.core.report import BatchReport, TrialResult
+from evalspleef.core.models import CellStatus
+from evalspleef.core.report import BatchReport, TrialResult, cell_id_for
 from evalspleef.spi.errors import SpleefError
 from evalspleef.spi.model import EndpointState, ModelSpec, TeardownMode
 
@@ -1360,7 +1362,12 @@ def batch_run(
     events_url: str | None = _EVENTS_OPT,
     state_dir: Path | None = _STATE_OPT,
 ) -> None:
-    """Run a frozen batch end to end and print the aggregate report."""
+    """Run a frozen batch end to end and print the aggregate report.
+
+    Exits 1 after printing the report when any runnable cell ended Pending, that is
+    every trial of it ended failed_infra or invalid. Scored cells, cells in the
+    manual-review queue and skipped cells do not fail the run.
+    """
     _run(
         _batch_run(
             models,
@@ -1492,8 +1499,35 @@ async def _batch_run(
                     fg=typer.colors.RED,
                     err=True,
                 )
-            return EXIT_DOMAIN
-        return EXIT_DOMAIN if moved else EXIT_SUCCESS
+        unfinished = _pending_cells_error(run_result.report)
+        if unfinished is not None:
+            raise DomainError(unfinished)
+        return EXIT_DOMAIN if moved or not projection.ok else EXIT_SUCCESS
+
+
+def _pending_cells_error(report: BatchReport) -> str | None:
+    """The failure line of a run that left runnable cells without a result, else None.
+
+    A Pending cell has no counted trial and none waiting for a human, so every trial of
+    it ended failed_infra or invalid. Scored, Manual (the review queue) and Skip cells
+    are results.
+    """
+    cells = report.build_cells()
+    pending = {cell.cell_id for cell in cells if cell.status == CellStatus.PENDING}
+    if not pending:
+        return None
+    runnable = sum(1 for cell in cells if cell.status != CellStatus.SKIP)
+    states = Counter(
+        str(trial.state)
+        for trial in report.trials
+        if cell_id_for(trial.task_id, trial.model, trial.shell) in pending
+    )
+    trials = ", ".join(f"{count} {state}" for state, count in sorted(states.items()))
+    return (
+        f"{len(pending)} of {runnable} runnable cell(s) ended Pending: their trials ended "
+        f"failed_infra or invalid ({trials}); see `spleef trials list --batch-id "
+        f"{report.batch_id}` for the reasons"
+    )
 
 
 _RELEASE_OPT = typer.Option(
