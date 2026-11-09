@@ -16,7 +16,9 @@ WORKDIR /workspace
 COPY pyproject.toml uv.lock ./
 COPY packages/ ./packages/
 
-RUN uv sync --frozen --no-dev --package evalspleef-egress
+# --no-editable: workspace members must be copied into the venv, because the runtime
+# stage does not carry /workspace/packages.
+RUN uv sync --frozen --no-dev --no-editable --package evalspleef-egress
 
 # --- Final Runtime Image ---
 FROM python:3.12-slim-bookworm AS runtime
