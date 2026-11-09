@@ -1,5 +1,7 @@
 # evalspleef-sbx-e2b-family
 
+> **Status: the `novita-sandbox` provider is discontinued (2026-11-09).** It, `novita-fake` and the env-gated `novita-live` target stay in the tree; the live run of 2026-11-08 (25 passed, 0 failed, 8 not applicable) is the last real-account evidence and will not be repeated. `e2b-selfhost` is not affected. See `PLAN.md`, section "Discontinued: Novita".
+
 Sandbox providers for the E2B family of sandbox platforms (TECH-DESIGN section 7.4.1):
 
 | Entry point (`evalspleef.sandbox_providers`) | Class | SDK |

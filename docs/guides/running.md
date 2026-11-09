@@ -39,7 +39,7 @@ uv run python scripts/build_templates.py --env logic-001 --env data-001 --env de
 One entry per model, immutable per `(slug, spec_version)`: bump `spec_version` on any change. `config/examples/models.yaml` is a commented example. The fields that matter most:
 
 - `source`: `vendor` (an API model) or `huggingface` (`repo`, a 40-hex `revision`, `access`, `token_ref`, `token_expires`).
-- `deployment.adapter` and `deployment.account` (an account in `providers.yaml`): `openai-compatible` for any OpenAI-style API, `beam-pod` for SGLang on Beam GPUs, `novita-dedicated` / `novita-serverless-gpu`, `vpc-vllm`.
+- `deployment.adapter` and `deployment.account` (an account in `providers.yaml`): `openai-compatible` for any OpenAI-style API, `beam-pod` for SGLang on Beam GPUs, `vpc-vllm`. `novita-dedicated` / `novita-serverless-gpu` are discontinued (2026-11-09): still in the tree, no longer verified.
 - `deployment.params`: adapter parameters. For self-hosted engines, name a preset instead of writing launch arguments by hand (below).
 - `pricing_ref`: `api:...`, `ref:...` or `assumed:...`. It sets the cost basis the leaderboard prints for the column; explicit prices go in `deployment.params.pricing` (USD per million tokens).
 - `roles`: `target`, `judge` and/or `user`. Judges must come from a different `family` than the models they grade.
@@ -77,7 +77,7 @@ At load time the preset is expanded into the parameters; the preset id and its d
 ### `providers.yaml`: accounts, sandbox carriers and routes
 
 - `model_accounts`: where each adapter connects, with `api_key_ref` as a SecretRef (`env://DEEPSEEK_API_KEY`, `vault://...`), never the key itself.
-- `sandbox_instances`: carriers (`docker`, `remote` for a host running `spleef-hostd`, `novita-sandbox`, `tart`, ...) and their limits.
+- `sandbox_instances`: carriers (`docker`, `remote` for a host running `spleef-hostd`, `novita-sandbox` (discontinued 2026-11-09), `tart`, ...) and their limits.
 - `routes`: which carriers a task may use, by OS and role, in order. Name real carriers only.
 - `gateway.internal_url`: the gateway data plane the runners call.
 

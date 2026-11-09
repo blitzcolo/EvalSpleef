@@ -6,6 +6,7 @@
 | 文档版本 | v3.0-draft |
 | 日期 | 2026-11-07 |
 | 状态 | 待评审 → 评审通过后冻结为开工基线 |
+| 变更说明 | 2026-11-09：Novita 相关需求已停用（discontinued）——`novita-dedicated`、`novita-serverless-gpu`、`novita-sandbox`，含 FR-SBX-04、M0 中的 Novita 项、AC-01 与 AC-03 中指名 Novita 的部分，不再排期、不再验证、不计入验收；代码保留，仍以 fake 跑测试。详见 `PLAN.md`「Discontinued: Novita」 |
 | 配套文档 | `TECH-DESIGN.md`（技术与实现方案，与本文同目录） |
 | 读者 | 评测负责人、平台工程师、模型接入/运维工程师、出题与标定人员 |
 | 自包含说明 | 本文不依赖仓库内其他文档。v2 中继承下来的契约（枚举、状态机、档位算法、隔离不变量、题包契约等）以**原文照录**的方式放在附录 A–E；正文只写 v3 新增与变更的需求，并以「见附录 X」指向照录原文 |
@@ -646,9 +647,9 @@ runtime:
 
 | # | 验收项 | 通过条件 |
 | --- | --- | --- |
-| AC-01 | HF 公开 / Gated / Private 三类模型各 1 个经 `novita-dedicated` 部署、探测、跑完一个小批次（3 题 × 1 epoch） | 三个 cell 均出分；`trial.versions` 中 HF revision、部署 ID、探测报告齐全 |
+| AC-01 | HF 公开 / Gated / Private 三类模型各 1 个经 `novita-dedicated` 部署（2026-11-09：Novita 已停用，部署路径改由 `beam-pod` 等承担，见 PLAN.md）、探测、跑完一个小批次（3 题 × 1 epoch） | 三个 cell 均出分；`trial.versions` 中 HF revision、部署 ID、探测报告齐全 |
 | AC-02 | 一个 OpenAI 兼容官方 API 模型与一个自部署模型同批 | 网关计费与预算强制生效；榜单标注口径 |
-| AC-03 | 同一 Linux 题在 `docker` 与 `novita-sandbox` 上 | 参考解全过、空 Agent 全失败、金丝雀零跨 trial 命中 |
+| AC-03 | 同一 Linux 题在 `docker` 与 `novita-sandbox` 上（2026-11-09：Novita 已停用，第二个真实载体待定，见 PLAN.md） | 参考解全过、空 Agent 全失败、金丝雀零跨 trial 命中 |
 | AC-04 | macOS 题在 Mac mini（Tart）上 2 路并发稳定 24 h | 无槽位泄漏；宿主断电/断网演练后 trial 正确作废重排 |
 | AC-05 | Windows 题在 Hyper-V 上跑通 | 流式输出、文件往返、用完销毁、预检全绿 |
 | AC-06 | conformance kit | 所有已上线适配器 100% 通过其能力范围内用例 |

@@ -8,8 +8,8 @@ An agentic LLM evaluation platform. It measures how much help (feedback levels F
 
 The platform owns its evaluation kernel and talks to the outside world through two provider interfaces (SPIs):
 
-- `ModelEndpointProvider`: where the model under test comes from (any OpenAI-compatible API, Novita Dedicated Endpoint, Novita Serverless GPU, Beam Pods, self-hosted vLLM).
-- `SandboxProvider`: where task workspaces and tools run (Docker, Novita Agent Sandbox, E2B self-host, Tart, Hyper-V, libvirt, and others).
+- `ModelEndpointProvider`: where the model under test comes from (any OpenAI-compatible API, Novita Dedicated Endpoint (discontinued), Novita Serverless GPU (discontinued), Beam Pods, self-hosted vLLM).
+- `SandboxProvider`: where task workspaces and tools run (Docker, Novita Agent Sandbox (discontinued), E2B self-host, Tart, Hyper-V, libvirt, and others).
 
 Vendor differences live only in adapters. The CLI is `spleef`.
 
@@ -98,7 +98,7 @@ Parallel agents must run tools with `uv run --frozen --no-sync <tool>` (or `.ven
 - A behavior change needs a check that can fail for the regression it names. Mock-call assertions, pinned constants and values re-derived from the output under test do not count.
 - No fixed sleeps or polling delays. Subscribe to the exact event or state change, then await it with a bounded timeout.
 - Mocks must keep the behavior they assert. Core integration tests use `evalspleef-testing` doubles; real-surface runs (local Docker, a local fake OpenAI-compatible server, real Postgres in compose) cover the paths that matter.
-- Adapters bound to hardware or credentials we do not have (Tart, Hyper-V, libvirt, apple-container, E2B self-host, Novita, Kubernetes, device pool) are tested with fakes of the transport (fake SDK, fake `subprocess`, recorded SSH sessions). Mark them "not verified on a real host" in `PLAN.md` and the package README; never claim otherwise.
+- Adapters bound to hardware or credentials we do not have (Tart, Hyper-V, libvirt, apple-container, E2B self-host, Novita (discontinued 2026-11-09, no longer verified), Kubernetes, device pool) are tested with fakes of the transport (fake SDK, fake `subprocess`, recorded SSH sessions). Mark them "not verified on a real host" in `PLAN.md` and the package README; never claim otherwise.
 - Never delete, skip or xfail a failing test to get green. Fix the cause or report it.
 - Do not write tests that pin prose, prompt wording or documentation text. Test machine-consumed values only.
 

@@ -37,7 +37,7 @@ sandbox_instances:
   #     cert_file: /etc/spleef/control.pem
   #     key_file: /etc/spleef/control-key.pem
   #   limits: {max_concurrency: 2}
-  # novita: # Novita Agent Sandbox (packages/adapters/evalspleef-sbx-e2b-family)
+  # novita: # Novita Agent Sandbox, discontinued 2026-11-09 (packages/adapters/evalspleef-sbx-e2b-family)
   #   adapter: novita-sandbox
   #   config: {api_key_ref: "env://NOVITA_API_KEY", region: us-dallas-nas-2}
   #   limits: {max_concurrency: 4}

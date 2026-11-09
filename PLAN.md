@@ -85,8 +85,8 @@ Every line below comes from a command run during this build, with the exit code 
 | # | Result | Evidence | Limits |
 | --- | --- | --- | --- |
 | 1 | met | `python3 scripts/lint_commit_msg.py --history` exits 0 (147 commits, 0 failing, before the commit that records it). Running `.githooks/commit-msg` on message files exits 1 for the criterion example `feat: M1 control plane`, for lowercase messages containing `M1`, `P2.1`, `P1` or `W07` (each reported as `matched ...`), for `phase 2`, the word milestone, a `Co-Authored-By` trailer and a session link, and exits 0 for a clean message. `core.hooksPath` is `.githooks` | The hook is client side; `--no-verify` is forbidden by AGENTS.md but not blocked technically |
-| 2 | met | `uv run --frozen --no-sync pytest`: 1883 passed, 1 skipped (the e2e test, selected with `-m e2e`), exit 0, 170 s (rerun on 2026-11-08 after the second fix round), including the PostgreSQL tests against a real `postgres:16` container. `ruff check .`, `ruff format --check .`, `mypy` (strict, 300 source files) and `lint-imports` (6 contracts kept) all exit 0. `uv lock --check` exits 0. All 131 reference tests are present by name: 129 in `evalspleef-core` (`check_repo.py --run` runs them: Ran 129 tests, OK) and the 2 Harbor mapping tests, which moved with their code to `evalspleef-harbor-bridge/tests/test_events.py` | Run with `--frozen --no-sync`, equivalent to `uv run` because the lock is current |
-| 3 | met | `python3 scripts/check_repo.py --run` exits 0: the core unit tests and the self-test of all ten packs on temporary copies | web-001 skips Playwright and runs its static contract only |
+| 2 | met | `uv run --frozen --no-sync pytest`: 1883 passed, 1 skipped (the e2e test, selected with `-m e2e`), exit 0, 170 s (rerun on 2026-11-08 after the second fix round; rerun on 2026-11-09 after the third round: 1907 passed, 4 skipped in 170 s, and the 4 e2e tests selected with `-m e2e` pass in 47 s; ruff check and format (532 files), mypy strict (301 source files), lint-imports (6 contracts kept), `uv lock --check` and the history lint (151 commits, 0 failing) all exit 0), including the PostgreSQL tests against a real `postgres:16` container. `ruff check .`, `ruff format --check .`, `mypy` (strict, 300 source files) and `lint-imports` (6 contracts kept) all exit 0. `uv lock --check` exits 0. All 131 reference tests are present by name: 129 in `evalspleef-core` (`check_repo.py --run` runs them: Ran 129 tests, OK) and the 2 Harbor mapping tests, which moved with their code to `evalspleef-harbor-bridge/tests/test_events.py` | Run with `--frozen --no-sync`, equivalent to `uv run` because the lock is current |
+| 3 | met | `python3 scripts/check_repo.py --run` exits 0: the core unit tests and the self-test of all ten packs on temporary copies (rerun on 2026-11-09 after the third round: exit 0) | web-001 skips Playwright and runs its static contract only |
 | 4 | met | `docs/evidence/gateway-curl.md`: a real `spleef-gateway` process driven with `curl -i`: chat with a trial key and a usage record, HTTP 429 `cost_cap` for an over-budget key, 401 for a revoked key, an Anthropic Messages tool round trip | The upstream is the in-repo fake server; no real vendor traffic |
 | 5 | met at command level, with a transport fake for the Novita-hosted call | `packages/evalspleef-control/tests/cli/test_models_assisted.py` (5 tests) drives the real `spleef models register`, `tickets`, `attach` and `list`: register leaves the endpoint `awaiting_operator` with an open ticket; attach to `https://fake-endpoint.novita.ai/v1` sends one `max_tokens=1` request, the probes run, the endpoint ends `ready` with a stored probe report and the ticket closes; non-Novita hosts are refused with no request and no state change; the model is never ready without an attach. Mutation check: ignoring the stored report fails the test. Register and probe against a real gateway process are in transcripts 02 and 03 of `docs/evidence/e2e-batch.md` | The adapter accepts only `https` hosts under `*.novita.ai`, so a loopback endpoint cannot be attached by the real adapter; that guard is deliberate and untouched. Not verified against a real Novita account |
 | 6 | met | 21 conformance targets, each run as `pytest --spleef-provider <target>`, all exit 0 with 0 failures; see the next table | Only `local-docker` and `remote-docker` are real. Every adapter fake is **not verified on a real host**. Not-applicable counts follow each target's declared capabilities |
@@ -97,7 +97,7 @@ Every line below comes from a command run during this build, with the exit code 
 
 | Target | Pass | Fail | Not applicable | Real or fake |
 | --- | --- | --- | --- | --- |
-| local-docker | 27 | 0 | 6 | real Docker daemon |
+| local-docker (rerun 2026-11-09 after the egress change) | 27 | 0 | 6 | real Docker daemon |
 | remote-docker (hostd, mutual-TLS gRPC on loopback, in front of the same Docker adapter) | 27 | 0 | 6 | real Docker daemon |
 | mock-sandbox | 24 | 0 | 9 | double |
 | remote-mock (hostd in front of the mock sandbox) | 24 | 0 | 9 | double behind a real transport |
@@ -126,12 +126,12 @@ Every line below comes from a command run during this build, with the exit code 
 | Local Docker sandbox (directly and through hostd), gateway process, control plane and `spleef` CLI, PostgreSQL store, task packs, canary injection and scan, grade computation | Run for real on this workstation |
 | Unified shell runner (`terminus`) | Run for real in the end-to-end batch, against the fake model server |
 | Native in-sandbox shells, Inspect runner | Stub executables only: not verified against the real Claude Code, Codex CLI, OpenCode or Inspect |
-| Egress proxy | Package tests only; it is not started in the end-to-end run |
+| Egress proxy | Run for real on 2026-11-09 in a Docker topology (`tests/egress_docker`: an internal network, a dual-homed proxy built from `deploy/docker/egress.Dockerfile`, two origin servers): the allowlisted host is served, the off-list host gets 403 with an audit line, a direct connection has no route, `off` and `full` are unchanged. Not started in the end-to-end batch; HTTPS to TLS upstreams and package-mirror rewriting inside containers are not verified |
 | Docker image templates | logic-001, data-001 and debug-001 built and checked locally; heavy toolchain, macOS and Windows images are not built |
 | Compose stack and Helm chart | `docker compose config` validates the compose file; the chart was checked structurally and never rendered by Helm |
 | Beam Pod model endpoint (`beam-pod`) | Run for real on 2026-11-08 (deploy, status, chat, gateway probe, Volume weights, long-context runs, terminate); multi-GPU layouts only against the fakes, because the workspace refuses multi-GPU containers |
 | Isolation preflight probes | Docker I1-I9 run as commands in real containers (adapter test and every e2e trial); other adapters' probes are described and waived |
-| Novita Dedicated and Serverless GPU, Novita Agent Sandbox, Hugging Face, E2B self-host, Tart, Hyper-V, libvirt, apple-container, Windows Sandbox, Kubernetes, device pool | Transport fakes only: **not verified on a real host or account** |
+| Novita Dedicated and Serverless GPU, Novita Agent Sandbox (all three discontinued 2026-11-09), Hugging Face, E2B self-host, Tart, Hyper-V, libvirt, apple-container, Windows Sandbox, Kubernetes, device pool | Transport fakes only: **not verified on a real host or account** |
 
 ## Known limits
 
@@ -140,6 +140,22 @@ The bridges this section used to list (the gateway's extra `ep_` prefix, prose i
 1. **Observer limit.** When a pack checker aborts early on an invalid answer, other items' violation codes look absent and pass. The trial still fails its hard gates and lands on tier F.
 2. **`agent_judge` items.** backend-001, macos-001 and video-001 still contain items no component decides, so those packs pause for a human. The packs are hash-locked content and need an author.
 3. **Described probes on the other adapters.** Only the Docker adapter's I1-I9 probes are `$ <command>`s; every other adapter still describes them, and the command line waives those loudly (warning plus `preflight.result` and freeze record entries). Each adapter needs its own commands, checked on its real carrier.
+
+## Discontinued: Novita (2026-11-09)
+
+The owner stopped all Novita work: the platform was hard to use and its GPU pools never had capacity ("Novita 不要管了，他家平台不好用"). Nothing was deleted; removal is a separate decision. What the label covers:
+
+| Piece | State |
+| --- | --- |
+| `evalspleef-model-novita` (`novita-dedicated`, `novita-serverless-gpu`) | discontinued; stays in the tree with its fake-backed tests and the `novita-dedicated-fake` and `novita-serverless-fake` conformance targets |
+| `novita-sandbox` in `evalspleef-sbx-e2b-family` | discontinued; `novita-fake` and the env-gated `novita-live` target stay. The live run of 2026-11-08 (25 passed, 0 failed, 8 not applicable) is the last real-account evidence and will not be repeated. `e2b-selfhost` is not affected |
+| Novita as an OpenAI-compatible upstream (LLM API) | not a target of any planned run; `openai-compatible` keeps working for every other vendor |
+| D10 (OCI image to Novita template mapping), Template Builder | code stays; no further work |
+| PRD items that name Novita: FR-SBX-04, the `novita-dedicated` first-priority deployment, the M0 list | no longer scheduled; the PRD and TECH-DESIGN headers record the change |
+| AC-01 | the deployment path moves to `beam-pod` (a gated model was served for real on 2026-11-08); the public and private cases and a batch on a self-served model are still open |
+| AC-03 (same Linux task on `docker` and `novita-sandbox`) | cannot be met as written; it needs a second real carrier. Open decision for the owner; apple-container and Tart are candidates on this workstation, neither tried yet |
+| AC-10 (reconcile a real Novita bill) | cannot be met; `spleef batch costs --novita-bill` stays as an importer that no real bill will exercise |
+| Open items that disappear | Novita GPU capacity, a batch on a Novita sandbox, Novita Serverless GPU serving |
 
 ## Spec conformance review (2026-11-08)
 
@@ -177,8 +193,8 @@ Everything from the review's unfinished list that could be fixed in code here is
 | Resume a paused trial into `running` | B.6 | sandboxes are destroyed when a trial ends; resuming needs sandbox retention for 30 minutes and a live agent session, which only the resident service can hold. A human decision (`spleef trials resolve`) and the timeout (`spleef trials expire-paused`) work today | with the service |
 | Pause dispatch while an endpoint sleeps | FR-MOD-06.2 | the cold-start wait is now kept out of the wall clock; pausing the queue needs endpoint state pushed to the scheduler | 2-3 days, with the service |
 | Anthropic Messages and OpenAI Responses upstream passthrough (D8) | FR-MOD-07.1 | the gateway converts every client protocol to chat completions upstream; passthrough needs per-protocol usage parsing, cost and budget accounting and stream relaying | 1 week |
-| OpenTelemetry spans around SPI calls, joined per trial | NFR-10 | `telemetry/tracing.py` exists; wiring touches every SPI call site and needs a collector in the deployment | 3-5 days |
-| Egress enforcement on Docker (internal network, proxy variables, firewall rule, gateway domain added automatically for in-sandbox shells) | TD 7.3, FR-SBX-03 | needs a network topology per trial and a proxy container in the run; only a network name is attached today | 1 week |
+| OpenTelemetry beyond the control plane: spans for the gateway, runners and hostd processes, OTLP over gRPC, a collector in the deployed stack | NFR-10 | the control plane's SPI calls are traced since 2026-11-09 (OTLP/HTTP, proven against a local collector); no other process is instrumented by that change | 2-3 days (estimate) |
+| Egress enforcement on Docker, what is left: the platform creating the internal network and the proxy per run, a firewall rule, the gateway domain added automatically for in-sandbox shells, HTTPS/TLS and mirror rewriting inside containers | TD 7.3, FR-SBX-03 | the adapter now exports the proxy variables and the topology is proven on real Docker (2026-11-09), but an operator still builds the network and the proxy by hand and nothing adds the gateway domain | 3-5 days (estimate) |
 | Multi-carrier template registry and cross-carrier fingerprint check; Tart and VHDX template builds | TD 7.6 | the registry maps OCI digests to Novita templates; Tart and VHDX need their own builders and hosts | 1-2 weeks plus hosts |
 | Judge calibration (kappa or alpha >= 0.70) and regrade agreement (>= 95%) as runnable tools | C.5, AC-09, NFR-01 | needs labelled calibration sets and a reviewer workflow | 1 week plus labelled data |
 | LoRA adapters on dedicated endpoints | FR-MOD-03.5 | P1 in the PRD; needs adapter support in each engine and the registry | 3-5 days |
@@ -192,7 +208,7 @@ Everything from the review's unfinished list that could be fixed in code here is
 | Native shells (Claude Code, Codex CLI, OpenCode) and Inspect run for real, with pinned versions in `trial.versions` | the tools installed in task images, and their accounts |
 | Harbor integration and AC-08 | a Harbor installation |
 | Tart with two macOS VMs for 24 h (AC-04), Hyper-V (AC-05), libvirt, apple-container, Kubernetes, device pool, E2B self-host | the hosts or clusters |
-| A batch on a Novita sandbox; Novita Dedicated and Serverless GPU serving | Novita GPU capacity (every product reported 0 available) |
+| Not pursued (Novita discontinued 2026-11-09): a batch on a Novita sandbox; Novita Dedicated and Serverless GPU serving | Novita GPU capacity (every product reported 0 available) |
 | AC-01 public and private Hugging Face models; a full batch on a self-served model | a private repo and GPU time |
 | Multi-GPU (TP2 and above) on Beam | Beam must enable multi-GPU containers for the workspace (`multi_gpu_enabled: false`, max_gpu_count 2, pools not permitted) |
 | Adapter onboarding drill (AC-07) | an engineer outside the core team |
@@ -205,13 +221,13 @@ Everything from the review's unfinished list that could be fixed in code here is
 | --- | --- |
 | AC-01 | partly: a gated Hugging Face model at a pinned revision was served for real on a Beam RTX 5090 (`beam-pod`) and probed through the gateway (10/14); no Novita GPU had capacity, the public and private cases and a batch on a self-served model have not run |
 | AC-02 | partly: gateway budgets proven with a fake upstream; every leaderboard column now carries its cost basis (`cost_bases`, end to end on real Docker) and the drill-down carries model source and revision; not run against a real priced vendor batch since |
-| AC-03 | partly: the Docker half runs for real; the Novita adapter passes conformance on the real account and packs now map to Novita templates (D10), but no batch has run on a Novita sandbox |
+| AC-03 | partly: the Docker half runs for real; the Novita adapter passes conformance on the real account and packs now map to Novita templates (D10), but no batch has run on a Novita sandbox, and none will: Novita is discontinued (2026-11-09), so the second real carrier for AC-03 is an open decision |
 | AC-04, AC-05 | not met: need a Mac mini with Tart and a Hyper-V host |
 | AC-06 | met for Docker and remote-over-Docker (real) and the five in-repo doubles; the other 14 targets pass against transport fakes written together with their adapters |
 | AC-07 | not met: needs an outside engineer |
 | AC-08 | not met: Harbor not installed |
 | AC-09 | not met: no calibration or regrade-agreement tooling |
-| AC-10 | partly: the ledger is booked per trial and `spleef batch costs --novita-bill` reconciles it; costs reach it only since aa24625, and no real Novita bill has been reconciled |
+| AC-10 | partly: the ledger is booked per trial and `spleef batch costs --novita-bill` reconciles it; costs reach it only since aa24625, and no real Novita bill has been reconciled (Novita discontinued 2026-11-09; none will be) |
 
 ## Fixes and real-surface runs (2026-11-08)
 
@@ -271,6 +287,18 @@ Everything from the review's unfinished list that could be fixed in code here is
 | Preflight probes: `$ <command>` runs in the sandbox; Docker I1-I9 are commands, checked in a real hardened container (and seen failing in an unhardened one); only described probes are waived | 8426fcf | real Docker, waiver test, mutations |
 | `spleef trials expire-paused`: trials paused for a human past 30 minutes become invalid | eca7c10 | runner scenario at 29 and 31 minutes |
 | C-LIFE-03 proves the TTL reclaim: no forced reap in the case; Docker's injector runs the real sweep | 507972a | mutation: the mock without its sweep fails |
+
+### Third round (2026-11-09)
+
+| Item | Regression check |
+| --- | --- |
+| The Docker adapter exports `HTTP(S)_PROXY` and `NO_PROXY` to the sandbox in `docs_whitelist` and `package_mirror`; a real-Docker topology (`tests/egress_docker`, 8 tests: internal network, dual-homed proxy, two origin servers) proves it | mutation: `_proxy_env` returning `{}` fails the allowlisted-host test (`assert None == 200`); mutation: proxied modes on the default bridge fails the no-route test; the local-docker conformance run stays 27 passed, 0 failed, 6 not applicable |
+| `deploy/docker/egress.Dockerfile` built an image that could not start (`ModuleNotFoundError: No module named 'evalspleef'`: editable workspace links, and a runtime stage without `/workspace`); fixed with `--no-editable` | the old line restored in a temp Dockerfile: build exit 0, `docker run ... --help` exit 1; a test asserts the shipped image, not the bind-mount fallback, ran the proxy |
+| Tracing is wired: the registry wraps every sandbox and endpoint provider, `configure_tracing()` installs an OTLP/HTTP SDK provider when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the CLI flushes at exit | e2e against a local collector: all 12 trials have create, exec, upload and destroy spans with `op`, `provider_instance` and `trial_id`; a run without the variable exports nothing; the unwrapped registry fails the unit test and yields 0 spans in the e2e; a wrapper without `name` fails with the `_BridgedProvider` AttributeError |
+| `TracedSandboxProvider` forwards `name` and `close()` | the forwarding unit test lists what the control plane reads |
+| New dependency `opentelemetry-exporter-otlp-proto-http` in `evalspleef-control` | `uv lock --check` exit 0 |
+
+Not verified in this round: HTTPS to TLS upstreams through the proxy, package-mirror rewriting inside containers, a non-local collector or OTLP over gRPC, and the other `OTEL_EXPORTER_OTLP_*` variables (headers, timeout). The egress and tracing e2e ran on this Mac's Docker Desktop, not on native Linux dockerd.
 
 ### Real surfaces
 

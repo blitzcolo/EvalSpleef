@@ -1,5 +1,7 @@
 # evalspleef-model-novita
 
+> **Status: discontinued (2026-11-09).** Novita is no longer a supported or verified target. The package stays in the tree with its fake-backed tests and conformance targets; no new work is planned and nothing here counts towards acceptance. The last live attempt (2026-11-08) created Serverless GPU endpoints that never got a worker because the pools reported 0 available GPUs. See `PLAN.md`, section "Discontinued: Novita".
+
 Model endpoint providers for Novita AI:
 
 | Entry point | Class | Mode | What it does |

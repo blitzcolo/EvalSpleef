@@ -6,6 +6,7 @@
 | 文档版本 | v3.0-draft |
 | 日期 | 2026-11-07 |
 | 状态 | 待评审 |
+| 变更说明 | 2026-11-09：Novita 相关设计（Dedicated Endpoint、Serverless GPU、Agent Sandbox）已停用（discontinued），代码保留、不再验证；详见 `PLAN.md`「Discontinued: Novita」 |
 | 配套文档 | `PRD.md`（需求规格，同目录）。本文中的「PRD §x / 附录 X」均指该文件 |
 | 自包含说明 | 不依赖仓库内其他文档；需要的契约原文已照录在 PRD 附录 A–E |
 | 标注约定 | 【已核实】= 已对照官方文档/源码（URL 见 §19）；【推断】= 工程推断，需 PoC 验证；【待核实】= 文档未说明或矛盾，需问供应商或实测 |
