@@ -7,7 +7,19 @@ name = "evalspleef-control"
 version = "0.1.0"
 description = "Control plane: registry, planner, scheduler, lease manager, endpoint manager, probe runner, cost ledger, event store, spleef CLI."
 requires-python = ">=3.12"
-dependencies = ["evalspleef-spi", "evalspleef-core", "pydantic>=2.9", "pyyaml>=6", "httpx>=0.27", "huggingface_hub>=0.26", "psycopg[binary,pool]>=3.2", "typer>=0.12", "opentelemetry-api>=1.27", "opentelemetry-sdk>=1.27"]
+dependencies = [
+    "evalspleef-spi",
+    "evalspleef-core",
+    "pydantic>=2.9",
+    "pyyaml>=6",
+    "httpx>=0.27",
+    "huggingface_hub>=0.26",
+    "psycopg[binary,pool]>=3.2",
+    "typer>=0.12",
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.2",
+]
 
 [project.scripts]
 spleef = "evalspleef.control.cli.app:main"

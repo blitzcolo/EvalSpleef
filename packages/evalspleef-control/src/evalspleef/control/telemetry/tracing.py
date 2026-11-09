@@ -106,7 +106,7 @@ def _download_bytes(local: Path) -> int | None:
 class _SpanMixin:
     """Span-lifecycle helpers shared by the traced wrappers."""
 
-    _tracer: Tracer
+    _tracer: Tracer | None
     _provider_instance: str | None
 
     def _start_span(self, op: str, *args: Any) -> AbstractContextManager[Any]:
@@ -116,7 +116,10 @@ class _SpanMixin:
         trial_id = _trial_id_of(*args)
         if trial_id is not None:
             attributes["trial_id"] = trial_id
-        return self._tracer.start_as_current_span(op, attributes=attributes)
+        # Resolved per call, not at wrap time: providers are wrapped when the registry is
+        # built, which may be before (or without) an SDK provider being installed.
+        active = self._tracer if self._tracer is not None else _default_tracer()
+        return active.start_as_current_span(op, attributes=attributes)
 
     @staticmethod
     def _record_result(span: Any, result: Any, *, extra: Mapping[str, Any] | None = None) -> None:
@@ -137,7 +140,7 @@ class TracedSandbox(_SpanMixin, Sandbox):
         provider_instance: str | None = None,
     ) -> None:
         self._inner = inner
-        self._tracer = tracer if tracer is not None else _default_tracer()
+        self._tracer = tracer
         self._provider_instance = (
             provider_instance if provider_instance is not None else _provider_instance(inner)
         )
@@ -211,8 +214,15 @@ class TracedSandboxProvider(_SpanMixin, SandboxProvider):
     def __init__(self, inner: SandboxProvider, *, tracer: Tracer | None = None) -> None:
         super().__init__(inner.instance, inner.config, inner.secrets)
         self._inner = inner
-        self._tracer = tracer if tracer is not None else _default_tracer()
+        self._tracer = tracer
         self._provider_instance = _provider_instance(inner)
+        self.name = inner.name  # the adapter name recorded in trial.versions
+
+    async def close(self) -> None:
+        """Release adapter resources; the wrapper must not hide the adapter's own close."""
+        close = getattr(self._inner, "close", None)
+        if close is not None:
+            await close()
 
     def capabilities(self) -> Any:
         with self._start_span("capabilities", self._inner):
@@ -257,7 +267,7 @@ class TracedEndpointProvider(_SpanMixin, ModelEndpointProvider):
     def __init__(self, inner: ModelEndpointProvider, *, tracer: Tracer | None = None) -> None:
         super().__init__(inner.account, inner.config, inner.secrets)
         self._inner = inner
-        self._tracer = tracer if tracer is not None else _default_tracer()
+        self._tracer = tracer
         self._provider_instance = _provider_instance(inner)
         self.name = inner.name
         self.management_mode = inner.management_mode

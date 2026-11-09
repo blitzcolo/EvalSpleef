@@ -92,6 +92,7 @@ from evalspleef.control.store import (
     migrate,
 )
 from evalspleef.control.taskpack import TaskPack, load_task_pack
+from evalspleef.control.telemetry import configure_tracing, flush_tracing
 from evalspleef.control.trial import ModelEndpoint, TrialRunner, TrialSetup
 from evalspleef.control.trial.prepare import PREFLIGHT_INVARIANTS
 from evalspleef.core.batch import BatchState
@@ -529,6 +530,8 @@ class AppContext:
         self.preflight_bridges: list[str] = []
 
     async def __aenter__(self) -> AppContext:
+        # Before any provider is built; a no-op unless an OTLP endpoint is configured.
+        configure_tracing(self._environ)
         self.settings.state_dir.mkdir(parents=True, exist_ok=True)
         self.db = await connect(self.settings.store_url)
         await migrate(self.db)
@@ -557,6 +560,8 @@ class AppContext:
                 close = getattr(provider, "close", None)
                 if close is not None:
                     await close()
+        # The CLI exits right after the command: export the batched spans now.
+        flush_tracing()
         await self.events.close()
         await self.db.close()
 

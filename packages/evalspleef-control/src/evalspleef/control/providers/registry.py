@@ -13,6 +13,7 @@ from evalspleef.control.config.providers import (
     ProvidersFileConfig,
     SandboxInstanceConfig,
 )
+from evalspleef.control.telemetry import traced_provider
 from evalspleef.spi.caps import OSFamily
 from evalspleef.spi.errors import SpleefError
 from evalspleef.spi.isolation import IsolationProfile
@@ -120,8 +121,12 @@ class ProviderRegistry:
                 f"installed (entry-point group {SANDBOX_PROVIDER_GROUP!r}); "
                 f"available: {sorted(self._sandbox_adapters)}"
             )
-        provider = adapter_cls(instance=name, config=dict(cfg.config), secrets=self._secrets)
-        return provider  # type: ignore[no-any-return]
+        provider: SandboxProvider = adapter_cls(
+            instance=name, config=dict(cfg.config), secrets=self._secrets
+        )
+        # Always traced (NFR-10): spans are a no-op until an SDK provider is installed, and
+        # wrapping unconditionally keeps the real wrapper chain under every e2e run.
+        return traced_provider(provider)
 
     def _instantiate_model_account(self, name: str) -> ModelEndpointProvider:
         account = self._config.model_accounts[name]
@@ -137,8 +142,10 @@ class ProviderRegistry:
             config["base_url"] = account.base_url
         if account.api_key_ref is not None:
             config["api_key_ref"] = account.api_key_ref
-        provider = adapter_cls(account=name, config=config, secrets=self._secrets)
-        return provider  # type: ignore[no-any-return]
+        provider: ModelEndpointProvider = adapter_cls(
+            account=name, config=config, secrets=self._secrets
+        )
+        return traced_provider(provider)
 
     # -- adapters ------------------------------------------------------------
 

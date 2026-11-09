@@ -16,6 +16,7 @@ from evalspleef.control.providers import (
     ProviderRegistry,
     RouteError,
 )
+from evalspleef.control.telemetry.tracing import TracedSandboxProvider
 from evalspleef.spi.caps import Arch, Isolation, NetMode, OSFamily
 from evalspleef.spi.isolation import IsolationProfile
 from evalspleef.spi.model import (
@@ -66,6 +67,8 @@ PROFILE = IsolationProfile(provider="fake", declared_isolation=Isolation.L2)
 
 class FakeSandboxAdapter(SandboxProvider):
     """Records constructor arguments; counts capability calls for cache tests."""
+
+    name = "fake-sandbox"
 
     def __init__(self, instance: str, config: Mapping[str, Any], secrets: Any) -> None:
         super().__init__(instance, config, secrets)
@@ -254,8 +257,10 @@ def test_capabilities_and_isolation_are_cached() -> None:
     second = registry.capabilities("novita-us-phx-1")
     assert first is second
     provider = registry.sandbox_instance("novita-us-phx-1")
-    assert isinstance(provider, FakeSandboxAdapter)
-    assert provider.capability_calls == 1
+    # the registry hands out the traced wrapper (NFR-10); the adapter sits behind it
+    assert isinstance(provider, TracedSandboxProvider)
+    assert isinstance(provider._inner, FakeSandboxAdapter)
+    assert provider._inner.capability_calls == 1
     assert registry.isolation_profile("novita-us-phx-1") is PROFILE
     assert registry.isolation_profile("novita-us-phx-1") is PROFILE
 
