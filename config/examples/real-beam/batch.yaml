@@ -1,0 +1,18 @@
+# batch.yaml for a real batch on a self-served model: Qwen3.8-27B NVFP4 on 2x RTX 5090 (Beam)
+# on three Linux packs, judged by Claude Sonnet 5.5 through the gateway.
+batch: 2026-11-b5 # 2026-11-b4 ran spec v2 (thinking on) and was stopped: every model call hit the gateway timeout
+models: [qwen38-27b-nvfp4-beam]
+shells:
+  unified: terminus
+  native: {}
+tasks:
+  include: [logic-001, data-001, debug-001]
+epochs: 2 # docs/03 9.9 ranks a cell only with >= 2 valid epochs
+budget:
+  max_total_usd: 50 # the token-priced trial spend; the GPU hours are bounded separately
+endpoint_policy:
+  warm_before_run: true
+  retire_after: terminate
+judges: [claude-sonnet-5-5]
+allow_single_judge_vendor: true # development run: one judge vendor (appendix C.5 wants two)
+pricing_table: "2026-11"

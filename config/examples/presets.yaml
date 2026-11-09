@@ -63,3 +63,50 @@ presets:
       native 262,144 tokens. The RTX 5090 has no NVLink, so the TP all-reduce crosses PCIe.
     verified:
       - {date: 2026-11-08, result: failed, summary: "Beam refused: multi-GPU containers are not enabled for this workspace"}
+
+  - id: qwen3.8-27b-uncensored-nvfp4/beam-rtx5090x2/sglang-tp2-kv1m
+    model: orcarouter/Qwen3.8-27B-Uncensored-NVFP4
+    revision: d350e02d82203d5bf07a1e203c997581f235f407
+    adapter: beam-pod
+    hardware: {provider: beam, gpu: RTX5090, gpu_count: 2, vram_gb_per_gpu: 32}
+    engine: sglang
+    engine_image: lmsysorg/sglang:latest@sha256:f832b5c39559c9caa900b22ad37c76fcce66470676855c42052102c537812f1f
+    engine_args: [--reasoning-parser, qwen3, --tool-call-parser, qwen3_coder,
+                  --mem-fraction-static, "0.93", --chunked-prefill-size, "2048",
+                  --disable-radix-cache, --disable-prefill-cuda-graph,
+                  --disable-custom-all-reduce, --tp-size, "2"]
+    context_length: 262144
+    max_concurrency: 4
+    deployment_params: {cpu: 8, memory: 48Gi, weights_volume: huggingface_models,
+                        hf_token_secret: HUGGINGFACE_TOKEN, keep_warm_s: 1800}
+    facts:
+      weights_gib: 23.02
+      native_context: 262144
+      kv_bytes_per_token_fp8: 32768
+      gdn_state_mib_per_request: 146.8
+      kv_tokens_estimated: 1080000
+    notes: >-
+      Sized for a KV pool of at least 1M tokens (docs/evidence/beam-1m-kv.md has the arithmetic).
+      Radix cache off: with it on, SGLang keeps several Gated DeltaNet state slots per running
+      request (about 1.8 GB per GPU for 4 requests) and the pool drops to about 1.0M; off, the
+      state cache holds exactly max_running_requests slots. Prefixes are recomputed every turn.
+      One request stays at the native 262,144 tokens. The two RTX 5090s have no peer access, so
+      custom all-reduce is off and NCCL carries the all-reduce over PCIe. Prefill CUDA graphs are off:
+      capturing them (up to 2048 tokens) with 1.4 GB free per GPU failed.
+    verified:
+      - date: 2026-11-09
+        result: failed
+        summary: >-
+          0.94 with prefill CUDA graphs on: KV pool 1,093,308 tokens (FP8, K and V 8.34 GB per GPU,
+          mamba cache 4 slots, 0.36 GB), weights 11.48 GB per GPU; the engine then died capturing
+          the prefill CUDA graphs (NCCL unhandled cuda error, 1.41 GB free).
+      - date: 2026-11-09
+        result: ok
+        evidence: docs/evidence/beam-1m-kv.md
+        summary: >-
+          These flags: KV pool 1,073,923 tokens (FP8, K and V 8.19 GB per GPU), ready about 110 s after
+          the container started (weights 5.1 s from the Volume). Four ~248K-token requests resident at
+          once: 1,006,884 KV tokens (94%), 4 running, no OOM, every needle found; c=1 248K TTFT 138.8 s.
+          Gateway probes 13/14 in non-thinking mode. Through the gateway: decode 61-65 tokens/s at c=1,
+          system decode 145 tokens/s at c=4 (saturation), prefill 2.5-2.6K tokens/s at 8-74K. Batch
+          2026-11-b5: data-001 and debug-001 Perfect, logic-001 A.

@@ -1,0 +1,37 @@
+# providers.yaml for a real batch on a self-served Beam model: the beam-pod account deploys the
+# SGLang Pod, Claude Sonnet 5.5 judges, local Docker runs the sandboxes. Keys are env://
+# references only; export them in the shell that runs the gateway and the CLI
+# (set -a; . ~/.config/evalspleef/secrets.env; set +a).
+model_accounts:
+  beam:
+    adapter: beam-pod
+    api_key_ref: env://BEAM_TOKEN
+    params:
+      image: "lmsysorg/sglang:latest@sha256:f832b5c39559c9caa900b22ad37c76fcce66470676855c42052102c537812f1f"
+      launch_timeout_s: 1200 # first image pull on a new node took 286 s; leave room
+  anthropic:
+    adapter: openai-compatible
+    base_url: https://api.anthropic.com/v1
+    api_key_ref: env://ANTHROPIC_API_KEY
+    params:
+      protocol: anthropic_messages # the gateway forwards to POST /v1/messages with x-api-key
+      default_params:
+        output_config: {effort: high} # Sonnet 5.5 default; stated so the batch records it
+        drop_params: [temperature, top_p, top_k] # Sonnet 5.5 answers 400 to sampling parameters
+
+sandbox_instances:
+  local-docker:
+    adapter: docker
+    config:
+      runtime: runc
+    limits:
+      max_concurrency: 4 # matches the engine's 4 running requests
+
+routes:
+  - when: {os: linux}
+    prefer: [local-docker]
+  - when: {role: verifier}
+    prefer: [local-docker]
+
+gateway:
+  internal_url: "${SPLEEF_GATEWAY_URL}"

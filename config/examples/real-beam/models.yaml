@@ -1,0 +1,65 @@
+# models.yaml for a real batch on a self-served model: orcarouter/Qwen3.8-27B-Uncensored-NVFP4
+# on 2x RTX 5090 (Beam Pod, SGLang TP2, KV pool sized for 1M tokens), judged by Claude Sonnet 5.5
+# through the gateway. The launch arguments come from the preset in ../presets.yaml.
+presets_file: ../presets.yaml
+models:
+  - slug: qwen38-27b-nvfp4-beam
+    spec_version: 3 # v1: first launch flags (prefill CUDA graphs on); v2: thinking on, see below
+    family: qwen
+    roles: [target]
+    source:
+      type: huggingface
+      repo: orcarouter/Qwen3.8-27B-Uncensored-NVFP4
+      revision: d350e02d82203d5bf07a1e203c997581f235f407
+      access: gated
+      token_ref: env://HF_TOKEN # preflight only; the weights Pod reads the Beam secret
+      token_expires: never # Hugging Face read tokens carry no expiry unless one was set
+    deployment:
+      adapter: beam-pod
+      account: beam
+      params:
+        preset: qwen3.8-27b-uncensored-nvfp4/beam-rtx5090x2/sglang-tp2-kv1m
+        mirror: false # the weights come from the Beam Volume at the pinned revision; a read token cannot create a mirror
+        # Non-thinking mode. In thinking mode an agent turn runs past 6.7K tokens (120 s at about 56
+        # tokens/s with 4 requests running), and the gateway's 120 s upstream read timeout cuts every
+        # non-streaming call (batch 2026-11-b4: all trials 504, runner crashed).
+        default_params: {chat_template_kwargs: {enable_thinking: false}}
+        # Beam serverless rates (beam.cloud/pricing, 2026-11-09): RTX 5090 1.09 USD/h per GPU,
+        # GPU-attached vCPU 0.18972 USD/h, RAM 0.0198 USD/GiB-h. 2 GPUs + 8 vCPU + 48 GiB =
+        # 2.18 + 1.518 + 0.950 = 4.65 USD/h for the container, 2.325 USD/h per GPU all-in.
+        price_per_gpu_hour_usd: 2.325
+        # Per-token prices the gateway books, from the container's hourly price at an assumed
+        # throughput (no per-token tariff exists for a rented GPU): decode 150 tokens/s across
+        # 4 running requests = 540K tokens/h -> 4.65 / 0.54 = 8.61 USD per million output
+        # tokens; prefill 4,300 tokens/s = 15.5M tokens/h -> 4.65 / 15.5 = 0.30 USD per
+        # million input tokens. docs/evidence/beam-1m-kv.md compares this with the measured
+        # throughput and the real bill.
+        pricing: {input_per_mtok: 0.30, output_per_mtok: 8.61}
+    declared_context_tokens: 131072 # probe P-09 bisects from here; the engine serves 262,144
+    declared_max_output_tokens: 32768
+    pricing_ref: "assumed:beam-rtx5090x2@2026-11"
+    license: other
+    owner: eval-dev
+
+  - slug: claude-sonnet-5-5
+    spec_version: 1
+    family: anthropic
+    roles: [judge]
+    source: {type: vendor, vendor: anthropic, model_id: claude-sonnet-5-5}
+    deployment:
+      adapter: openai-compatible
+      account: anthropic
+      params:
+        model: claude-sonnet-5-5
+        judge_max_tokens: 8192 # adaptive thinking spends output tokens before the verdict
+        judge_timeout_s: 180 # a high-effort verdict can take over a minute
+        pricing:
+          input_per_mtok: 2.00
+          output_per_mtok: 10.00
+          cached_per_mtok: 0.10 # cache read
+          cache_write_per_mtok: 2.50 # 5-minute cache write
+    declared_context_tokens: 131072
+    declared_max_output_tokens: 16384
+    pricing_ref: "api:anthropic@2026-11"
+    license: proprietary
+    owner: eval-dev
