@@ -252,6 +252,47 @@ class ProbeReportRow:
 
 
 @dataclass(frozen=True)
+class BenchmarkRow:
+    """One immutable inference benchmark of an endpoint (``endpoint_benchmark``)."""
+
+    bench_id: str
+    endpoint_id: str
+    created_at: str
+    plan: dict[str, Any]
+    facts: dict[str, Any]
+    """Hardware, engine and model facts of the endpoint when it was measured."""
+    result: dict[str, Any]
+    """The computed result document, a pure function of the raw samples."""
+    raw_path: str | None
+    raw_sha256: str
+
+    def params(self) -> tuple[Any, ...]:
+        return (
+            self.bench_id,
+            self.endpoint_id,
+            self.created_at,
+            _json_dumps(self.plan),
+            _json_dumps(self.facts),
+            _json_dumps(self.result),
+            self.raw_path,
+            self.raw_sha256,
+        )
+
+    @classmethod
+    def from_row(cls, row: Row) -> Self:
+        return cls(
+            bench_id=str(row["bench_id"]),
+            endpoint_id=str(row["endpoint_id"]),
+            created_at=str(row["created_at"]),
+            plan=dict(_json_loads(row["plan"], {})),
+            facts=dict(_json_loads(row["facts"], {})),
+            result=dict(_json_loads(row["result"], {})),
+            raw_path=_opt(row["raw_path"]),
+            raw_sha256=str(row["raw_sha256"]),
+        )
+
+
+@dataclass(frozen=True)
 class ProviderInstanceRow:
     """Capability declaration and archived isolation profile (``provider_instance``)."""
 

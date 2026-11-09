@@ -12,6 +12,7 @@ from __future__ import annotations
 from .db import INTEGRITY_ERRORS, Database
 from .rows import (
     ArtifactRow,
+    BenchmarkRow,
     CanaryRow,
     EndpointRow,
     EndpointTicketRow,
@@ -31,6 +32,7 @@ from .rows import (
 
 __all__ = [
     "ArtifactRepository",
+    "BenchmarkRepository",
     "CanaryRepository",
     "EndpointRepository",
     "EndpointTicketRepository",
@@ -263,6 +265,40 @@ class ProbeReportRepository:
             "SELECT * FROM probe_report WHERE endpoint_id = %s ORDER BY created_at", (endpoint_id,)
         )
         return [ProbeReportRow.from_row(row) for row in rows]
+
+
+class BenchmarkRepository:
+    """Immutable inference benchmarks; a batch release reads the latest per endpoint."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def insert(self, row: BenchmarkRow) -> None:
+        try:
+            await self._db.execute(
+                "INSERT INTO endpoint_benchmark (bench_id, endpoint_id, created_at, plan, facts, "
+                "result, raw_path, raw_sha256) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                row.params(),
+            )
+        except INTEGRITY_ERRORS as exc:
+            raise ValueError(f"benchmark {row.bench_id!r} already exists") from exc
+
+    async def get(self, bench_id: str) -> BenchmarkRow | None:
+        row = await self._db.fetch_one(
+            "SELECT * FROM endpoint_benchmark WHERE bench_id = %s", (bench_id,)
+        )
+        return BenchmarkRow.from_row(row) if row else None
+
+    async def list_by_endpoint(self, endpoint_id: str) -> list[BenchmarkRow]:
+        rows = await self._db.fetch(
+            "SELECT * FROM endpoint_benchmark WHERE endpoint_id = %s ORDER BY created_at, bench_id",
+            (endpoint_id,),
+        )
+        return [BenchmarkRow.from_row(row) for row in rows]
+
+    async def latest(self, endpoint_id: str) -> BenchmarkRow | None:
+        rows = await self.list_by_endpoint(endpoint_id)
+        return rows[-1] if rows else None
 
 
 class ProviderInstanceRepository:

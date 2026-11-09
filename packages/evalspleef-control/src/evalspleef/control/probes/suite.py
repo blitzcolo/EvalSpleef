@@ -11,12 +11,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import math
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
 
+from evalspleef.core.perf import RequestSample, level_metrics, set_metrics
 from evalspleef.spi.probe import ProbeCheck
 
 from . import fixtures as fx
@@ -25,7 +25,6 @@ from .client import (
     GatewayClient,
     ProbeResponseError,
     Reply,
-    StreamReply,
     as_dict,
     as_list,
 )
@@ -41,14 +40,6 @@ _TOO_LONG_STATUSES = (400, 413, 422)
 
 def _user(text: str) -> dict[str, Any]:
     return {"role": "user", "content": text}
-
-
-def _percentile(values: list[float], quantile: float) -> float:
-    """Nearest-rank percentile; 0.0 for an empty sample."""
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    return ordered[max(1, math.ceil(quantile * len(ordered))) - 1]
 
 
 def _tool_calls(reply: Reply) -> list[dict[str, Any]]:
@@ -474,52 +465,48 @@ class ProbeSuite:
             {"seed_deterministic": seed_ok, "stop_ok": stop_ok},
         )
 
-    async def _timed_stream(self, index: int) -> StreamReply | None:
-        try:
-            return await self._client.stream_chat(
-                self._body(
-                    [_user(f"Write a short sentence about the number {index}.")],
-                    temperature=0,
-                    max_tokens=self._cfg.throughput_max_tokens,
-                    stream=True,
-                    stream_options={"include_usage": True},
-                )
-            )
-        except (httpx.HTTPError, ProbeResponseError):
-            return None
-
     async def _p12(self) -> ProbeCheck:
+        """TTFT and decode speed at each concurrency, from the same samples as a benchmark.
+
+        ``throughput`` keeps the capability keys (``tps`` is per-request decode tok/s,
+        1 / TPOT); ``perf`` holds every figure of :mod:`evalspleef.core.perf` per level.
+        """
         throughput: dict[str, dict[str, float]] = {}
+        perf: dict[str, dict[str, Any]] = {}
         errors = 0
         for concurrency in self._cfg.throughput_concurrency:
             gate = asyncio.Semaphore(concurrency)
 
-            async def one(index: int, gate: asyncio.Semaphore = gate) -> StreamReply | None:
+            async def one(index: int, gate: asyncio.Semaphore = gate) -> RequestSample:
                 async with gate:
-                    return await self._timed_stream(index)
+                    return await self._client.stream_sample(
+                        self._body(
+                            [_user(f"Write a short sentence about the number {index}.")],
+                            temperature=0,
+                            max_tokens=self._cfg.throughput_max_tokens,
+                            stream=True,
+                            stream_options={"include_usage": True},
+                        )
+                    )
 
-            replies = await asyncio.gather(*(one(i) for i in range(self._cfg.throughput_requests)))
-            good = [r for r in replies if r is not None and r.ok and r.done]
-            errors += len(replies) - len(good)
-            ttfts = [r.ttft_s if r.ttft_s is not None else r.latency_s for r in good]
-            rates: list[float] = []
-            for reply in good:
-                tokens = reply.usage.get("completion_tokens")
-                count = tokens if isinstance(tokens, int) else reply.delta_chunks
-                generation_s = reply.latency_s - (reply.ttft_s or 0.0)
-                span = generation_s if generation_s > 0 else reply.latency_s
-                rates.append(count / span if span > 0 else 0.0)
+            samples = await asyncio.gather(*(one(i) for i in range(self._cfg.throughput_requests)))
+            errors += sum(1 for sample in samples if not sample.ok)
+            requests = set_metrics(samples)
             throughput[str(concurrency)] = {
-                "ttft_p50": _percentile(ttfts, 0.50),
-                "ttft_p95": _percentile(ttfts, 0.95),
-                "tps_p50": _percentile(rates, 0.50),
-                "tps_p95": _percentile(rates, 0.95),
+                "ttft_p50": requests.ttft_s.p50 or 0.0,
+                "ttft_p95": requests.ttft_s.p95 or 0.0,
+                "tps_p50": requests.decode_tok_s.p50 or 0.0,
+                "tps_p95": requests.decode_tok_s.p95 or 0.0,
+            }
+            perf[str(concurrency)] = {
+                "requests": requests.to_dict(),
+                "level": level_metrics(samples, concurrency=concurrency).to_dict(),
             }
         return ProbeCheck(
             "P-12",
             errors == 0,
             f"{errors} failed requests" if errors else "all throughput requests succeeded",
-            {"throughput": throughput, "errors": errors},
+            {"throughput": throughput, "errors": errors, "perf": perf},
         )
 
     # -- P-13 .. P-15 -------------------------------------------------------------------

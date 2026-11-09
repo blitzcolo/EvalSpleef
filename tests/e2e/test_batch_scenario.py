@@ -130,6 +130,28 @@ def test_full_batch_on_local_docker(e2e: Any) -> None:
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.count("probes") == 3
 
+    # -- 3b. benchmark the reference agent's endpoint through the real gateway ----------
+    result = harness.run_cli(
+        "models-bench",
+        "models",
+        "bench",
+        "--model",
+        REF_MODEL,
+        "--shape",
+        "64x8",
+        "--repeats",
+        "2",
+        "--concurrency",
+        "1,2",
+        "--requests-per-worker",
+        "2",
+        "--seed",
+        "5",
+        *harness.options(with_batch=False),
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert "Single request (concurrency 1, unique prefixes)" in result.stdout
+
     # -- 4. plan, freeze -----------------------------------------------------------
     result = harness.run_cli("batch-plan", "batch", "plan", *harness.options())
     assert result.returncode == 0, result.stderr[-2000:]
@@ -220,6 +242,25 @@ def test_full_batch_on_local_docker(e2e: Any) -> None:
     costs = json.loads((release / "costs.json").read_text(encoding="utf-8"))
     assert {kind["kind"] for kind in costs["kinds"]} == {"tokens", "gpu", "sandbox", "infra"}
     assert (release / "leaderboard.md").is_file() and (release / "judges.json").is_file()
+    # Inference performance (perf.json): the benchmark's streamed requests carry TTFT and
+    # E2E, recomputable from the raw samples the release points at.
+    perf = json.loads((release / "perf.json").read_text(encoding="utf-8"))
+    (REPORTS / "perf.json").write_text(json.dumps(perf, indent=2, sort_keys=True), encoding="utf-8")
+    assert "## Inference performance" in (release / "leaderboard.md").read_text(encoding="utf-8")
+    perf_endpoints = perf["endpoints"]
+    assert len(perf_endpoints) == 2
+    (ref_endpoint,) = [name for name in perf_endpoints if REF_MODEL in name]
+    bench = perf_endpoints[ref_endpoint]["benchmark"]
+    assert bench is not None
+    single = bench["result"]["single"][0]["metrics"]
+    assert single["ok"] == single["with_ttft"] == single["e2e_s"]["n"] == 2
+    assert 0 < single["ttft_s"]["p50"] <= single["e2e_s"]["p50"]
+    raw = json.loads(Path(bench["raw_path"]).read_text(encoding="utf-8"))
+    bench_usage = harness.gateway.admin_json(f"/admin/usage?trial_id={raw['gateway_trial_id']}")
+    assert isinstance(bench_usage, list) and len(bench_usage) == len(raw["samples"]) == 8
+    for record in bench_usage:  # the real gateway timed every streamed request itself
+        assert record["ttft_ms"] is not None and record["e2e_ms"] is not None
+        assert 0 <= record["ttft_ms"] <= record["e2e_ms"]
     trials_of_cell: dict[str, list[str]] = {}
     for trial_id in grades:
         parts = parse_trial_id(trial_id)
@@ -288,6 +329,16 @@ def test_full_batch_on_local_docker(e2e: Any) -> None:
         usage_by_trial[trial_id] = records
     (REPORTS / "gateway" / "usage.json").write_text(
         json.dumps(usage_by_trial, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    # The release's in-batch figures count exactly the gateway's records of the batch: every
+    # request has an E2E time; only streamed requests have a TTFT (the shells do not stream).
+    batch_records = [record for records in usage_by_trial.values() for record in records]
+    assert all(record["e2e_ms"] is not None for record in batch_records)
+    in_batch = [entry["in_batch"] for entry in perf_endpoints.values()]
+    assert sum(item["requests"] for item in in_batch) == len(batch_records)
+    assert sum(item["with_e2e"] for item in in_batch) == len(batch_records)
+    assert sum(item["with_ttft"] for item in in_batch) == sum(
+        1 for record in batch_records if record["ttft_ms"] is not None
     )
     for trial_id, records in usage_by_trial.items():
         gateway_input = sum(int(record["input_tokens"]) for record in records)

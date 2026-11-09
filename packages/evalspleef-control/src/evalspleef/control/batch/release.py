@@ -13,15 +13,19 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from evalspleef.core.events import EventEnvelope, EventType
+from evalspleef.core.perf import ObservedRequest, observed_metrics
 from evalspleef.core.report import BatchReport
 from evalspleef.spi.model import ModelSpec
 
+from ..bench.record import API_NOTE, SELF_SERVED_NOTE
+from ..bench.report import bench_markdown, facts_line, observed_markdown
 from ..ledger import ReconcileReport
-from ..store.rows import GradeRow, ProbeReportRow, TrialRow
+from ..store.rows import BenchmarkRow, GradeRow, ProbeReportRow, TrialRow
 
 __all__ = ["ReleaseInputs", "build_release"]
 
@@ -37,12 +41,16 @@ class ReleaseInputs:
     models: Mapping[str, ModelSpec]
     judges: Sequence[str]
     costs: ReconcileReport | None
+    benchmarks: Mapping[str, BenchmarkRow] = field(default_factory=dict)
+    """Endpoint id -> the benchmark the release reports (the latest stored)."""
 
 
 def build_release(inputs: ReleaseInputs) -> dict[str, str]:
     """File name -> content of every release artifact."""
+    perf = _perf(inputs)
     return {
-        "leaderboard.md": inputs.report.to_markdown(),
+        "leaderboard.md": inputs.report.to_markdown() + _perf_markdown(perf),
+        "perf.json": _json(perf),
         "drilldown.json": _json(_drilldown(inputs)),
         "versions.json": _json(_versions(inputs)),
         "probes.json": _json(_probes(inputs)),
@@ -207,3 +215,144 @@ def _costs(inputs: ReleaseInputs) -> dict[str, Any]:
             for kind in inputs.costs.kinds
         ],
     }
+
+
+# -- inference performance ------------------------------------------------------------------
+
+_IN_BATCH_LABEL = "observed over the batch's busy windows, not saturated"
+
+
+def _seconds(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) / 1000.0
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _observed(item: Mapping[str, Any]) -> ObservedRequest | None:
+    """One ``agent.step`` gateway request in seconds; ``None`` without a usable timestamp."""
+    try:
+        t_end = datetime.fromisoformat(str(item.get("ts"))).timestamp()
+    except ValueError:
+        return None
+    return ObservedRequest(
+        t_end=t_end,
+        e2e_s=_seconds(item.get("e2e_ms")),
+        ttft_s=_seconds(item.get("ttft_ms")),
+        tpot_s=_seconds(item.get("tpot_ms")),
+        itl_mean_s=_seconds(item.get("itl_mean_ms")),
+        itl_p95_s=_seconds(item.get("itl_p95_ms")),
+        itl_max_s=_seconds(item.get("itl_max_ms")),
+        itl_count=_count(item.get("itl_count")),
+        input_tokens=_count(item.get("input_tokens")),
+        cached_tokens=_count(item.get("cached_tokens")),
+        output_tokens=_count(item.get("output_tokens")),
+        ok=item.get("status_code") == 200,
+    )
+
+
+def _batch_requests(
+    inputs: ReleaseInputs,
+) -> tuple[dict[str, list[ObservedRequest]], dict[str, str]]:
+    """Endpoint -> observed requests, and endpoint -> a trial that called it."""
+    requests: dict[str, list[ObservedRequest]] = {}
+    trial_of: dict[str, str] = {}
+    for event in inputs.events:
+        if event.type is not EventType.AGENT_STEP or not event.payload:
+            continue
+        for item in event.payload.get("gateway_requests") or ():
+            if not isinstance(item, Mapping):
+                continue
+            endpoint = str(item.get("endpoint_id") or "")
+            observed = _observed(item)
+            if not endpoint or observed is None:
+                continue
+            requests.setdefault(endpoint, []).append(observed)
+            if event.trial_id:
+                trial_of.setdefault(endpoint, event.trial_id)
+    return requests, trial_of
+
+
+def _trial_facts(inputs: ReleaseInputs, trial_id: str | None) -> dict[str, Any]:
+    row = next((r for r in inputs.trials if r.trial_id == trial_id), None)
+    versions = _versions_of(row) if row is not None else {}
+    vendor = versions.get("model_source") == "vendor"
+    keys = ("model_source", "hf_repo", "hf_revision", "inference_engine", "gpu_type")
+    facts: dict[str, Any] = {key: versions.get(key) for key in keys if versions.get(key)}
+    facts.update(
+        {
+            "model_revision": versions.get("hf_revision"),
+            "deployment_adapter": versions.get("deployment_adapter"),
+            "gateway_version": versions.get("gateway_version"),
+            "serving": "api" if vendor else ("self-served" if versions else None),
+            "note": API_NOTE if vendor else (SELF_SERVED_NOTE if versions else None),
+        }
+    )
+    return facts
+
+
+def _perf(inputs: ReleaseInputs) -> dict[str, Any]:
+    """``perf.json``: per endpoint, its benchmark and the in-batch request distributions."""
+    requests, trial_of = _batch_requests(inputs)
+    frozen = (inputs.freeze or {}).get("probe_report_ids") or {}
+    endpoints = sorted({*map(str, frozen), *requests, *inputs.benchmarks})
+    out: dict[str, Any] = {}
+    for endpoint in endpoints:
+        bench = inputs.benchmarks.get(endpoint)
+        facts = (
+            dict(bench.facts) if bench is not None else _trial_facts(inputs, trial_of.get(endpoint))
+        )
+        out[endpoint] = {
+            "facts": facts,
+            "note": facts.get("note"),
+            "benchmark": (
+                {
+                    "bench_id": bench.bench_id,
+                    "created_at": bench.created_at,
+                    "raw_path": bench.raw_path,
+                    "raw_sha256": bench.raw_sha256,
+                    "result": dict(bench.result),
+                }
+                if bench is not None
+                else None
+            ),
+            "in_batch": {
+                "label": _IN_BATCH_LABEL,
+                **observed_metrics(requests.get(endpoint, [])),
+            },
+        }
+    return {
+        "batch_id": inputs.report.batch_id,
+        "definitions": "PLAN.md, Design: inference performance metrics in every report",
+        "endpoints": out,
+    }
+
+
+def _perf_markdown(perf: Mapping[str, Any]) -> str:
+    lines = [
+        "",
+        "## Inference performance",
+        "",
+        "TTFT: request received until the first chunk with generated text; ITL: gap between "
+        "consecutive generated-text chunks; TPOT: (t_last - t_first) / (output tokens - 1); "
+        "E2E: request received until the last chunk. Requests that were not streamed have no "
+        "TTFT, ITL or TPOT.",
+        "",
+    ]
+    for endpoint, entry in sorted((perf.get("endpoints") or {}).items()):
+        facts = entry.get("facts") or {}
+        lines += [f"### {endpoint}", "", facts_line(facts) + "."]
+        if entry.get("note"):
+            lines.append(f"Measured {entry['note']}.")
+        lines.append("")
+        bench = entry.get("benchmark")
+        if bench is None:
+            lines += ["No benchmark recorded for this endpoint (spleef models bench).", ""]
+        else:
+            lines += [f"Benchmark {bench['bench_id']} ({bench['created_at']}):", ""]
+            lines += bench_markdown(bench.get("result") or {})
+        lines += observed_markdown(entry.get("in_batch") or {})
+    return "\n".join(lines)

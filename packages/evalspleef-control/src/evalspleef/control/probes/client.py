@@ -14,6 +14,7 @@ from typing import Any, Self
 
 import httpx
 
+from evalspleef.core.perf import RequestSample
 from evalspleef.spi.errors import SpleefError
 from evalspleef.spi.gateway import COLD_START_HEADER
 
@@ -144,6 +145,32 @@ def _has_delta(chunk: Mapping[str, Any]) -> bool:
     return any(delta.get(key) for key in ("content", "reasoning_content", "tool_calls"))
 
 
+def _has_generated_text(chunk: Mapping[str, Any]) -> bool:
+    """The TTFT/ITL definition: a chunk whose delta carries content or reasoning text."""
+    for choice in as_list(chunk.get("choices")):
+        delta = as_dict(as_dict(choice).get("delta"))
+        if any(
+            isinstance(delta.get(key), str) and delta.get(key)
+            for key in ("content", "reasoning_content")
+        ):
+            return True
+    return False
+
+
+def _usage_tokens(usage: Mapping[str, Any]) -> tuple[int, int, int]:
+    """(input, cached, output) tokens of a chat usage object; reasoning is part of output."""
+
+    def number(value: object) -> int:
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    details = as_dict(usage.get("prompt_tokens_details"))
+    return (
+        number(usage.get("prompt_tokens")),
+        number(details.get("cached_tokens")),
+        number(usage.get("completion_tokens")),
+    )
+
+
 class GatewayClient:
     """Bearer-authenticated client for one gateway; use as an async context manager."""
 
@@ -199,6 +226,67 @@ class GatewayClient:
             body=_json_body(response),
             headers={key.lower(): value for key, value in response.headers.items()},
             latency_s=self._clock.now() - started,
+        )
+
+    async def stream_sample(
+        self, body: Mapping[str, Any], *, timeout_s: float | None = None
+    ) -> RequestSample:
+        """Send one streaming chat request and keep the raw timing record of it.
+
+        Every chunk carrying generated text is stamped on this client's clock as it arrives.
+        A transport failure, a non-200 answer, an error event or a stream without a usage
+        chunk is a failed sample (it stops a saturation sweep), never an exception.
+        """
+        started = self._clock.now()
+        chunk_times: list[float] = []
+        usage: dict[str, Any] = {}
+        error: str | None = None
+        try:
+            async with self._http.stream(
+                "POST", CHAT_PATH, json=dict(body), timeout=self._timeout(timeout_s)
+            ) as response:
+                if response.status_code != 200:
+                    raw = await response.aread()
+                    try:
+                        detail = _error_text(as_dict(json.loads(raw)))
+                    except ValueError:
+                        detail = raw.decode("utf-8", errors="replace")[:200]
+                    error = f"HTTP {response.status_code} {detail}".strip()
+                else:
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[len("data:") :].strip()
+                        if payload == "[DONE]":
+                            break
+                        arrived = self._clock.now()
+                        try:
+                            chunk = as_dict(json.loads(payload))
+                        except ValueError:
+                            error = f"malformed SSE frame: {payload[:80]!r}"
+                            break
+                        if chunk.get("error"):
+                            error = f"stream error: {_error_text(chunk)}"
+                            break
+                        if _has_generated_text(chunk):
+                            chunk_times.append(arrived)
+                        if isinstance(chunk.get("usage"), dict):
+                            usage = chunk["usage"]
+                    if error is None and not usage:
+                        error = "no usage chunk in the stream"
+        except httpx.HTTPError as exc:
+            error = f"{type(exc).__name__}: {exc}"[:300]
+        input_tokens, cached_tokens, output_tokens = _usage_tokens(usage)
+        return RequestSample(
+            t_start=started,
+            t_end=self._clock.now(),
+            chunk_times=tuple(chunk_times),
+            input_tokens=input_tokens,
+            cached_tokens=cached_tokens,
+            output_tokens=output_tokens,
+            ok=error is None,
+            streamed=True,
+            error=error,
         )
 
     async def stream_chat(

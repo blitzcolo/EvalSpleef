@@ -95,6 +95,13 @@ async def test_full_suite_measures_every_capability_through_the_gateway(
         assert set(stats) == {"ttft_p50", "ttft_p95", "tps_p50", "tps_p95"}
         assert stats["ttft_p95"] >= stats["ttft_p50"] >= 0.0
 
+    # P-12 records the benchmark figures per level from the same samples.
+    p12 = next(check for check in report.checks if check.probe_id == "P-12")
+    for level in ("1", "4", "16"):
+        figures = p12.data["perf"][level]
+        assert figures["requests"]["ok"] == figures["requests"]["with_ttft"] == 20
+        assert figures["level"]["concurrency"] == int(level)
+        assert figures["requests"]["e2e_s"]["n"] == 20
     # P-12 sent 3 x 20 streaming requests (plus the P-02 stream), all via the gateway.
     streamed = [r for r in stack.server.requests if r.body.get("stream")]
     assert len(streamed) == 1 + 3 * 20

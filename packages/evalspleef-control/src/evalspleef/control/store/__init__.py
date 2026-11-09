@@ -14,6 +14,7 @@ from .db import Database, PostgresDatabase, SqliteDatabase, connect
 from .migrations import migrate
 from .repos import (
     ArtifactRepository,
+    BenchmarkRepository,
     CanaryRepository,
     EndpointRepository,
     EndpointTicketRepository,
@@ -33,6 +34,7 @@ from .repos import (
 )
 from .rows import (
     ArtifactRow,
+    BenchmarkRow,
     CanaryRow,
     EndpointRow,
     EndpointTicketRow,
@@ -53,6 +55,8 @@ from .rows import (
 __all__ = [
     "ArtifactRepository",
     "ArtifactRow",
+    "BenchmarkRepository",
+    "BenchmarkRow",
     "CanaryRepository",
     "CanaryRow",
     "Database",

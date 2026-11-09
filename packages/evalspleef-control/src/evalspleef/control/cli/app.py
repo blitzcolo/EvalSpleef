@@ -1,6 +1,6 @@
 """The spleef CLI (PRD FR-OPS-01).
 
-Commands: ``config validate``; ``models register|attach|probe|warm|retire|list|tickets``;
+Commands: ``config validate``; ``models register|attach|probe|bench|warm|retire|list|tickets``;
 ``providers list|check|conformance``; ``hosts list|drain``; ``tasks lint``;
 ``batch plan|freeze|run|report``; ``gateway serve``.
 
@@ -15,6 +15,7 @@ import asyncio
 import fnmatch
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,20 @@ import typer
 from evalspleef.control.batch import BatchDriver, BatchRunResult, build_freeze_record, freeze_guards
 from evalspleef.control.batch.operations import OperationRefused, TrialOperations
 from evalspleef.control.batch.release import ReleaseInputs, build_release
+from evalspleef.control.bench import (
+    API_NOTE,
+    SELF_SERVED_NOTE,
+    BenchPlan,
+    BenchRunner,
+    MonotonicClock,
+    bench_id_for,
+    gateway_sampler,
+    hourly_price,
+    parse_shape,
+    raw_record,
+    save,
+)
+from evalspleef.control.bench.report import bench_markdown, facts_line
 from evalspleef.control.config import ConfigError
 from evalspleef.control.endpoints import make_endpoint_id, probe_failures
 from evalspleef.control.events import verify_projection
@@ -38,12 +53,13 @@ from evalspleef.core.batch import BatchGuardFailed
 from evalspleef.core.models import CellStatus
 from evalspleef.core.report import BatchReport, TrialResult, cell_id_for
 from evalspleef.spi.errors import SpleefError
-from evalspleef.spi.model import EndpointState, ModelSpec, TeardownMode
+from evalspleef.spi.model import EndpointState, HFSource, ModelSpec, TeardownMode, VendorSource
 
 from .context import (
     AppContext,
     Settings,
     StoredEndpointStates,
+    deployment_version_fields,
     ensure_resolved,
     load_models_config,
 )
@@ -497,6 +513,218 @@ async def _models_probe(
                 failed.append(f"{spec.slug} (required {', '.join(failures)} missing)")
         if failed:
             raise DomainError(f"probe failed: {'; '.join(failed)}")
+        return EXIT_SUCCESS
+
+
+_SHAPE_OPT = typer.Option(
+    ["2048x128"], "--shape", help="INPUTxOUTPUT tokens of the single-request phase"
+)
+_SWEEP_SHAPE_OPT = typer.Option(
+    [], "--sweep-shape", help="INPUTxOUTPUT tokens of the sweep (default: the first --shape)"
+)
+
+
+@models_app.command("bench")
+def models_bench(
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    tasks_dir: Path = _TASKS_OPT,
+    templates_registry: Path | None = _TEMPLATES_OPT,
+    store_url: str | None = _STORE_OPT,
+    events_url: str | None = _EVENTS_OPT,
+    state_dir: Path | None = _STATE_OPT,
+    model: list[str] = _MODEL_FILTER_OPT,
+    shape: list[str] = _SHAPE_OPT,
+    sweep_shape: list[str] = _SWEEP_SHAPE_OPT,
+    repeats: int = typer.Option(3, "--repeats", min=1, help="single requests per shape"),
+    concurrency: str = typer.Option(
+        "1,2,4,8,16", "--concurrency", help="rising sweep levels, comma separated"
+    ),
+    requests_per_worker: int = typer.Option(
+        4, "--requests-per-worker", min=1, help="requests each sweep worker sends back to back"
+    ),
+    seed: int | None = typer.Option(
+        None, "--seed", help="prompt seed (random when unset; always recorded)"
+    ),
+    price_per_hour: float | None = typer.Option(
+        None, "--price-per-hour", help="hourly price of the endpoint (default: models.yaml)"
+    ),
+    budget_usd: float = typer.Option(5.0, "--budget-usd", help="spend cap of the bench key"),
+    timeout_s: float = typer.Option(600.0, "--timeout", help="per-request timeout in seconds"),
+    ignore_eos: bool = typer.Option(
+        False, "--ignore-eos", help="ask the engine to ignore EOS (self-served engines)"
+    ),
+    as_json: bool = _JSON_OPT,
+) -> None:
+    """Measure TTFT, ITL, TPOT, E2E and throughput through the gateway; store the raw samples."""
+    try:
+        levels = tuple(int(part) for part in concurrency.split(",") if part.strip())
+        plan_template = BenchPlan(
+            shapes=tuple(parse_shape(text) for text in shape),
+            seed=seed if seed is not None else secrets.randbits(31),
+            single_repeats=repeats,
+            sweep_shapes=tuple(parse_shape(text) for text in sweep_shape),
+            concurrency=levels,
+            requests_per_worker=requests_per_worker,
+            request_timeout_s=timeout_s,
+            ignore_eos=ignore_eos,
+        )
+    except ValueError as exc:
+        typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_USAGE) from None
+    _run(
+        _models_bench(
+            models,
+            providers,
+            tasks_dir,
+            templates_registry,
+            store_url,
+            events_url,
+            state_dir,
+            model,
+            plan_template,
+            price_per_hour,
+            budget_usd,
+            as_json,
+        )
+    )
+
+
+_BENCHABLE = frozenset(
+    {EndpointState.READY, EndpointState.WARM, EndpointState.SLEEPING, EndpointState.DEGRADED}
+)
+"""Endpoint states with a published gateway route."""
+
+
+def _bench_facts(
+    spec: ModelSpec,
+    observed: Mapping[str, Any],
+    gateway_version: str,
+    price_per_hour: float | None,
+) -> dict[str, Any]:
+    """Hardware, engine and model facts of the endpoint at measurement time."""
+    params = spec.deployment.params
+    source = spec.source
+    hf = source if isinstance(source, HFSource) else None
+    return {
+        "model": f"{spec.slug}@{spec.spec_version}",
+        "serving": "self-served" if hf else "api",
+        "note": SELF_SERVED_NOTE if hf else API_NOTE,
+        "model_source": "huggingface" if hf else "vendor",
+        "hf_repo": hf.repo if hf else None,
+        "model_revision": hf.revision if hf else None,
+        "vendor_model_id": source.model_id if isinstance(source, VendorSource) else None,
+        "deployment_adapter": spec.deployment.adapter,
+        **deployment_version_fields(spec, observed),
+        "gpu_count": params.get("gpu_count"),
+        "quantization": params.get("quantization"),
+        "engine_extra_args": params.get("engine_extra_args"),
+        "context_length": params.get("context_length"),
+        "max_concurrency": params.get("max_concurrency"),
+        "kv_pool_tokens": observed.get("kv_pool_tokens"),
+        "gateway_version": gateway_version,
+        "price_per_hour_usd": price_per_hour,
+    }
+
+
+async def _models_bench(
+    models: Path,
+    providers: Path,
+    tasks_dir: Path,
+    templates_registry: Path | None,
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    model: Sequence[str],
+    plan: BenchPlan,
+    price_per_hour: float | None,
+    budget_usd: float,
+    as_json: bool,
+) -> int:
+    from datetime import UTC, datetime
+
+    from evalspleef.control.probes import SystemClock
+
+    settings = _settings(
+        models, providers, None, tasks_dir, templates_registry, store_url, events_url, state_dir
+    )
+    async with AppContext(settings) as ctx:
+        _check_account_urls(ctx)
+        admin = ctx.gateway_admin()
+        gateway_version = await admin.version()
+        documents: list[dict[str, Any]] = []
+        empty: list[str] = []
+        for spec in await _registered_specs(ctx, model):
+            endpoint_id = make_endpoint_id(spec)
+            row = await ctx.endpoints.get(endpoint_id)
+            if row is None:
+                raise DomainError(f"{spec.slug}: no endpoint {endpoint_id}; register it first")
+            if EndpointState(row.state) not in _BENCHABLE:
+                raise DomainError(
+                    f"{spec.slug}: endpoint {endpoint_id} is {row.state}; the gateway route is "
+                    "published when the probe passes, run 'spleef models probe' first"
+                )
+            price = price_per_hour if price_per_hour is not None else hourly_price(spec)
+            created_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            bench_id = bench_id_for(endpoint_id, created_at, plan.seed)
+
+            def progress(shape: Any, level: Any, slug: str = spec.slug) -> None:
+                typer.echo(
+                    f"{slug} {shape.label()} c={level.concurrency}: "
+                    f"{level.ok}/{level.requests} ok, system decode "
+                    f"{level.system_decode_tok_s or 0.0:.1f} tok/s",
+                    err=True,
+                )
+
+            gateway_trial_id = f"bench-{bench_id}"
+            async with gateway_sampler(
+                admin,
+                gateway_url=ctx.gateway_data_url(),
+                endpoint_id=endpoint_id,
+                trial_id=gateway_trial_id,
+                plan=plan,
+                budget_usd=budget_usd,
+                clock=MonotonicClock(),
+                wall_clock=SystemClock(),
+            ) as sampler:
+                samples = await BenchRunner(
+                    plan, sampler, model_name=endpoint_id, on_level=progress
+                ).run()
+            raw = raw_record(
+                bench_id=bench_id,
+                endpoint_id=endpoint_id,
+                model_name=endpoint_id,
+                created_at=created_at,
+                plan=plan,
+                samples=samples,
+                price_per_hour_usd=price,
+                clock="time.perf_counter (client, through the gateway)",
+                gateway_trial_id=gateway_trial_id,
+            )
+            saved = await save(
+                raw,
+                facts=_bench_facts(spec, row.observed, gateway_version, price),
+                directory=ctx.settings.state_dir / "bench",
+                repository=ctx.benchmarks,
+            )
+            document = saved.row.result
+            documents.append(document)
+            if not any(s.sample.ok for s in samples if s.phase == "single"):
+                empty.append(spec.slug)
+            if not as_json:
+                typer.echo(f"## {spec.slug} ({endpoint_id}) benchmark {bench_id}")
+                typer.echo("")
+                typer.echo(facts_line(document["facts"]) + ".")
+                typer.echo(str(document["facts"].get("note")) + ".")
+                typer.echo("")
+                for line in bench_markdown(document):
+                    typer.echo(line)
+            typer.echo(f"raw samples: {saved.raw_path}", err=True)
+            typer.echo(f"result: {saved.result_path}", err=True)
+        if as_json:
+            _emit_json(documents)
+        if empty:
+            raise DomainError(f"no single request succeeded: {', '.join(empty)}")
         return EXIT_SUCCESS
 
 
@@ -1687,6 +1915,11 @@ async def _batch_report(
                 probe_row = await ctx.probe_reports.get(str(report_id))
                 if probe_row is not None:
                     probe_rows[str(report_id)] = probe_row
+            benchmarks = {}
+            for endpoint_id in sorted(map(str, (freeze or {}).get("probe_report_ids") or {})):
+                benchmark = await ctx.benchmarks.latest(endpoint_id)
+                if benchmark is not None:
+                    benchmarks[endpoint_id] = benchmark
             specs = {}
             for slug in sorted({row.model for row in trial_rows}):
                 spec = await ctx.model_registry.get_latest(slug)
@@ -1703,6 +1936,7 @@ async def _batch_report(
                     models=specs,
                     judges=list(batch_config.judges),
                     costs=await CostLedger(ctx.db).reconcile(batch_id),
+                    benchmarks=benchmarks,
                 )
             )
             for path in _write_release(release, files):

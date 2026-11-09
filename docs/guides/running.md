@@ -117,6 +117,7 @@ C="--models config/models.yaml --providers config/providers.yaml --tasks-dir tas
 uv run spleef config validate $C --batch config/batch.yaml
 uv run spleef models register $C       # deploys self-hosted endpoints, registers gateway routes
 uv run spleef models probe $C          # P-01..P-15 capability probes, frozen into the batch
+uv run spleef models bench $C          # inference performance through the gateway (below)
 uv run spleef batch plan  $C --batch config/batch.yaml   # cells, skips with reasons, worst-case spend
 uv run spleef batch freeze $C --batch config/batch.yaml  # guards and the version matrix
 uv run spleef batch run    $C --batch config/batch.yaml  # every trial, then the leaderboard
@@ -128,6 +129,23 @@ uv run spleef batch costs  $C --batch config/batch.yaml
 
 `batch run` prints the report in every case, then exits 1 with one `error:` line when any runnable cell ended `Pending`: such a cell has no result because every trial of it ended `failed_infra` or `invalid` (the line counts the cells and their trials by state; `spleef trials list --batch-id <id>` shows why each failed). Cells in the manual-review queue (`Manual`), scored cells and skipped cells are results and keep the exit code 0. `batch report` and `batch plan` do not apply this check.
 
+### Inference performance: `spleef models bench`
+
+Every inference run records TTFT, ITL, TPOT, end-to-end time and throughput (definitions: PLAN.md, "Design: inference performance metrics in every report"). Two sources feed the report:
+
+- The gateway times every request passively on its monotonic clock (`ttft_ms`, `e2e_ms`, `tpot_ms`, ITL mean, p95, max and count in each usage record and `request.completed` event; `GET /admin/usage` returns them). A request that was not streamed has an end-to-end time only; TTFT, ITL and TPOT stay null, never estimated.
+- `spleef models bench` (after `models probe`, which publishes the endpoint's gateway route) measures an endpoint actively through the gateway with streaming requests: single requests at concurrency 1 with unique prompt prefixes, then a closed-loop concurrency sweep that stops when the next level adds less than 5% system decode throughput or requests fail.
+
+```bash
+uv run spleef models bench $C --model my-model \
+  --shape 1024x256 --shape 8192x256 --sweep-shape 2048x256 \
+  --repeats 3 --concurrency 1,2,4,8,16 --requests-per-worker 4 --budget-usd 5
+```
+
+Prompts come from a seeded generator (`--seed`, random when unset, always recorded). The raw per-request samples go to `$SPLEEF_STATE_DIR/bench/<bench_id>/raw.json`, next to `result.json`; every number in the result is recomputed from the raw file (`evalspleef.core.perf.bench_result`), and the store keeps the result, the raw file's sha256 and the endpoint's hardware and version facts. The cost per million output tokens at saturation is the hourly price (`price_per_hour_usd`, or `price_per_gpu_hour_usd` x `gpu_count` in the deployment params, or `--price-per-hour`) / (system decode tok/s x 0.0036). Hosted APIs are measured the same way and labelled as including the network path and provider-side queueing. Long-context and thinking-mode routes can raise the gateway's 120 s upstream read timeout with the route default `upstream_timeout_s` (in `default_params`; never sent upstream).
+
+`batch report --release` writes `perf.json` and appends an "Inference performance" section to `leaderboard.md`: per endpoint, the latest benchmark (single-request table, sweep table, saturation and cost) and the in-batch distributions from the gateway's per-request fields (TTFT, TPOT, ITL and E2E percentiles, how many requests had a TTFT, and throughput over the batch's busy time, labelled observed, not saturated).
+
 ## 5. After the run
 
 - `spleef trials list --batch-id <id>`: state, validity and latest grade of every trial.
@@ -135,4 +153,4 @@ uv run spleef batch costs  $C --batch config/batch.yaml
 - `spleef trials expire-paused --batch-id <id>`: invalidate trials paused for a human for more than 30 minutes.
 - `spleef trials regrade` / `spleef trials void`: regrade from the recorded inputs, or take a trial out of the leaderboard.
 
-Results live in the store (`SPLEEF_STORE_URL`), the append-only event log (`SPLEEF_EVENTS_URL`, the authority every row is projected from), and the release directory written by `batch report --release`: leaderboard, cell drill-down, version manifest, probe summary, judge panel and costs.
+Results live in the store (`SPLEEF_STORE_URL`), the append-only event log (`SPLEEF_EVENTS_URL`, the authority every row is projected from), and the release directory written by `batch report --release`: leaderboard, cell drill-down, version manifest, probe summary, inference performance, judge panel and costs.

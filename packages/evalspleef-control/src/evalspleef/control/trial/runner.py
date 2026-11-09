@@ -57,7 +57,7 @@ from evalspleef.core.state import (
 )
 from evalspleef.core.versions import TrialVersions
 from evalspleef.spi.errors import EndpointMismatch, SpleefError
-from evalspleef.spi.gateway import ENDPOINT_MISMATCH, GatewayAdmin, TrialKey
+from evalspleef.spi.gateway import ENDPOINT_MISMATCH, GatewayAdmin, TrialKey, UsageRecord
 from evalspleef.spi.runner import AgentRunner, RunnerBudget, ShellTurn, StopReason, TokenUsage
 
 from ..batch.executor import LeaseHandle, PlannedTrial, TrialExecutor, TrialLeases, TrialOutcome
@@ -307,6 +307,8 @@ class _TrialRun:
         self.transcript: list[str] = []
         self.stop_reasons: list[str] = []
         self.usage_records_seen = 0
+        self.turn_requests: list[dict[str, Any]] = []
+        """Timing fields of the gateway requests of the current turn, for its agent.step event."""
         self.heartbeats = False
         """Whether the agent runner sends liveness beats (``AgentRunner.watch_heartbeat``)."""
         self.last_beat = 0.0
@@ -653,6 +655,7 @@ class _TrialRun:
             )
         fresh = records[self.usage_records_seen :]
         self.usage_records_seen = len(records)
+        self.turn_requests = [_request_timing(record) for record in fresh]
         cold_ms = sum(record.cold_start_ms for record in fresh)
         if cold_ms > 0:
             await self._emit(
@@ -704,8 +707,12 @@ class _TrialRun:
                 "cost_usd": turn.cost_usd,
                 "duration_s": turn.duration_s,
                 "trace_ref": turn.trace_ref,
+                # The gateway's per-request timing, so a release can recompute in-batch
+                # latency distributions from the event log alone.
+                "gateway_requests": self.turn_requests,
             },
         )
+        self.turn_requests = []
 
     async def _threshold_events(self) -> None:
         usage, budget = self.usage, self.budget
@@ -1261,3 +1268,25 @@ class _TrialRun:
             ],
         }
         return record.to_dict()
+
+
+_REQUEST_TIMING_FIELDS = (
+    "ts",
+    "endpoint_id",
+    "status_code",
+    "input_tokens",
+    "cached_tokens",
+    "output_tokens",
+    "ttft_ms",
+    "e2e_ms",
+    "tpot_ms",
+    "itl_mean_ms",
+    "itl_p95_ms",
+    "itl_max_ms",
+    "itl_count",
+)
+
+
+def _request_timing(record: UsageRecord) -> dict[str, Any]:
+    """The fields of one gateway usage record that the release's performance section reads."""
+    return {name: getattr(record, name) for name in _REQUEST_TIMING_FIELDS}
