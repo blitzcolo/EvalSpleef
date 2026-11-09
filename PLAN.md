@@ -20,6 +20,9 @@ Deliver the whole platform described in `PRD.md` and `TECH-DESIGN.md` as a uv wo
 | Inspect AI | Invoked as an external CLI by the inspect runner, not a workspace dependency | Same lock-conflict reason |
 | SPI refinements | `ModelEndpointProvider.upstream()` returns the dataclass `UpstreamRoute` instead of a free-form dict. Added `GatewayAdmin`, `HFAccessChecker`, `SecretResolver`, `ModelCapabilities`/`ProbeReport`, `IsolationProfile`, `match_requirements`, `admit_model` to `evalspleef-spi`. Added package `evalspleef-testing` | Keeps vendor shapes out of the contract; gives every lane shared doubles |
 | Python | 3.12 (uv-managed); the reference core also passes on newer interpreters | PRD fixes 3.12 |
+| `agent_judge` items | Build a real `agent_judge` component; the hash-locked pack items stay as authored. Design in "Design: the `agent_judge` component" | User answer 2026-11-09 |
+| Missing packs | rust, game and ios packs are a backlog item, not part of the current work | User answer 2026-11-09 |
+| Pack images | Stay local for now; pushing them to a registry and pinning digests is a backlog item | User answer 2026-11-09 |
 
 ## Build order
 
@@ -139,7 +142,7 @@ Every line below comes from a command run during this build, with the exit code 
 The bridges this section used to list (the gateway's extra `ep_` prefix, prose isolation probes waived on Docker, the `/tmp/verify` verifier root, duplicated hash-lock path resolution, the mock sandbox in the example routes, the missing `docs/guides/`, Hyper-V double pid files in the host `/tmp`) are fixed; see "Second fix round" below. What remains:
 
 1. **Observer limit.** When a pack checker aborts early on an invalid answer, other items' violation codes look absent and pass. The trial still fails its hard gates and lands on tier F.
-2. **`agent_judge` items.** backend-001, macos-001 and video-001 still contain items no component decides, so those packs pause for a human. The packs are hash-locked content and need an author.
+2. **`agent_judge` items.** backend-001, macos-001 and video-001 still contain items no component decides, so those packs pause for a human. Decision 2026-11-09: build the component (design in "Design: the `agent_judge` component"); the pack items stay as authored.
 3. **Described probes on the other adapters.** Only the Docker adapter's I1-I9 probes are `$ <command>`s; every other adapter still describes them, and the command line waives those loudly (warning plus `preflight.result` and freeze record entries). Each adapter needs its own commands, checked on its real carrier.
 
 ## Discontinued: Novita (2026-11-09)
@@ -199,7 +202,8 @@ Everything from the review's unfinished list that could be fixed in code here is
 | Multi-carrier template registry and cross-carrier fingerprint check; Tart and VHDX template builds | TD 7.6 | the registry maps OCI digests to Novita templates; Tart and VHDX need their own builders and hosts | 1-2 weeks plus hosts |
 | Judge calibration (kappa or alpha >= 0.70) and regrade agreement (>= 95%) as runnable tools | C.5, AC-09, NFR-01 | needs labelled calibration sets and a reviewer workflow | 1 week plus labelled data |
 | LoRA adapters on dedicated endpoints | FR-MOD-03.5 | P1 in the PRD; needs adapter support in each engine and the registry | 3-5 days |
-| Packs for the missing tracks (rust, ios, game) and replacing the `agent_judge` items of backend-001, macos-001, video-001 | appendix E.2, C | pack authoring, hash-locked content | days per pack |
+| `agent_judge` component: a judge agent that runs in a throw-away sandbox over a read-only copy of the artifact (decided 2026-11-09, design below) | PRD 11.1, 8.6; 03-grading 11.7 | `evaluator._cover_remaining_items` sends every `agent_judge` item to the manual queue as inconclusive, so backend-001, macos-001 and video-001 pause for a human | 1-1.5 weeks (estimate) |
+| Pack authoring for the missing tracks: rust and game (Linux), ios (needs Tart); see "Pack authoring backlog" | appendix E.1, E.2 | content work on hash-locked packs | days per pack |
 | Throughput and start-latency measurements | NFR-04, NFR-06 | needs the resident service and a realistic carrier mix | 2-3 days |
 
 **Needs an outside resource**
@@ -213,8 +217,97 @@ Everything from the review's unfinished list that could be fixed in code here is
 | AC-01 public and private Hugging Face models; a full batch on a self-served model | a private repo and GPU time |
 | Multi-GPU (TP2 and above) on Beam | Beam must enable multi-GPU containers for the workspace (`multi_gpu_enabled: false`, max_gpu_count 2, pools not permitted) |
 | Adapter onboarding drill (AC-07) | an engineer outside the core team |
-| Pin image digests in every pack (`TODO(pin-on-host)`) | the target registries |
+| Push the pack images to a registry and pin their digests in every pack (`TODO(pin-on-host)`). Decided 2026-11-09: images stay local for now (Docker uses its local build; the Apple Container store gets the same images through a `docker save` export in the parity test) | a registry choice (GHCR, Docker Hub or a private one) and push credentials |
 | Helm rendered by `helm`; compose smoke with every service | a cluster |
+
+### What can be done next (2026-11-09)
+
+Ordered by dependency. Estimates are rough, for one engineer who knows the code.
+
+| # | Item | Needs | Depends on | Estimate |
+| --- | --- | --- | --- | --- |
+| 1 | Conformance kit cases for uploading a directory as a mount point, for a verifier-role sandbox writing under the verify root, and a per-network observer address for C-NET-01; every fake follows. Both Docker and Apple adapters had these defects and the kit could not see them | nothing | nothing | 1-2 days |
+| 2 | Carrier-neutral template builder and cross-carrier fingerprint check (D10): registry keyed by (environment, carrier), `spleef templates build --carrier`, a fingerprint comparison; removes the test-only Docker-to-Apple image export | nothing | 1 | 3-5 days |
+| 3 | Contract gaps found on 2026-11-09: `execution_environment` in the closed `result.versions` schema; admission reserves 0 tokens when only `max_completion_tokens` is set; tools and `tool_choice` on the Anthropic upstream and Anthropic-flavoured clients with tools (D8 remainder) | schema owner decision | nothing | 3-5 days |
+| 4 | Resident control-plane service (D11), the hub: ticket expiry (`expire_tickets` has no caller), reaping loop, pause-expiry timer, persisted batch state, alerts; then resume of a paused trial, dispatch pause while an endpoint sleeps, throughput and start-latency measurements (NFR-04/06) | nothing | nothing | 2-3 weeks |
+| 5 | Egress: the platform creates the internal network and proxy per run, adds the gateway domain for in-sandbox shells, HTTPS/TLS and mirror rewriting verified in containers | nothing | nothing | 3-5 days |
+| 6 | Native shells (Claude Code, Codex CLI, OpenCode) and Inspect run for real, with versions in `trial.versions` | task images with the CLIs; only `claude` is installed here | 5 (egress), 3 (D8) | 1 week |
+| 7 | OpenTelemetry beyond the control plane (gateway, runners, hostd) | nothing | 4 for a deployed collector | 2-3 days |
+| 8 | hostd dials out over one stream (D3) and `RemoteProvider.environment()` over gRPC; the other adapters implement `environment()` | nothing; real hosts only to verify | nothing | 1-2 weeks |
+| 9 | Judge calibration (kappa or alpha >= 0.70) and regrade agreement (>= 95%) tools (AC-09) | labelled calibration sets from you or reviewers | nothing | 3 days plus data |
+| 10 | AC-01: public and private Hugging Face cases and a full batch on a self-served Beam model (BEAM_TOKEN and HF_TOKEN are in the secrets file) | your OK for GPU spend | nothing | 1-2 days |
+| 11a | `agent_judge` component (design below, decided 2026-11-09) with the SPI pieces it needs: read-only uploads, declared writable paths, a `judge` lease role, and conformance cases for them | nothing | 1 (kit cases) | 1-1.5 weeks |
+| 11b | Pack authoring: rust and game packs on Linux, the ios pack waits for Tart; see "Pack authoring backlog" | pack authors; hash-locked content | nothing | days per pack |
+| 11c | Push the pack images to a registry and pin their digests (`TODO(pin-on-host)`); deferred by decision, images stay local | a registry choice and credentials | nothing | hours |
+| 12 | AC-04 (two macOS VMs for 24 hours on Tart), AC-05 (Hyper-V), libvirt, E2B self-host, Kubernetes, device pool, Harbor (AC-08), a priced real batch with a bill to reconcile (AC-02, AC-10), Beam multi-GPU, AC-07 | hosts, installs you approve, bills or accounts | varies | varies |
+| 13 | LoRA adapters on dedicated endpoints (PRD P1) | a carrier that serves them | 10 | 3-5 days |
+| 14 | Manual review of the two logic-001 cells of batch 2026-11-b3 | a human reviewer | nothing | hours |
+| 15 | Last vendor names in neutral packages: the Novita bill import in the ledger (changing its CLI option changes the PRD) and the gateway's `anthropic` client-flavour literal; template kinds for tart, hyperv, libvirt, device-pool and hostd's codec | a PRD decision for the bill option | nothing | 1-2 days |
+
+### Design: the `agent_judge` component (decided 2026-11-09, not built)
+
+PRD 11.1 allows one `agent_judge` in a panel for checks where the judge has to run commands, and 03-grading 8.6 and 11.7 require it to run in a read-only overlay with an `allowed_tools` whitelist. Today `evaluator._cover_remaining_items` turns every such item into `inconclusive` for the manual queue. The user chose to build the component instead of rewriting the items.
+
+**What the 8 existing items need** (read from the packs):
+
+| Items | Needs |
+| --- | --- |
+| backend-001 R11 (every error response has the same structure) | start the produced service and trigger 3 error cases: execution |
+| video-001 R9 (rendering is reproducible) | render the same frame twice and compare sha256: execution |
+| backend-001 R13 (standard library only), three macos-001 items (draw-call batching, per-frame blocking wait, comments on the optimisation points) | read the diff and imports: reading only |
+| video-001 R8 (consistent look over 6 frames) | look at extracted frames: needs images and a multimodal judge |
+| macos-001 dependency item (`make bench` succeeds) | execution on macOS: waits for Tart |
+
+web-001 labels its Playwright defects `agent_judge`, but they are hidden tests the verifier runs as scripts, so they are not affected.
+
+**The concern.** The judge must be able to run the product, write helper scripts and temporary files, and run Python for computing and checking. It must not change the artifact (the evidence that other judges, regrade and audits rely on), leave state that affects another item or sample, reach the network or a credential, or be steered by what the artifact says (adversary T2 in 04-isolation).
+
+**Design.**
+
+1. **The judge loop runs in the control plane, the sandbox is only an execution target.** Model calls go through the gateway with a batch-level judge key, as `JudgeStep` does today; commands run through `Sandbox.exec`. No credential of any kind enters the judge sandbox (AGENTS.md rule 5) and no runner is installed in it. Tool use is a JSON action per turn over plain chat completions, so any judge route that passes P-01, P-02, P-07 and P-14 can serve it and nothing waits for tool-call support on the Anthropic upstream (D8).
+2. **A fresh sandbox per (trial, item, sample)**, role `judge`, from the pack's own template (the verifier's image, so the toolchain the artifact needs exists). Network off with loopback only, so the judge can start the service and call `127.0.0.1`; unprivileged user; the pack's resource limits.
+3. **Three zones in that sandbox.**
+   - `/artifact`: the sanitised workspace export, read-only. Root-owned without write bits, the judge user is a different unprivileged user, the root filesystem is read-only. Never modified. Backstop: the platform hashes the tree after the sample; a mismatch discards the sample as invalid and counts an injection attempt (03-grading 8.6).
+   - `/work`: a tmpfs pre-filled with a copy of `/artifact` and the judge's working directory. Building, starting the service, running `make`, writing databases or `.pyc` files all happen here. This is overlay behaviour by explicit copy, which works on every carrier without mounting overlayfs (needs CAP_SYS_ADMIN, which sandboxes drop). Cost: one copy per sample, bounded by the export's `file_count` and `total_bytes`.
+   - `/tmp`: a tmpfs for helper scripts and temporary output, for example `python3 /tmp/check.py`.
+   Both tmpfs count against the sandbox memory limit (observed on Apple Container), so a runaway write is bounded. Everything under `/work` and `/tmp` disappears with the sandbox; only the verdict and the transcript leave it.
+4. **The operating system enforces, the instructions do not.** The tool whitelist (`run`, `read_file`, `list_dir`, `write_file` to `/work` and `/tmp` only, `submit_verdict`) shapes what the model can ask for. What actually holds is read-only files, an unprivileged user, no network, no credentials and resource limits. Command strings are never filtered (`python -c` can do anything) and the prompt is never the control.
+5. **Limits per sample** (defaults, tune on real packs): 12 steps, 60 s per command, 300 s wall clock, 8 KB of output per command (head and tail kept), the judge key's own token budget.
+6. **Injection handling (03-grading 8.6).** Everything that comes back from the sandbox is wrapped as data with the standing rule that it is not an instruction; the final answer is JSON-Schema constrained (`pass`, `fail` or `inconclusive`, plus the step numbers it relies on); guard=penalize; injection attempts are counted. Every sample starts in a new sandbox, so a compromised sample carries nothing over.
+7. **One panel implementation.** A full agent session is wrapped as the `complete(prompt)` of a judge client and handed to the existing `JudgePanel`, so k-sampling, retries, `inconclusive`, the family rule and vote aggregation stay in one place. `AgentJudgeStep` sits next to `JudgeStep` in `control/observe`; `core` stays pure and standard-library only.
+8. **Evidence and replay.** The transcript (each action, truncated output, output sha256, final verdict) is stored as an artifact referenced from the `judge.verdict` payload; no new event type, because enum spellings are frozen (PRD appendix A.2). Grading stays a pure function of recorded verdicts; regrade never re-runs a judge agent.
+9. **Failure (03-grading 11.8).** A sandbox that cannot be created, a loop that runs out of steps or time, or an invalid verdict makes that sample `inconclusive` with a reason; too many such samples send the item to the manual queue, like a chat judge.
+
+**SPI and adapter work, kept declarative.**
+
+- `SandboxRole` already includes `judge`; `LeaseRole` in `leases/manager.py` only has `agent` and `verifier`. Add `judge` and force the same network-off rule the verifier gets.
+- Do not add a third implicit role branch. The Apple adapter missed the verifier's `/verify` on 2026-11-09 because that behaviour lives as `if spec.role == "verifier"` inside each adapter. Instead, `SandboxSpec` declares its writable tmpfs paths and read-only upload paths explicitly, a capability says whether a carrier can honour them, and conformance cases every adapter must pass cover them (this is also backlog item 1). The verifier's `/verify` moves to the same mechanism afterwards.
+- Read-only against the sandbox user: the carrier must make an uploaded tree root-owned and not writable by the sandbox user. Candidates: an optional `Sandbox.upload(..., read_only=True)` behind a capability (`CapabilityNotSupported` when absent, AGENTS.md rule 2), or the declared path applied at creation. Recommendation: the upload flag, because the content only exists after create. To settle on both carriers while implementing: whether `exec` can run as root for the one `chown` and `chmod` step.
+- A carrier that cannot enforce this is rejected for `agent_judge` items at plan time with `PolicyNotEnforceable`, never degraded silently.
+
+**What will prove it** (real-Docker e2e on backend-001 plus the opt-in Apple Container parity test, with a scripted judge model):
+
+- a write to `/artifact` fails and the artifact hash is unchanged;
+- the same model writes and runs a Python helper in `/tmp`, starts the produced service in `/work`, calls it on loopback and submits a verdict that matches reference A (pass) and a broken artifact (fail);
+- outbound network fails and neither the environment nor the files hold a key;
+- a file left in `/tmp` by sample 1 is absent in sample 2;
+- an injection string in the artifact does not change the scripted verdict and is counted.
+
+Mutation proofs: make `/artifact` writable (the write test must fail); reuse one sandbox across samples (the isolation test must fail). The new SPI pieces get conformance cases on the fakes and on both real carriers.
+
+**Open points** (settled during implementation, none blocks starting): how the judge sees images for video-001 R8 (frames extracted into `/work` by the pack's render command, then a judge route that accepts images; the Anthropic upstream rejects images by design today, so R8 either waits for that or becomes an `llm_judge` item in a new pack version); k per agent sample (the spec says 5; cost is k times the items times one sandbox boot, whose time differs by carrier and has to be measured); the three macos-001 reading items can already run in a Linux judge sandbox, but the macos-001 pack itself still waits for Tart.
+
+### Pack authoring backlog
+
+All three are content work on hash-locked packs: files per PRD E.1 (`task.yaml`, `instruction.md`, `persona.md`, `rubric.yaml`, `defects.yaml`, two reference answers with different approaches, `answers/empty-agent.md`, `hidden-tests/run.sh` with a `--selftest` that passes both references and fails the empty agent, `canary.md`, `notes.md`), a declared `runtime.requirements`, and no edits to existing packs (`.gitattributes` disables line-ending normalisation under `tasks/`). Today there are 10 packs over 9 of the 12 tracks.
+
+| Pack | Track (PRD E.2) | What it needs | Blocker |
+| --- | --- | --- | --- |
+| rust-001 | engineering: desktop or CLI project, async | `cargo test` plus a window or CLI check, Xvfb screenshots and stdout, carrier `linux-container-xvfb`; a task image with the Rust toolchain and Xvfb | none beyond authoring and the image |
+| game-001 | platform: engine workflow, scripted acceptance | replay state comparison and a frame-rate floor, frame captures and state snapshots, carrier `linux-container`; the engine is the author's choice | an engine decision |
+| ios-001 | platform: SwiftUI plus a server | XCUITest and API tests, simulator screenshots, carrier `tart-macos` (Xcode and simulator) | Tart on a macOS host |
+
+Also on the backlog: finish the `TODO(run-on-host)` items the packs list in their `notes.md` once a carrier can run them. Example: web-001's `hidden-tests/run.sh` falls back to a static contract check when `@playwright/test` and Chromium are missing, so its interactive acceptance needs an image that has them.
 
 ### Acceptance criteria status
 
@@ -339,7 +432,18 @@ Defects this run exposed, fixed with regression tests: the run guide's `SPLEEF_G
 | AC-03 exposed two more adapter defects the conformance cases cannot see (a directory uploaded as `/workspace`; a writable `/verify` for verifier sandboxes), fixed with offline and live regression tests | `tests/e2e/test_carrier_parity.py` (opt-in `SPLEEF_E2E_APPLE_CONTAINER=1`): same grades on both carriers, clean canaries, per-carrier environment records |
 | Every trial and batch now records where it ran: `SandboxProvider.environment()` (host, runtime, guest facts in `spi/environment.py`, default "unreported"), guest facts measured inside each sandbox at provisioning, written to `trial.versions.execution_environment`, the batch freeze record and `release/versions.json`; implemented for Docker, the mock and apple-container | real-Docker e2e asserts host, runtime and guest kernel on every row; three mutations each fail their test |
 
-Open: the conformance kit has no case for uploading a directory as a mount point or for a verifier-role sandbox (both defects above lived in the Docker and Apple adapters), and C-NET-01 probes one address, which the old host-only mapping could satisfy; `spleef batch run` exits 0 when every trial is invalid; hostd `RemoteProvider` and the other adapters still report "unreported"; `schemas/trial.schema.json` keeps `result.versions` closed, so the environment lives in the event and `extensions`; the Apple store gets its images from a Docker export in the test, so the cross-carrier template fingerprint check and a carrier-neutral template builder (D10) are still missing.
+Open: the conformance kit has no case for uploading a directory as a mount point or for a verifier-role sandbox (both defects above lived in the Docker and Apple adapters), and C-NET-01 probes one address, which the old host-only mapping could satisfy; hostd `RemoteProvider` and the other adapters still report "unreported"; `schemas/trial.schema.json` keeps `result.versions` closed, so the environment lives in the event and `extensions`; the Apple store gets its images from a Docker export in the test, so the cross-carrier template fingerprint check and a carrier-neutral template builder (D10) are still missing.
+
+### Batch run exit code and a vendor-neutral control plane (2026-11-09)
+
+| Item | Regression check |
+| --- | --- |
+| `spleef batch run` still prints the report, then exits 1 with one `error:` line when any runnable cell ended Pending (every trial failed_infra or invalid). Manual-review, scored and skipped cells are results and do not fail the run. The rule is in the command help and `docs/guides/running.md` section 4 | `test_batch_run_exit.py`: an all-invalid run exits 1 with the report printed; mutation: the error is never raised, both tests fail |
+| Carriers declare which template kinds they boot (`SandboxCapabilities.template_kinds`, default `{"oci"}`), so control keeps no vendor table; the registry lookup uses the instance's declared kind | `test_carrier_templates.py`; mutations: an adapter stops declaring its kind, the lookup ignores declared kinds |
+| `EndpointHandle.external_ids["deployment_id"]` (`DEPLOYMENT_ID_KEY` in the SPI) is the neutral deployment id; the novita, beam and vpc-vllm adapters publish it, openai-compat has none; control reads only that key | adapter tests and `test_batch_run_and_report`; mutations: drop the key from beam or vpc-vllm |
+| An AST guard fails when a string literal or identifier in spi, core, control or gateway equals novita, e2b, anthropic, deepseek or beam; exemptions are listed by file and name and must still match something | `test_vendor_neutrality.py` over 146 files; mutation: putting the old vendor table back into `context.py` fails it |
+
+Still named in neutral packages, and exempted in the guard: the Novita bill import in the cost ledger (`--novita-bill`, from PRD FR-OPS-04 and AC-10) and the gateway's `"anthropic"` client-flavour literal. Open: move bill parsing behind a billing method of the model provider with a neutral `--bill FILE --account NAME` option; rename the gateway flavour to `anthropic_messages`; hostd's codec does not carry `template_kinds` yet; tart, hyperv, libvirt and device-pool should declare their kinds; endpoint rows stored before this change record `deployment_id` as null until they are registered again.
 
 ### Real surfaces
 
