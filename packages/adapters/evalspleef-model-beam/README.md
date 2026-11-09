@@ -69,7 +69,9 @@ Deployment params (`models.yaml` `deployment.params`): `gpu` (required, e.g. `RT
 `gpu_count`, `cpu` (8), `memory` (`32Gi`), `min_replicas`/`max_replicas` (1), `max_concurrency`
 (8, becomes `--max-running-requests`), `context_length` (declared context), `keep_warm_s` (1800;
 `-1` keeps containers until stopped), `engine_extra_args` (appended to the SGLang command),
-`beam_secrets` (workspace secrets injected as env), and the Volume keys above (`weights_volume`,
+`beam_secrets` (workspace secrets injected as env), `default_params` (request defaults the
+gateway route applies, e.g. `{chat_template_kwargs: {enable_thinking: false}}`; account config
+may set it too, the spec wins), and the Volume keys above (`weights_volume`,
 `weights_mount`, `hf_token_secret`, `fetch_cpu`, `fetch_memory`, `fetch_timeout_s`; account config
 may set `fetch_image`, `fetch_poll_s`, `rest_base`). Without a Volume a non-public model's HF
 token is resolved from `source.token_ref` and passed to the GPU Pod as `HF_TOKEN`; it is masked

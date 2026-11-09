@@ -161,7 +161,11 @@ class BeamPodProvider(ModelEndpointProvider):
     name = "beam-pod"
     management_mode = ManagementMode.API
     hf_checker: HFAccessChecker | None = None
-    """Assigned by the control plane after construction; ``validate`` fails without it."""
+    """Optional extra Hugging Face preflight inside ``validate``.
+
+    The endpoint manager resolves the revision and runs the preflight with its own checker
+    before it calls ``validate`` and assigns nothing here, so an unset checker is not a failure.
+    """
 
     def __init__(
         self,
@@ -319,15 +323,7 @@ class BeamPodProvider(ModelEndpointProvider):
             repo = source.mirror_repo or source.repo
             safe = bool(_REPO_PATH.match(repo)) and ".." not in repo.split("/")
             checks.append(("weights_path", safe, f"{repo!r} becomes the directory {weights[2]}"))
-        if self.hf_checker is None:
-            checks.append(
-                (
-                    "hf_checker_missing",
-                    False,
-                    "no HFAccessChecker injected; the control plane must assign hf_checker",
-                )
-            )
-        else:
+        if self.hf_checker is not None:
             report = await self.hf_checker.preflight(source)
             checks.extend((f"hf_{check_id}", ok, text) for check_id, ok, text in report.checks)
             if not report.checks:
@@ -672,11 +668,11 @@ class BeamPodProvider(ModelEndpointProvider):
             state=EndpointState.DEPLOYING,
             base_url=invoke_url + "/v1",
             upstream_model=served_name,
-                DEPLOYMENT_ID_KEY: str(result["deployment_id"]),
             protocol="chat_completions",
             credential_ref=credential_ref,
             external_ids={
                 "beam_deployment_id": str(result["deployment_id"]),
+                DEPLOYMENT_ID_KEY: str(result["deployment_id"]),
                 "beam_stub_id": str(result.get("stub_id") or ""),
             },
         )
@@ -780,10 +776,14 @@ class BeamPodProvider(ModelEndpointProvider):
     def upstream(self, handle: EndpointHandle) -> UpstreamRoute:
         if handle.base_url is None or handle.upstream_model is None:
             raise EndpointUnavailable(f"endpoint {handle.endpoint_id} has no url")
+        # Request defaults the gateway applies (e.g. chat_template_kwargs selecting a model's
+        # thinking mode); taken from the spec first so the frozen spec records them.
+        defaults = self._param(handle.model, "default_params") or {}
         return UpstreamRoute(
             api_base=handle.base_url,
             model=handle.upstream_model,
             protocol=handle.protocol,
             api_key_ref=handle.credential_ref,
+            default_params=dict(defaults),
             cold_start_window_s=int(self.config.get("cold_start_window_s", 0)),
         )

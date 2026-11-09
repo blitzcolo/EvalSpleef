@@ -72,8 +72,26 @@ async def test_validate_names_the_unpinned_image_the_missing_gpu_and_the_hf_toke
     )
     report = await provider.validate(make_spec(access="gated", token_ref=HF_TOKEN_REF, gpu=None))
     failed = {check_id for check_id, ok, _detail in report.checks if not ok}
-    assert {"image_digest_pinned", "gpu", "hf_token", "hf_checker_missing"} <= failed
+    assert {"image_digest_pinned", "gpu", "hf_token"} <= failed
     assert not report.ok
+
+
+async def test_validate_passes_without_an_injected_hf_checker(
+    gateway: FakeBeamGateway, fake_launcher: FakeLauncher, make_spec: SpecFactory
+) -> None:
+    # The endpoint manager runs the HF preflight before validate and never assigns
+    # hf_checker; a provider built the way the control plane builds it must still validate.
+    provider = BeamPodProvider(
+        "acme",
+        {"api_key_ref": TOKEN_REF, "image": IMAGE},
+        DictSecretResolver({TOKEN_REF: TOKEN, HF_TOKEN_REF: HF_SECRET}),
+        launch_runner=fake_launcher,
+        api_transport=gateway.transport(),
+    )
+    assert provider.hf_checker is None
+    report = await provider.validate(make_spec(access="gated", token_ref=HF_TOKEN_REF))
+    failed = [check_id for check_id, ok, _detail in report.checks if not ok]
+    assert failed in ([], ["launcher"]), failed
 
 
 # -- deploy --------------------------------------------------------------------------------------
@@ -119,12 +137,23 @@ async def test_deploy_scales_to_the_minimum_and_ends_ready(
 ) -> None:
     handle = await deployed(provider, make_spec())
     deployment_id = handle.external_ids["beam_deployment_id"]
+    assert handle.external_ids[DEPLOYMENT_ID_KEY] == deployment_id
     assert ("POST", f"/deployments/{deployment_id}/scale", {"containers": 1}) in gateway.calls
     assert handle.state is EndpointState.READY
     assert handle.base_url == gateway.inference_url + "/v1"
     assert handle.observed["beam_deployment_name"] == deployment_name(handle.model)
     route = provider.upstream(handle)
     assert (route.api_base, route.model) == (handle.base_url, SLUG)
+    assert route.default_params == {}
+
+
+async def test_the_route_carries_the_specs_default_params(
+    provider: BeamPodProvider, make_spec: SpecFactory
+) -> None:
+    # The gateway applies these to every request, e.g. a model's thinking mode.
+    defaults = {"chat_template_kwargs": {"enable_thinking": False}}
+    handle = await deployed(provider, make_spec(default_params=defaults))
+    assert provider.upstream(handle).default_params == defaults
 
 
 async def test_a_failed_launch_removes_the_deployment_it_left_behind(
@@ -137,7 +166,6 @@ async def test_a_failed_launch_removes_the_deployment_it_left_behind(
         await deployed(provider, spec)
     assert "no capacity for RTX5090" in str(caught.value)
     assert caught.value.detail["removed"] == [stale["id"]]
-    assert handle.external_ids[DEPLOYMENT_ID_KEY] == deployment_id
     assert gateway.deployments == {}
 
 
