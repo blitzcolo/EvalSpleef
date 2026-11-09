@@ -1,4 +1,4 @@
-"""The CLI maps a plan's OCI template to the vendor template a provider instance boots."""
+"""The CLI maps a plan's OCI template to the built template a provider instance boots."""
 
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ sandbox_instances:
   mock:
     adapter: mock-sandbox
     config: {}
+  built:
+    adapter: mock-sandbox
+    config: {template_kinds: [novita_template]}
 routes:
   - when: {os: linux}
     prefer: [mock]
@@ -42,21 +45,34 @@ def _settings(tmp_path: Path, registry: dict[str, object]) -> Settings:
     )
 
 
-async def test_built_vendor_template_is_booted_by_its_instance(tmp_path: Path) -> None:
+async def test_built_template_has_the_kind_its_instance_declares(tmp_path: Path) -> None:
+    # The entry shape the registry has always had: the kind comes from the carrier,
+    # the descriptive vendor field is not consulted.
     registry = {
         "logic-001": {"tag": OCI.ref, "image_id": DIGEST},
-        "templates": {DIGEST: {"novita": {"template_id": "tpl-9", "vendor": "novita"}}},
+        "templates": {DIGEST: {"built": {"template_id": "tpl-9", "vendor": "acme"}}},
     }
     async with AppContext(_settings(tmp_path, registry), environ={}) as ctx:
-        assert ctx.carrier_template(OCI, "novita") == TemplateRef(
+        assert ctx.carrier_template(OCI, "built") == TemplateRef(
             kind="novita_template", ref="tpl-9", digest=DIGEST
         )
         # Instances without a built template (Docker) boot the OCI image itself.
         assert ctx.carrier_template(OCI, "docker-local") == OCI
 
 
-async def test_unknown_vendor_in_the_registry_is_refused(tmp_path: Path) -> None:
-    registry = {"templates": {DIGEST: {"novita": {"template_id": "tpl-9", "vendor": "acme"}}}}
+async def test_a_recorded_kind_the_instance_does_not_boot_is_refused(tmp_path: Path) -> None:
+    entry = {"template_id": "tpl-9", "kind": "e2b_template"}
+    registry = {"templates": {DIGEST: {"built": entry}}}
     async with AppContext(_settings(tmp_path, registry), environ={}) as ctx:
-        with pytest.raises(UsageError, match="unknown vendor"):
-            ctx.carrier_template(OCI, "novita")
+        with pytest.raises(UsageError, match="has kind 'e2b_template'"):
+            ctx.carrier_template(OCI, "built")
+        entry["kind"] = "novita_template"
+        (tmp_path / "registry.json").write_text(json.dumps(registry), encoding="utf-8")
+        assert ctx.carrier_template(OCI, "built").kind == "novita_template"
+
+
+async def test_a_built_template_for_an_oci_only_instance_is_refused(tmp_path: Path) -> None:
+    registry = {"templates": {DIGEST: {"mock": {"template_id": "tpl-9"}}}}
+    async with AppContext(_settings(tmp_path, registry), environ={}) as ctx:
+        with pytest.raises(UsageError, match="names no kind"):
+            ctx.carrier_template(OCI, "mock")

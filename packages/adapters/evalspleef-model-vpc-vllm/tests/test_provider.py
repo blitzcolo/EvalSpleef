@@ -16,6 +16,7 @@ from evalspleef_model_vpc_vllm.provider import VpcVllmProvider
 
 from evalspleef.spi.errors import EndpointUnavailable
 from evalspleef.spi.model import (
+    DEPLOYMENT_ID_KEY,
     DeploymentSpec,
     EndpointState,
     HFSource,
@@ -148,6 +149,7 @@ async def test_deploy_k8s_backend() -> None:
 
     # Verify secret was injected into manifest but is not exposed in handle repr
     dep_name = handle.external_ids["name"]
+    assert handle.external_ids[DEPLOYMENT_ID_KEY] == f"default/{dep_name}"
     dep = await kube_api.get_deployment("default", dep_name)
     assert dep is not None
     container = dep["spec"]["template"]["spec"]["containers"][0]
@@ -217,6 +219,7 @@ async def test_deploy_gpu_instance_backend() -> None:
     assert handle.state == EndpointState.READY
     assert handle.base_url == "http://192.168.1.100:8000/v1"
     assert handle.external_ids["backend"] == "gpu_instance"
+    assert handle.external_ids[DEPLOYMENT_ID_KEY] == handle.external_ids["instance_id"]
 
     state = await provider.status(handle)
     assert state == EndpointState.READY

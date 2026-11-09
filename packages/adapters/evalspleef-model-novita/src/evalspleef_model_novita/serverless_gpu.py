@@ -22,6 +22,7 @@ import httpx
 from evalspleef.spi.errors import CapabilityNotSupported, EndpointUnavailable
 from evalspleef.spi.hf import HFAccessChecker
 from evalspleef.spi.model import (
+    DEPLOYMENT_ID_KEY,
     DeploymentPlan,
     EndpointHandle,
     EndpointState,
@@ -379,7 +380,7 @@ class NovitaServerlessGpuProvider(ModelEndpointProvider):
             upstream_model=served_name,
             protocol="chat_completions",
             credential_ref=credential_ref,
-            external_ids={"novita_endpoint_id": remote_id},
+            external_ids={"novita_endpoint_id": remote_id, DEPLOYMENT_ID_KEY: remote_id},
         )
         handle.observed.update(
             {

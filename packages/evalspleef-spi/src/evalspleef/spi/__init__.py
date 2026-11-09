@@ -37,6 +37,7 @@ from .hf import HFAccessChecker
 from .isolation import InvariantEntry, IsolationProfile
 from .matching import admit_model, match_requirements
 from .model import (
+    DEPLOYMENT_ID_KEY,
     DeploymentPlan,
     DeploymentSpec,
     EndpointHandle,
@@ -68,6 +69,7 @@ from .secrets import SecretRef, SecretResolver
 __all__ = [
     "COLD_START_HEADER",
     "COST_CAP",
+    "DEPLOYMENT_ID_KEY",
     "TIMEOUT_EXIT_CODE",
     "TOKEN_CAP",
     "AgentRunner",

@@ -20,6 +20,9 @@ WireProtocol = Literal["chat_completions", "responses", "anthropic_messages"]
 HFAccess = Literal["public", "gated", "private"]
 TeardownMode = Literal["sleep", "terminate"]
 
+#: ``EndpointHandle.external_ids`` key of the provider-side deployment behind an endpoint.
+DEPLOYMENT_ID_KEY = "deployment_id"
+
 
 class ManagementMode(StrEnum):
     API = "api"
@@ -96,6 +99,10 @@ class EndpointHandle:
     protocol: WireProtocol
     credential_ref: str
     external_ids: dict[str, str] = field(default_factory=dict)
+    """Provider-side identifiers. Keys are the adapter's own, except the shared convention
+    :data:`DEPLOYMENT_ID_KEY`: a provider whose endpoint runs on a deployment, pod, instance
+    or endpoint object it can name publishes that id under it, and ``trial.versions``
+    records it as ``deployment_id``. Providers without such an object omit the key."""
     observed: dict[str, Any] = field(default_factory=dict)
 
 

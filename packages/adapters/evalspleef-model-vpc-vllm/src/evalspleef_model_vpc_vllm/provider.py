@@ -17,6 +17,7 @@ import httpx
 from evalspleef.spi.errors import CapabilityNotSupported, EndpointUnavailable
 from evalspleef.spi.hf import HFAccessChecker
 from evalspleef.spi.model import (
+    DEPLOYMENT_ID_KEY,
     DeploymentPlan,
     EndpointHandle,
     EndpointState,
@@ -222,6 +223,7 @@ class VpcVllmProvider(ModelEndpointProvider):
             )
             external_ids["name"] = name
             external_ids["namespace"] = namespace
+            external_ids[DEPLOYMENT_ID_KEY] = f"{namespace}/{name}"
             base_url = service_url
 
         elif backend in ("gpu_instance", "novita_gpu_instance", "instance"):
@@ -241,6 +243,7 @@ class VpcVllmProvider(ModelEndpointProvider):
                 port=port,
             )
             external_ids["instance_id"] = instance_id
+            external_ids[DEPLOYMENT_ID_KEY] = instance_id
             try:
                 _inst_state, fetched_url = await gpu_orchestrator.status(instance_id)
                 base_url = fetched_url or initial_url or f"http://{instance_id}:{port}/v1"

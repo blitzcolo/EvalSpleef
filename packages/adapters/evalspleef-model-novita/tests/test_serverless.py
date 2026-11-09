@@ -25,7 +25,13 @@ from evalspleef_model_novita.errors import (
 from evalspleef_model_novita.serverless_gpu import NovitaServerlessGpuProvider, map_status
 
 from evalspleef.spi.errors import EndpointUnavailable
-from evalspleef.spi.model import EndpointHandle, EndpointState, ManagementMode, ModelSpec
+from evalspleef.spi.model import (
+    DEPLOYMENT_ID_KEY,
+    EndpointHandle,
+    EndpointState,
+    ManagementMode,
+    ModelSpec,
+)
 from evalspleef.testing.secrets import DictSecretResolver
 
 SpecFactory = Callable[..., ModelSpec]
@@ -148,6 +154,7 @@ async def test_deploy_posts_the_documented_create_request(
     assert handle.state is EndpointState.READY
     assert handle.upstream_model == SERVED
     assert handle.external_ids["novita_endpoint_id"] in api.endpoints
+    assert handle.external_ids[DEPLOYMENT_ID_KEY] == handle.external_ids["novita_endpoint_id"]
     assert handle.observed["revision"] == SHA
     assert handle.observed["image"] == IMAGE
 

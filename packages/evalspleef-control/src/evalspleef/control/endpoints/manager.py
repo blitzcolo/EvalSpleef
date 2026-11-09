@@ -40,6 +40,7 @@ from evalspleef.spi.errors import SpleefError
 from evalspleef.spi.gateway import GatewayAdmin, PriceSpec
 from evalspleef.spi.hf import HFAccessChecker
 from evalspleef.spi.model import (
+    DEPLOYMENT_ID_KEY,
     EndpointHandle,
     EndpointState,
     HFSource,
@@ -536,7 +537,7 @@ class EndpointManager:
         attached.state = current
         deployment_id = operator_input.get("deployment_id")
         if deployment_id:
-            attached.external_ids["deployment_id"] = deployment_id
+            attached.external_ids[DEPLOYMENT_ID_KEY] = deployment_id
         operator = operator_input.get("operator")
         for ticket in await self._tickets.list_by_endpoint(endpoint_id):
             if ticket.kind == "deploy" and ticket.status == TICKET_OPEN:
@@ -690,7 +691,7 @@ class EndpointManager:
                     endpoint_id,
                     "scale",
                     f"## Scale {endpoint_id}\n"
-                    f"1. Open the deployment `{handle.external_ids.get('deployment_id', '?')}` "
+                    f"1. Open the deployment `{handle.external_ids.get(DEPLOYMENT_ID_KEY, '?')}` "
                     "in the vendor console.\n"
                     f"2. Set Min Replicas = {required} and Max Replicas = {max_replicas}.",
                 )
@@ -848,7 +849,7 @@ class EndpointManager:
                 endpoint_id,
                 "teardown",
                 f"## Retire {endpoint_id} ({policy})\n"
-                f"1. Open deployment `{handle.external_ids.get('deployment_id', '?')}` in the "
+                f"1. Open deployment `{handle.external_ids.get(DEPLOYMENT_ID_KEY, '?')}` in the "
                 f"vendor console.\n2. {action}.",
             )
             handle.observed["pending_teardown"] = policy

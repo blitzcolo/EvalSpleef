@@ -37,7 +37,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from evalspleef.control.batch import (
     BatchPlan,
@@ -103,7 +103,14 @@ from evalspleef.core.judge import JudgeClient
 from evalspleef.spi.environment import ExecutionEnvironment
 from evalspleef.spi.gateway import GatewayAdmin, PriceSpec, TrialKey, UsageRecord
 from evalspleef.spi.isolation import InvariantEntry, IsolationProfile
-from evalspleef.spi.model import EndpointState, HFSource, ModelSpec, UpstreamRoute, VendorSource
+from evalspleef.spi.model import (
+    DEPLOYMENT_ID_KEY,
+    EndpointState,
+    HFSource,
+    ModelSpec,
+    UpstreamRoute,
+    VendorSource,
+)
 from evalspleef.spi.probe import ProbeReport
 from evalspleef.spi.runner import AgentRunner
 from evalspleef.spi.sandbox import (
@@ -218,13 +225,6 @@ def build_secret_resolver(environ: Mapping[str, str]) -> CompositeResolver:
     if vault_url and vault_token:
         resolvers.append(VaultKv2Resolver(vault_url, vault_token))
     return CompositeResolver(resolvers)
-
-
-#: Template kinds of the vendor templates the Template Builder records (TECH-DESIGN 7.6).
-_VENDOR_TEMPLATE_KINDS: dict[str, TemplateKind] = {
-    "novita": "novita_template",
-    "e2b": "e2b_template",
-}
 
 
 def price_for_spec(spec: ModelSpec) -> PriceSpec:
@@ -811,9 +811,7 @@ class AppContext:
                 "hf_revision": hf.revision if hf else None,
                 "hf_mirror_repo": hf.mirror_repo if hf else None,
                 "deployment_adapter": spec.deployment.adapter,
-                "deployment_id": handle.observed.get("deployment_id")
-                or handle.external_ids.get("novita_endpoint_id")
-                or handle.external_ids.get("instance_id"),
+                "deployment_id": handle.external_ids.get(DEPLOYMENT_ID_KEY),
                 "endpoint_base_url_hash": (
                     "sha256:" + hashlib.sha256(handle.base_url.encode()).hexdigest()
                     if handle.base_url
@@ -988,20 +986,30 @@ class AppContext:
     def carrier_template(self, template: TemplateRef, instance: str) -> TemplateRef:
         """The template ``instance`` boots for an OCI ``template`` (TECH-DESIGN 7.6).
 
-        The Template Builder records vendor templates under the registry's ``templates``
-        section, keyed by the OCI digest they were built from and the provider instance.
-        Without an entry the OCI template is returned and the provider decides whether
-        it can boot it (an E2B-family provider rejects it with a kind mismatch).
+        The Template Builder records the templates it built under the registry's
+        ``templates`` section, keyed by the OCI digest they were built from and the provider
+        instance. A built template has the kind the instance declares in
+        ``SandboxCapabilities.template_kinds`` besides the plan's own; an entry may name it
+        as ``kind``, which must then be one of those. Without an entry the OCI template is
+        returned and the provider decides whether it can boot it.
         """
         built = self._template_registry().get("templates", {}).get(template.digest, {})
         entry = built.get(instance) if isinstance(built, Mapping) else None
         if not isinstance(entry, Mapping) or not entry.get("template_id"):
             return template
-        kind = _VENDOR_TEMPLATE_KINDS.get(str(entry.get("vendor", "")))
-        if kind is None:
+        declared = self.providers.capabilities(instance).template_kinds - {template.kind}
+        recorded = entry.get("kind")
+        if recorded is not None and recorded not in declared:
             raise UsageError(
-                f"template registry entry for {instance} names unknown vendor {entry.get('vendor')!r}"
+                f"template registry entry for {instance} has kind {recorded!r}, but the "
+                f"instance boots {sorted(declared)!r}"
             )
+        if recorded is None and len(declared) != 1:
+            raise UsageError(
+                f"template registry entry for {instance} names no kind and the instance boots "
+                f"{sorted(declared)!r}; record the template's kind in the entry"
+            )
+        kind = cast(TemplateKind, recorded) if recorded is not None else next(iter(declared))
         return TemplateRef(kind=kind, ref=str(entry["template_id"]), digest=template.digest)
 
     def _template_registry(self) -> Mapping[str, Any]:

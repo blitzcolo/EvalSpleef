@@ -22,7 +22,13 @@ from evalspleef_model_novita.errors import (
 )
 
 from evalspleef.spi.errors import EndpointMismatch, EndpointUnavailable, SpleefError
-from evalspleef.spi.model import EndpointHandle, EndpointState, ManagementMode, ModelSpec
+from evalspleef.spi.model import (
+    DEPLOYMENT_ID_KEY,
+    EndpointHandle,
+    EndpointState,
+    ManagementMode,
+    ModelSpec,
+)
 from evalspleef.testing.secrets import DictSecretResolver
 
 SpecFactory = Callable[..., ModelSpec]
@@ -200,6 +206,7 @@ async def test_attach_sends_a_one_token_request_and_moves_to_verifying(
     assert handle.state is EndpointState.VERIFYING
     assert (handle.base_url, handle.upstream_model) == (BASE, MODEL)
     assert handle.observed["deployment_id"] == "dep-1"
+    assert handle.external_ids[DEPLOYMENT_ID_KEY] == "dep-1"
     (request,) = seen
     assert str(request.url) == f"{BASE}/chat/completions"
     assert request.headers["authorization"] == "Bearer sk-novita-conformance"

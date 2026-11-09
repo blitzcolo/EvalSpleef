@@ -235,9 +235,6 @@ class E2BFamilyProvider(SandboxProvider):
     def _profile(self) -> IsolationProfile:
         raise NotImplementedError
 
-    def _template_kind(self) -> str:
-        raise NotImplementedError
-
     def _api_key_ref(self) -> str | None:
         """SecretRef used to authenticate against the vendor control API."""
         ref = self.config.get("api_key_ref")
@@ -287,6 +284,7 @@ class E2BFamilyProvider(SandboxProvider):
             max_resources=max_resources,
             typical_start_s=caps.typical_start_s,
             reset_cost_s=caps.reset_cost_s,
+            template_kinds=caps.template_kinds,
         )
 
     def isolation_profile(self) -> IsolationProfile:
@@ -385,10 +383,10 @@ class E2BFamilyProvider(SandboxProvider):
                     "requested resources exceed the capability ceiling: "
                     f"{spec.resources!r} > {max_r!r}"
                 )
-        if spec.template.kind != self._template_kind():
+        if spec.template.kind not in caps.template_kinds:
             raise CapabilityNotSupported(
                 f"template kind {spec.template.kind!r} does not match {self.name!r} "
-                f"(expected {self._template_kind()!r})"
+                f"(expected one of {sorted(caps.template_kinds)!r})"
             )
         if spec.network.mode not in caps.net_modes:
             raise PolicyNotEnforceable(

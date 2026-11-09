@@ -21,6 +21,7 @@ import httpx
 from evalspleef.spi.errors import EndpointMismatch, EndpointUnavailable
 from evalspleef.spi.hf import HFAccessChecker
 from evalspleef.spi.model import (
+    DEPLOYMENT_ID_KEY,
     DeploymentPlan,
     EndpointHandle,
     EndpointState,
@@ -425,7 +426,7 @@ class NovitaDedicatedProvider(ModelEndpointProvider):
         deployment_id = operator_input.get("deployment_id")
         if deployment_id:
             handle.observed["deployment_id"] = deployment_id
-            handle.external_ids["novita_deployment_id"] = deployment_id
+            handle.external_ids[DEPLOYMENT_ID_KEY] = deployment_id
         handle.observed["first_response_s"] = result.elapsed_s
         self._note_cold_start(handle, result.elapsed_s)
         return handle

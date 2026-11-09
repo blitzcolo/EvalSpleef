@@ -29,7 +29,7 @@ from e2b import (
 
 from evalspleef.spi.caps import Arch, Isolation, NetMode, OSFamily
 from evalspleef.spi.isolation import InvariantEntry, IsolationProfile
-from evalspleef.spi.sandbox import SandboxCapabilities
+from evalspleef.spi.sandbox import SandboxCapabilities, TemplateKind
 
 from .base import E2BFamilyProvider, SdkSandboxHandle
 
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from evalspleef.spi.secrets import SecretResolver
 
 DEFAULT_DOMAIN = "e2b.app"
-_TEMPLATE_KIND = "e2b_template"
+_TEMPLATE_KIND: TemplateKind = "e2b_template"
 
 _EVAL_LEAD = "eval-lead"
 
@@ -108,9 +108,6 @@ class E2BSelfHostProvider(E2BFamilyProvider):
 
     # -- configuration ---------------------------------------------------------
 
-    def _template_kind(self) -> str:
-        return _TEMPLATE_KIND
-
     @property
     def domain(self) -> str:
         """E2B_DOMAIN of the self-hosted cluster."""
@@ -148,6 +145,7 @@ class E2BSelfHostProvider(E2BFamilyProvider):
             max_resources=None,
             typical_start_s=10.0,
             reset_cost_s=20.0,
+            template_kinds=frozenset({_TEMPLATE_KIND}),
         )
 
     def _profile(self) -> IsolationProfile:

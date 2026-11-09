@@ -28,7 +28,7 @@ from novita_sandbox import (
 
 from evalspleef.spi.caps import Arch, Isolation, NetMode, OSFamily
 from evalspleef.spi.isolation import InvariantEntry, IsolationProfile
-from evalspleef.spi.sandbox import Resources, SandboxCapabilities
+from evalspleef.spi.sandbox import Resources, SandboxCapabilities, TemplateKind
 
 from .base import E2BFamilyProvider, SdkSandboxHandle
 
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from evalspleef.spi.secrets import SecretResolver
 
 DEFAULT_REGION = "us-phx-1"
-_TEMPLATE_KIND = "novita_template"
+_TEMPLATE_KIND: TemplateKind = "novita_template"
 
 # Paid-tier limits documented at https://docs.novita.ai/guides/sandbox-quota-limit
 # (the product page's 24 h figure is unverified; see TECH-DESIGN section 8.2).
@@ -112,9 +112,6 @@ class NovitaSandboxProvider(E2BFamilyProvider):
 
     # -- configuration ---------------------------------------------------------
 
-    def _template_kind(self) -> str:
-        return _TEMPLATE_KIND
-
     @property
     def region(self) -> str:
         return self._region
@@ -161,6 +158,7 @@ class NovitaSandboxProvider(E2BFamilyProvider):
             max_resources=_MAX_RESOURCES,
             typical_start_s=15.0,
             reset_cost_s=30.0,
+            template_kinds=frozenset({_TEMPLATE_KIND}),
         )
 
     def _profile(self) -> IsolationProfile:

@@ -100,6 +100,10 @@ class SandboxCapabilities:
     max_resources: Resources | None
     typical_start_s: float
     reset_cost_s: float
+    template_kinds: frozenset[TemplateKind] = frozenset({"oci"})
+    """Template kinds ``create`` boots. A carrier that boots its own built templates instead
+    of OCI images declares that kind, and the control plane hands it the template built for
+    it from the plan's OCI image (TECH-DESIGN 7.6)."""
 
 
 @dataclass

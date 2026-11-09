@@ -22,7 +22,13 @@ from evalspleef_model_beam.errors import (
 from evalspleef_model_beam.launcher import RESULT_PREFIX
 from evalspleef_model_beam.provider import BeamPodProvider, deployment_name, parse_launch_result
 
-from evalspleef.spi.model import EndpointHandle, EndpointState, ManagementMode, ModelSpec
+from evalspleef.spi.model import (
+    DEPLOYMENT_ID_KEY,
+    EndpointHandle,
+    EndpointState,
+    ManagementMode,
+    ModelSpec,
+)
 from evalspleef.testing.secrets import DictSecretResolver
 
 HF_SECRET = "hf_secret_value_do_not_leak"
@@ -131,6 +137,7 @@ async def test_a_failed_launch_removes_the_deployment_it_left_behind(
         await deployed(provider, spec)
     assert "no capacity for RTX5090" in str(caught.value)
     assert caught.value.detail["removed"] == [stale["id"]]
+    assert handle.external_ids[DEPLOYMENT_ID_KEY] == deployment_id
     assert gateway.deployments == {}
 
 

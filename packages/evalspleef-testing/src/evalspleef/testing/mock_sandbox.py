@@ -19,6 +19,7 @@ import time
 import uuid
 import weakref
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -436,6 +437,11 @@ class MockSandboxProvider(SandboxProvider):
         super().__init__(instance, config, secrets)
         self._clock: Clock = clock or SystemClock()
         self._capabilities = capabilities or default_capabilities()
+        # providers.yaml can make the double a carrier of built templates.
+        if config.get("template_kinds"):
+            self._capabilities = replace(
+                self._capabilities, template_kinds=frozenset(config["template_kinds"])
+            )
         self._sandboxes: dict[str, MockSandbox] = {}
         self._fail_next: list[type[SpleefError] | SpleefError] = []
         self._quota: int | None = None

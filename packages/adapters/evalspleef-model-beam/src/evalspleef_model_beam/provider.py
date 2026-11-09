@@ -27,6 +27,7 @@ import httpx
 from evalspleef.spi.errors import CapabilityNotSupported, EndpointUnavailable
 from evalspleef.spi.hf import HFAccessChecker
 from evalspleef.spi.model import (
+    DEPLOYMENT_ID_KEY,
     DeploymentPlan,
     EndpointHandle,
     EndpointState,
@@ -671,6 +672,7 @@ class BeamPodProvider(ModelEndpointProvider):
             state=EndpointState.DEPLOYING,
             base_url=invoke_url + "/v1",
             upstream_model=served_name,
+                DEPLOYMENT_ID_KEY: str(result["deployment_id"]),
             protocol="chat_completions",
             credential_ref=credential_ref,
             external_ids={

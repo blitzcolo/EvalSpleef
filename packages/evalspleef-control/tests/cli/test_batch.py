@@ -73,6 +73,22 @@ def test_failed_freeze_neither_warms_nor_retires(
 def test_batch_run_and_report(
     cli_runner: CliRunner, args: list[str], env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A provider that can name the deployment behind an endpoint publishes it under the
+    # SPI's neutral key; trial.versions records it from there.
+    from evalspleef_model_openai_compat.provider import OpenAICompatibleProvider
+
+    from evalspleef.spi.model import DEPLOYMENT_ID_KEY, DeploymentPlan, EndpointHandle, ModelSpec
+
+    deploy = OpenAICompatibleProvider.deploy
+
+    async def named_deploy(
+        self: OpenAICompatibleProvider, spec: ModelSpec, plan: DeploymentPlan
+    ) -> EndpointHandle:
+        handle = await deploy(self, spec, plan)
+        handle.external_ids[DEPLOYMENT_ID_KEY] = "dep-7"
+        return handle
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "deploy", named_deploy)
     assert cli_runner.invoke(app, ["models", "register", "--model", "demo", *args]).exit_code == 0
     assert cli_runner.invoke(app, ["models", "probe", "--model", "demo", *args]).exit_code == 0
 
@@ -115,6 +131,7 @@ def test_batch_run_and_report(
     assert versions["model_version"] == "demo@1"
     assert versions["model_source"] == "vendor"
     assert versions["deployment_adapter"] == "openai-compatible"
+    assert versions["deployment_id"] == "dep-7"
     assert versions["freeze_hash"].startswith("sha256:")
     assert versions["gateway_version"]
     assert versions["probe_report_id"]
