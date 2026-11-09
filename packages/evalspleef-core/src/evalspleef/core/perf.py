@@ -8,6 +8,12 @@ Units: times in seconds on one monotonic clock per sample set, throughput in tok
 second. A request that was not streamed has no TTFT, ITL or TPOT (``None``), never an
 estimate.
 
+A generated-text chunk is a streamed chunk whose delta has non-empty ``content``, non-empty
+``reasoning_content``, or a ``tool_calls`` entry with a non-empty ``function.name`` or
+``function.arguments``; role-only, empty and usage-only chunks are not. Whoever records the
+samples (the gateway, the benchmark client) applies that rule; this module only reads the
+recorded times.
+
 Percentiles interpolate linearly between closest ranks (the convention of the client-side
 check scripts behind ``docs/evidence/beam-1m-kv.md``).
 """
@@ -113,7 +119,8 @@ class RequestSample:
     t_end: float
     """Last chunk, or the whole body when not streamed."""
     chunk_times: tuple[float, ...] = ()
-    """Arrival time of every chunk that carried generated text (content or reasoning)."""
+    """Arrival time of every chunk that carried generated text (content, reasoning or a
+    tool call's name or arguments)."""
     input_tokens: int = 0
     cached_tokens: int = 0
     output_tokens: int = 0

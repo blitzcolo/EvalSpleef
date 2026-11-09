@@ -67,7 +67,8 @@ class UsageRecord:
     # Records written before these fields existed, refused requests and requests that were
     # not streamed carry None, never an estimate.
     ttft_ms: float | None = None
-    """Until the first streamed chunk carrying generated text (content or reasoning)."""
+    """Until the first streamed chunk carrying generated text: content, reasoning, or a tool
+    call's name or arguments."""
     e2e_ms: float | None = None
     """Until the last chunk, or the whole body when not streamed."""
     tpot_ms: float | None = None

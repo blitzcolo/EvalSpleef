@@ -358,3 +358,57 @@ async def test_a_client_hanging_up_after_done_still_gets_its_request_recorded_an
     assert record.ttft_ms == 500.0 and record.output_tokens == 3
     key = await state.authenticate(secret)
     assert key is not None and key.spent_tokens == 14  # 11 prompt + 3 completion tokens
+
+
+def tool_call(index_fields: dict[str, Any]) -> dict[str, Any]:
+    return chat_chunk({"tool_calls": [{"index": 0, **index_fields}]})
+
+
+# A turn that answers only with a tool call: the name at 0.5 s, argument fragments at 0.6 s
+# and 0.85 s, then finish and usage. Same timing as CHAT_STEPS, so the same figures.
+TOOL_CALL_STEPS: tuple[Step, ...] = (
+    (0.2, data(chat_chunk({"role": "assistant"}))),
+    (
+        0.3,
+        data(
+            tool_call(
+                {"id": "call_1", "type": "function", "function": {"name": "bash", "arguments": ""}}
+            )
+        ),
+    ),
+    (0.1, data(tool_call({"function": {"arguments": '{"command": '}}))),
+    (0.25, data(tool_call({"function": {"arguments": '"ls"}'}}))),
+    (0.05, data(chat_chunk({}, "tool_calls"))),
+    (0.0, data({**chat_chunk({}), "choices": [], "usage": USAGE})),
+    (0.0, "data: [DONE]\n\n"),
+)
+
+TOOLS = [{"type": "function", "function": {"name": "bash", "parameters": {"type": "object"}}}]
+
+
+async def test_a_tool_call_only_turn_has_ttft_itl_and_tpot_in_every_client_flavour() -> None:
+    requests = {
+        "/v1/chat/completions": STREAM_BODY | {"tools": TOOLS},
+        "/v1/messages": {
+            "model": "ep_ep1",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"name": "bash", "input_schema": {"type": "object"}}],
+            "stream": True,
+        },
+        "/v1/responses": {
+            "model": "ep_ep1",
+            "input": "hi",
+            "tools": [{"type": "function", "name": "bash", "parameters": {"type": "object"}}],
+            "stream": True,
+        },
+    }
+    for path, body in requests.items():
+        state, clock = timed_state()
+        add_route(state)
+        secret = await issue(state)
+        async with client_for(state, streaming(clock, TOOL_CALL_STEPS)) as client:
+            response = await client.post(path, json=body, headers=auth(secret))
+            assert response.status_code == 200, (path, response.text)
+        (record,) = await state.usage_for("trial-ep1")
+        assert timing_of(record) == EXPECTED, path

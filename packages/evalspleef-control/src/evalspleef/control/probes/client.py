@@ -30,6 +30,7 @@ __all__ = [
     "StreamReply",
     "as_dict",
     "as_list",
+    "carries_generated_text",
 ]
 
 CHAT_PATH = "/v1/chat/completions"
@@ -145,16 +146,23 @@ def _has_delta(chunk: Mapping[str, Any]) -> bool:
     return any(delta.get(key) for key in ("content", "reasoning_content", "tool_calls"))
 
 
-def _has_generated_text(chunk: Mapping[str, Any]) -> bool:
-    """The TTFT/ITL definition: a chunk whose delta carries content or reasoning text."""
+def carries_generated_text(chunk: Mapping[str, Any]) -> bool:
+    """The TTFT/ITL rule, identical to the gateway's (``evalspleef.gateway.perf``): a choice's
+    delta has non-empty ``content`` or ``reasoning_content``, or a ``tool_calls`` entry whose
+    ``function.name`` or ``function.arguments`` is non-empty."""
     for choice in as_list(chunk.get("choices")):
         delta = as_dict(as_dict(choice).get("delta"))
-        if any(
-            isinstance(delta.get(key), str) and delta.get(key)
-            for key in ("content", "reasoning_content")
-        ):
+        if any(_non_empty(delta.get(key)) for key in ("content", "reasoning_content")):
             return True
+        for call in as_list(delta.get("tool_calls")):
+            function = as_dict(as_dict(call).get("function"))
+            if _non_empty(function.get("name")) or _non_empty(function.get("arguments")):
+                return True
     return False
+
+
+def _non_empty(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
 
 
 def _usage_tokens(usage: Mapping[str, Any]) -> tuple[int, int, int]:
@@ -268,7 +276,7 @@ class GatewayClient:
                         if chunk.get("error"):
                             error = f"stream error: {_error_text(chunk)}"
                             break
-                        if _has_generated_text(chunk):
+                        if carries_generated_text(chunk):
                             chunk_times.append(arrived)
                         if isinstance(chunk.get("usage"), dict):
                             usage = chunk["usage"]

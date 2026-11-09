@@ -275,3 +275,39 @@ def test_hourly_price_comes_from_the_deployment_params() -> None:
     assert hourly_price(_spec({"price_per_gpu_hour_usd": 2.325, "gpu_count": 2})) == 4.65
     assert hourly_price(_spec({"price_per_gpu_hour_usd": 1.5})) == 1.5
     assert hourly_price(_spec({"pricing": {"input_per_mtok": 1}})) is None
+
+
+async def test_a_tool_call_only_turn_has_a_ttft_on_the_client_too() -> None:
+    clock = FakeClock(start=10.0)
+    call = {
+        "index": 0,
+        "id": "c1",
+        "type": "function",
+        "function": {"name": "bash", "arguments": ""},
+    }
+    steps = (
+        (0.1, _chunk({"role": "assistant"})),
+        (0.4, _chunk({"tool_calls": [call]})),
+        (0.2, _chunk({"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]})),
+        (
+            0.0,
+            "data: "
+            + json.dumps({"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 2}})
+            + "\n\n",
+        ),
+        (0.0, "data: [DONE]\n\n"),
+    )
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=TimedSSE(clock, steps))
+    )
+    async with GatewayClient(
+        "http://gw.test",
+        "secret",
+        clock=clock,
+        request_timeout_s=30,
+        connect_timeout_s=5,
+        transport=transport,
+    ) as client:
+        sample = await client.stream_sample({"model": "ep", "stream": True})
+    assert sample.ok
+    assert sample.chunk_times == pytest.approx((10.5, 10.7))

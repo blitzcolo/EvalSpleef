@@ -6,9 +6,15 @@ that was not streamed gets an end-to-end time and nothing else.
 
 Definitions (shared with ``evalspleef.core.perf``, which the gateway may not import):
 TTFT runs from the moment the request reached the gateway to the first chunk carrying
-generated text (``content`` or ``reasoning_content``); ITL is each gap between consecutive
-generated-text chunks; TPOT is ``(t_last - t_first) / (output_tokens - 1)``; E2E ends with
-the last chunk. Percentiles interpolate linearly between closest ranks, like core.
+generated text; ITL is each gap between consecutive generated-text chunks; TPOT is
+``(t_last - t_first) / (output_tokens - 1)``; E2E ends with the last chunk. Percentiles
+interpolate linearly between closest ranks, like core.
+
+A chunk carries generated text when a choice's delta has a non-empty ``content``, a non-empty
+``reasoning_content``, or a ``tool_calls`` entry whose ``function.name`` or
+``function.arguments`` is non-empty (many agent turns answer only with a tool call). Role-only,
+empty and usage-only chunks do not. ``evalspleef.control.probes.client.carries_generated_text``
+applies the same rule on the client side; both packages pin it with the same cases.
 """
 
 from __future__ import annotations
@@ -31,8 +37,26 @@ def carries_generated_text(chunk: Mapping[str, Any]) -> bool:
         return False
     for choice in choices:
         delta = choice.get("delta") if isinstance(choice, Mapping) else None
-        if isinstance(delta, Mapping) and any(
-            isinstance(delta.get(name), str) and delta.get(name) for name in _TEXT_FIELDS
+        if not isinstance(delta, Mapping):
+            continue
+        if any(_non_empty(delta.get(name)) for name in _TEXT_FIELDS):
+            return True
+        if _tool_call_text(delta.get("tool_calls")):
+            return True
+    return False
+
+
+def _non_empty(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _tool_call_text(calls: object) -> bool:
+    if not isinstance(calls, list):
+        return False
+    for call in calls:
+        function = call.get("function") if isinstance(call, Mapping) else None
+        if isinstance(function, Mapping) and (
+            _non_empty(function.get("name")) or _non_empty(function.get("arguments"))
         ):
             return True
     return False
