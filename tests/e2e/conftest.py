@@ -16,7 +16,8 @@ import subprocess
 import sys
 import time
 import urllib.request
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -311,12 +312,14 @@ def _wait_ready(gateway: Gateway, log_path: Path) -> None:
     pytest.fail(f"the gateway did not become ready within 60s:\n{log}")
 
 
-@pytest.fixture(scope="session")
-def gateway(tmp_path_factory: pytest.TempPathFactory, docker_ready: None) -> Iterator[Gateway]:
-    del docker_ready  # ordering only: report the Docker problem before anything else
+@contextmanager
+def running_gateway(work: Path, log_copy: Path) -> Iterator[Gateway]:
+    """A real spleef-gateway process with its own store under ``work``.
+
+    The process log is copied to ``log_copy`` when the gateway stops.
+    """
     if not GATEWAY_BIN.is_file():
         pytest.fail(f"the spleef-gateway executable is missing: {GATEWAY_BIN}")
-    work = tmp_path_factory.mktemp("gateway")
     log_path = work / "gateway.log"
     data_port, admin_port = _free_port(), _free_port()
     env = os.environ | {
@@ -353,8 +356,17 @@ def gateway(tmp_path_factory: pytest.TempPathFactory, docker_ready: None) -> Ite
             process.kill()
             process.wait(timeout=15)
         log_handle.close()
-        (REPORTS / "gateway").mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(log_path, REPORTS / "gateway" / "gateway.log")
+        log_copy.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(log_path, log_copy)
+
+
+@pytest.fixture(scope="session")
+def gateway(tmp_path_factory: pytest.TempPathFactory, docker_ready: None) -> Iterator[Gateway]:
+    del docker_ready  # ordering only: report the Docker problem before anything else
+    with running_gateway(
+        tmp_path_factory.mktemp("gateway"), REPORTS / "gateway" / "gateway.log"
+    ) as running:
+        yield running
 
 
 # -- the CLI environment -------------------------------------------------------------
@@ -370,6 +382,8 @@ class E2E:
     server: object
     config_dir: Path
     counter: int = 0
+    reports: Path = REPORTS
+    templates_registry: Path = REPO / "templates" / "registry.json"
 
     def run_cli(self, name: str, *argv: str) -> subprocess.CompletedProcess[str]:
         """Run the real spleef CLI and save the full transcript under reports/."""
@@ -382,7 +396,7 @@ class E2E:
             text=True,
             timeout=1800,
         )
-        transcript = REPORTS / "cli" / f"{self.counter:02d}-{name}.txt"
+        transcript = self.reports / "cli" / f"{self.counter:02d}-{name}.txt"
         transcript.parent.mkdir(parents=True, exist_ok=True)
         transcript.write_text(
             f"$ spleef {' '.join(argv)}\n"
@@ -402,11 +416,71 @@ class E2E:
             "--tasks-dir",
             str(REPO / "tasks"),
             "--templates-registry",
-            str(REPO / "templates" / "registry.json"),
+            str(self.templates_registry),
         ]
         if with_batch:
             options += ["--batch", str(self.config_dir / "batch.yaml")]
         return [*options, *extra]
+
+
+def make_harness(
+    work: Path,
+    gateway: Gateway,
+    server: object,
+    reports: Path,
+    *,
+    templates_registry: Path = REPO / "templates" / "registry.json",
+) -> E2E:
+    """A CLI environment with its own store, event log and state under ``work``.
+
+    Transcripts, events and runner files land under ``reports``; the configuration
+    starts as the pristine example files, verbatim.
+    """
+    if not SPLEEF_BIN.is_file():
+        pytest.fail(f"the spleef executable is missing: {SPLEEF_BIN}")
+    for sub in ("cli", "events", "gateway", "tmp"):
+        (reports / sub).mkdir(parents=True, exist_ok=True)
+    store_path = work / "store.sqlite3"
+    events_dir = reports / "events"
+    # The pristine example configuration, verbatim.
+    config_dir = work / "config"
+    config_dir.mkdir()
+    for name in ("models.yaml", "providers.yaml", "batch.yaml"):
+        shutil.copyfile(REPO / "config" / "examples" / name, config_dir / name)
+    env = os.environ | {
+        "SPLEEF_STORE_URL": f"sqlite:///{store_path}",
+        "SPLEEF_EVENTS_URL": f"jsonl://{events_dir}",
+        "SPLEEF_STATE_DIR": str(work / "state"),
+        "SPLEEF_GATEWAY_ADMIN_URL": gateway.admin_url,
+        "SPLEEF_GATEWAY_ADMIN_TOKEN": GATEWAY_TOKEN,
+        "SPLEEF_GATEWAY_URL": gateway.data_url,
+        "SPLEEF_FAKE_BASE_URL": server.base_url,  # type: ignore[attr-defined]
+        "SPLEEF_FAKE_API_KEY": FAKE_API_KEY,
+        "TMPDIR": str(reports / "tmp"),  # runner transcripts land in the report dir
+    }
+    return E2E(
+        env=env,
+        work=work,
+        store_path=store_path,
+        events_dir=events_dir,
+        gateway=gateway,
+        server=server,
+        config_dir=config_dir,
+        reports=reports,
+        templates_registry=templates_registry,
+    )
+
+
+@pytest.fixture(scope="session")
+def gateway_factory() -> Callable[[Path, Path], AbstractContextManager[Gateway]]:
+    """``running_gateway`` for scenarios that need a gateway of their own."""
+    return running_gateway
+
+
+@pytest.fixture(scope="session")
+def harness_factory() -> Callable[..., E2E]:
+    """``make_harness`` for scenarios that need a CLI environment of their own."""
+    return make_harness
 
 
 @pytest.fixture(scope="session")
@@ -420,35 +494,4 @@ def e2e(
     if not SPLEEF_BIN.is_file():
         pytest.fail(f"the spleef executable is missing: {SPLEEF_BIN}")
     shutil.rmtree(REPORTS, ignore_errors=True)
-    (REPORTS / "cli").mkdir(parents=True, exist_ok=True)
-    (REPORTS / "events").mkdir(parents=True, exist_ok=True)
-    (REPORTS / "gateway").mkdir(parents=True, exist_ok=True)
-    (REPORTS / "tmp").mkdir(parents=True, exist_ok=True)
-    work = tmp_path_factory.mktemp("e2e")
-    store_path = work / "store.sqlite3"
-    events_dir = REPORTS / "events"
-    # The pristine example configuration, verbatim.
-    config_dir = work / "config"
-    config_dir.mkdir()
-    for name in ("models.yaml", "providers.yaml", "batch.yaml"):
-        shutil.copyfile(REPO / "config" / "examples" / name, config_dir / name)
-    env = os.environ | {
-        "SPLEEF_STORE_URL": f"sqlite:///{store_path}",
-        "SPLEEF_EVENTS_URL": f"jsonl://{events_dir}",
-        "SPLEEF_STATE_DIR": str(work / "state"),
-        "SPLEEF_GATEWAY_ADMIN_URL": gateway.admin_url,
-        "SPLEEF_GATEWAY_ADMIN_TOKEN": GATEWAY_TOKEN,
-        "SPLEEF_GATEWAY_URL": gateway.data_url,
-        "SPLEEF_FAKE_BASE_URL": fake_server.base_url,  # type: ignore[attr-defined]
-        "SPLEEF_FAKE_API_KEY": FAKE_API_KEY,
-        "TMPDIR": str(REPORTS / "tmp"),  # runner transcripts land in the report dir
-    }
-    yield E2E(
-        env=env,
-        work=work,
-        store_path=store_path,
-        events_dir=events_dir,
-        gateway=gateway,
-        server=fake_server,
-        config_dir=config_dir,
-    )
+    yield make_harness(tmp_path_factory.mktemp("e2e"), gateway, fake_server, REPORTS)
