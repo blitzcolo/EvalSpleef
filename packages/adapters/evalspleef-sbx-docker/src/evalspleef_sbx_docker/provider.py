@@ -9,7 +9,9 @@ Network policy mapping (FR-SBX-03): ``off`` -> the Docker ``none`` network,
 ``full`` -> the default bridge. ``docs_whitelist``/``package_mirror`` need an
 egress proxy: they are only offered when the provider config names an internal
 Docker network (``egress_network``) and the policy carries ``via_proxy``;
-anything else is rejected at create with ``PolicyNotEnforceable``.
+anything else is rejected at create with ``PolicyNotEnforceable``. In those two modes
+the proxy address is also exported to the sandbox as ``HTTP(S)_PROXY`` (see
+``_proxy_env``); the internal network is what makes the proxy the only route out.
 """
 
 from __future__ import annotations
@@ -380,6 +382,29 @@ class DockerProvider(SandboxProvider):
         assert self._egress_network is not None  # validated in _validate_spec
         return self._egress_network
 
+    @staticmethod
+    def _proxy_url(via_proxy: str) -> str:
+        """Normalise ``host:port`` or ``http://host:port`` to one proxy URL form."""
+        value = via_proxy.strip()
+        return value if "://" in value else f"http://{value}"
+
+    def _proxy_env(self, spec: SandboxSpec) -> dict[str, str]:
+        """Proxy variables for the proxied modes; empty for ``off`` and ``full``."""
+        policy = spec.network
+        if policy.mode not in (NetMode.DOCS_WHITELIST, NetMode.PACKAGE_MIRROR):
+            return {}
+        assert policy.via_proxy is not None  # validated in _validate_spec
+        url = self._proxy_url(policy.via_proxy)
+        loopback = "localhost,127.0.0.1,::1"
+        return {
+            "HTTP_PROXY": url,
+            "HTTPS_PROXY": url,
+            "http_proxy": url,
+            "https_proxy": url,
+            "NO_PROXY": loopback,
+            "no_proxy": loopback,
+        }
+
     def _labels(self, spec: SandboxSpec) -> dict[str, str]:
         labels = dict(spec.labels)
         labels["spleef.provider"] = self.instance
@@ -411,7 +436,11 @@ class DockerProvider(SandboxProvider):
             "Image": image,
             "Cmd": ["sleep", "infinity"],
             "User": user,
-            "Env": [f"{key}={value}" for key, value in spec.env.items()],
+            # Precedence: the policy decides the proxy, so its variables replace any
+            # same-named entry in spec.env.
+            "Env": [
+                f"{key}={value}" for key, value in {**spec.env, **self._proxy_env(spec)}.items()
+            ],
             "WorkingDir": "/workspace",
             "Labels": dict(labels),
             "Tty": False,

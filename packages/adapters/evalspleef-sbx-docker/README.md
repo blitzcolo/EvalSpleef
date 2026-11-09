@@ -51,6 +51,47 @@ when `egress_network` is configured and the policy carries `via_proxy`
 every other allowlist combination is rejected at create with
 `PolicyNotEnforceable` — the provider never degrades silently.
 
+In the two proxied modes the provider also exports the proxy to the sandbox as
+`HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and `https_proxy`, plus
+`NO_PROXY`/`no_proxy` for loopback. `policy.via_proxy` may be `host:port` or a
+URL; it is normalised to `http://host:port` in one place (`_proxy_url`).
+Precedence: the policy wins, so these names replace same-named entries in
+`spec.env`; all other `spec.env` entries are kept. `off` and `full` add nothing.
+The variables only steer well-behaved clients; what actually enforces the policy
+is the network topology below.
+
+## Egress topology (docs_whitelist / package_mirror)
+
+The sandbox joins an internal Docker network (no gateway), and the proxy
+container sits on that network and on an ordinary origin network, so the proxy
+is the only route out. Commands an operator runs (names are examples):
+
+```
+docker network create --internal spleef-egress-internal
+docker network create spleef-egress-origin
+docker build -t spleef-egress:latest -f deploy/docker/egress.Dockerfile .
+docker run -d --name spleef-egress --network spleef-egress-origin \
+    -v "$PWD/deploy/compose/egress-policy.yaml:/policy/policy.yaml:ro" \
+    spleef-egress:latest --policy /policy/policy.yaml --listen 0.0.0.0:3128 \
+    --log-dir /tmp --trial-id <trial-id>
+docker network connect --alias egress-proxy spleef-egress-internal spleef-egress
+```
+
+Then configure the provider with `egress_network: spleef-egress-internal` and
+create sandboxes with `NetworkPolicy(mode=..., via_proxy="egress-proxy:3128")`.
+The proxy must listen on `0.0.0.0` (not the CLI default `127.0.0.1`) to be
+reachable from the internal network. The audit logs (`url.jsonl`, `dns.jsonl`)
+stay in the proxy container, outside the sandbox. One proxy instance carries one
+policy and one `--trial-id`; run one per trial or batch as the control plane
+decides.
+
+Verified on a real Docker Desktop daemon by `tests/egress_docker/`: an
+allowlisted host is served through the proxy, a blocked host gets 403 with a
+`blocked_reason` and an audit line, direct connections that skip the proxy fail
+with `ENETUNREACH`, and a `CONNECT` tunnel to an allowlisted `host:80` works.
+Not verified: HTTPS upstreams (TLS `CONNECT` to port 443), native Linux dockerd,
+and package mirror rewriting inside containers.
+
 ## exec, timeouts and files
 
 - `exec` uses `exec_create`/`exec_start` over the hijacked raw stream with
