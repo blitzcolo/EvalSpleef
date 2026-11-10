@@ -74,6 +74,7 @@ from evalspleef.control.observe.agent_lease import LeaseJudgeOpener
 from evalspleef.control.observe.agent_plan import refuse_unfit_plan
 from evalspleef.control.observe.judging import (
     JUDGE_MAX_TOKENS,
+    JUDGE_RETRY_ATTEMPTS,
     JUDGE_TIMEOUT_S,
     GatewayJudgeClient,
 )
@@ -273,16 +274,19 @@ def price_for_spec(spec: ModelSpec) -> PriceSpec:
     )
 
 
-def judge_limits(spec: ModelSpec) -> tuple[int, float]:
-    """Output-token cap and read timeout of a judge client, from ``deployment.params``.
+def judge_limits(spec: ModelSpec) -> tuple[int, float, int]:
+    """Output-token cap, read timeout and retry budget of a judge client, from ``deployment.params``.
 
     A reasoning judge spends output tokens on thinking before the verdict and can take
     minutes, so ``judge_max_tokens`` and ``judge_timeout_s`` raise the client defaults.
+    ``judge_retry_attempts`` bounds how often a 429/5xx/connect-timeout judge call is
+    retried inside the client before the batch sees ``EndpointUnavailable``.
     """
     params = spec.deployment.params
     return (
         int(params.get("judge_max_tokens", JUDGE_MAX_TOKENS)),
         float(params.get("judge_timeout_s", JUDGE_TIMEOUT_S)),
+        int(params.get("judge_retry_attempts", JUDGE_RETRY_ATTEMPTS)),
     )
 
 
@@ -808,7 +812,7 @@ class AppContext:
                 if isinstance(spec.source, VendorSource)
                 else spec.deployment.adapter
             )
-            max_tokens, timeout_s = judge_limits(spec)
+            max_tokens, timeout_s, retry_attempts = judge_limits(spec)
             clients[slug] = GatewayJudgeClient(
                 endpoint_id=endpoint_id,
                 gateway_url=judge_gateway_url,
@@ -818,6 +822,7 @@ class AppContext:
                 name=public_name(endpoint_id),
                 max_tokens=max_tokens,
                 timeout_s=timeout_s,
+                retry_attempts=retry_attempts,
             )
         return clients
 

@@ -146,6 +146,21 @@ class DeploymentConfig(BaseModel):
             raise ValueError(f"probe_timeout_s must be greater than 0, got {timeout!r}")
         return value
 
+    @field_validator("params")
+    @classmethod
+    def _judge_retry_attempts(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # A control-plane key sizing the judge client's retry budget.
+        attempts = value.get("judge_retry_attempts")
+        if attempts is None:
+            return value
+        if isinstance(attempts, bool) or not isinstance(attempts, int):
+            raise ValueError(
+                f"judge_retry_attempts must be a non-negative integer, got {attempts!r}"
+            )
+        if attempts < 0:
+            raise ValueError(f"judge_retry_attempts must be at least 0, got {attempts!r}")
+        return value
+
 
 class ModelConfig(BaseModel):
     """One entry of ``models.yaml``."""

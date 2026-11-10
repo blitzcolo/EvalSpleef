@@ -243,6 +243,35 @@ def test_probe_timeout_must_be_a_positive_number(tmp_path: Path, bad: str) -> No
     assert "probe_timeout_s" in str(excinfo.value)
 
 
+def test_judge_retry_attempts_is_kept_for_the_judge_client(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "models.yaml",
+        MODELS_YAML.replace(
+            "      params: {protocol: anthropic_messages}",
+            "      params: {protocol: anthropic_messages, judge_retry_attempts: 5}",
+        ),
+    )
+    specs = load_models(path)
+    assert specs[1].deployment.params["judge_retry_attempts"] == 5
+
+
+@pytest.mark.parametrize("bad", ["-1", "1.5", "'3'", "true"])
+def test_judge_retry_attempts_must_be_a_non_negative_integer(tmp_path: Path, bad: str) -> None:
+    path = _write(
+        tmp_path,
+        "models.yaml",
+        MODELS_YAML.replace(
+            "      params: {protocol: anthropic_messages}",
+            f"      params: {{protocol: anthropic_messages, judge_retry_attempts: {bad}}}",
+        ),
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        load_models(path)
+    assert excinfo.value.path == "models[1].deployment.params"
+    assert "judge_retry_attempts" in str(excinfo.value)
+
+
 def test_error_names_file_and_path_for_scalars(tmp_path: Path) -> None:
     bad = MODELS_YAML.replace("declared_context_tokens: 131072", "declared_context_tokens: -5")
     path = _write(tmp_path, "models.yaml", bad)

@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from evalspleef.control.cli.context import judge_limits
-from evalspleef.control.observe.judging import JUDGE_MAX_TOKENS, JUDGE_TIMEOUT_S
+from evalspleef.control.observe.judging import (
+    JUDGE_MAX_TOKENS,
+    JUDGE_RETRY_ATTEMPTS,
+    JUDGE_TIMEOUT_S,
+)
 from evalspleef.spi.model import DeploymentSpec, HFSource, ModelSpec
 
 
@@ -24,8 +28,9 @@ def _spec(params: dict[str, Any]) -> ModelSpec:
 
 
 def test_judge_params_raise_the_client_limits() -> None:
-    assert judge_limits(_spec({"judge_max_tokens": 8192, "judge_timeout_s": 180})) == (8192, 180.0)
+    spec = _spec({"judge_max_tokens": 8192, "judge_timeout_s": 180, "judge_retry_attempts": 5})
+    assert judge_limits(spec) == (8192, 180.0, 5)
 
 
 def test_without_judge_params_the_client_defaults_stand() -> None:
-    assert judge_limits(_spec({})) == (JUDGE_MAX_TOKENS, JUDGE_TIMEOUT_S)
+    assert judge_limits(_spec({})) == (JUDGE_MAX_TOKENS, JUDGE_TIMEOUT_S, JUDGE_RETRY_ATTEMPTS)

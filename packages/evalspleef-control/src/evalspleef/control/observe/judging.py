@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import random
 import threading
+import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -40,6 +42,8 @@ from .artifacts import WorkspaceExport
 
 __all__ = [
     "CHAT_PATH",
+    "JUDGE_RETRY_ATTEMPTS",
+    "RETRYABLE_STATUSES",
     "GatewayJudgeClient",
     "JudgeRun",
     "JudgeStep",
@@ -89,6 +93,24 @@ class _PricedJudge(Protocol):
 JUDGE_MAX_TOKENS = 1024
 JUDGE_TIMEOUT_S = 60.0
 
+#: Retries of a throttled or transiently failing judge call after the first attempt,
+#: so one rate-limited sample no longer invalidates the whole trial.
+JUDGE_RETRY_ATTEMPTS = 3
+
+#: Upstream statuses a judge call absorbs with backoff (PRD appendix B.6: provider
+#: rate limits and transient 5xx are retried, never propagated to the trial).
+RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
+
+#: Transport failures absorbed the same way: connect/read timeouts and dropped streams.
+_RETRYABLE_TRANSPORT_ERRORS = (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError)
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    """A numeric ``Retry-After`` header value in seconds; anything else is ignored."""
+    if value is not None and value.replace(".", "", 1).isdigit():
+        return float(value)
+    return None
+
 
 @dataclass(frozen=True)
 class MeteredCompletion:
@@ -120,6 +142,12 @@ class GatewayJudgeClient:
         connect_timeout_s: float = 5.0,
         max_tokens: int = JUDGE_MAX_TOKENS,
         transport: httpx.BaseTransport | None = None,
+        retry_attempts: int = JUDGE_RETRY_ATTEMPTS,
+        retry_base_s: float = 1.0,
+        retry_cap_s: float = 30.0,
+        sleep: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
+        random_source: Callable[[], float] = random.random,
     ) -> None:
         self.endpoint_id = endpoint_id
         self.model = endpoint_id
@@ -135,6 +163,12 @@ class GatewayJudgeClient:
             transport=transport,
         )
         self._max_tokens = max_tokens
+        self._retry_attempts = retry_attempts
+        self._retry_base_s = retry_base_s
+        self._retry_cap_s = retry_cap_s
+        self._sleep = sleep
+        self._monotonic = monotonic
+        self._random_source = random_source
         self._input_tokens = 0
         self._output_tokens = 0
         self._cost_usd = 0.0
@@ -163,6 +197,10 @@ class GatewayJudgeClient:
 
         A timeout, a dropped connection, a rate limit or a 5xx is a provider failure the
         batch retries (``EndpointUnavailable``), not a reason to invalidate the trial.
+        Before that, a 429, 502, 503, 504 or a connect/read timeout is retried inside
+        this call with exponential backoff and full jitter (a numeric ``Retry-After``
+        overrides the backoff), bounded by ``retry_attempts`` and by the call's own
+        timeout budget. Only the successful attempt books cost and token usage.
         """
         return self.chat_metered([{"role": "user", "content": prompt}])
 
@@ -173,22 +211,40 @@ class GatewayJudgeClient:
         the route's own setting (``prompt_caching``), so a growing conversation reuses
         its cached prefix without anything sent from here.
         """
-        try:
-            response = self._client.post(
-                CHAT_PATH,
-                json={
-                    "model": self.model,
-                    "messages": [dict(message) for message in messages],
-                    "max_tokens": self._max_tokens,
-                    "temperature": 0.0,
-                },
-            )
-        except httpx.TransportError as exc:
-            raise EndpointUnavailable(f"judge {self.model} request failed: {exc!r}") from exc
-        if response.status_code == 429 or response.status_code >= 500:
-            raise EndpointUnavailable(
-                f"judge {self.model} answered {response.status_code}: {response.text[:200]}"
-            )
+        deadline = self._monotonic() + self._timeout_s
+        retries = 0
+        while True:
+            try:
+                response = self._client.post(
+                    CHAT_PATH,
+                    json={
+                        "model": self.model,
+                        "messages": [dict(message) for message in messages],
+                        "max_tokens": self._max_tokens,
+                        "temperature": 0.0,
+                    },
+                )
+            except _RETRYABLE_TRANSPORT_ERRORS as exc:
+                if not self._wait_before_retry(retries, deadline):
+                    raise EndpointUnavailable(
+                        f"judge {self.model} request failed: {exc!r}"
+                    ) from exc
+                retries += 1
+                continue
+            except httpx.TransportError as exc:
+                # Not a retryable transport failure (a write or close error): the batch
+                # still sees it as EndpointUnavailable, exactly as before the retry loop.
+                raise EndpointUnavailable(f"judge {self.model} request failed: {exc!r}") from exc
+            if response.status_code == 429 or response.status_code >= 500:
+                if response.status_code in RETRYABLE_STATUSES:
+                    retry_after = _retry_after_seconds(response.headers.get("retry-after"))
+                    if self._wait_before_retry(retries, deadline, retry_after):
+                        retries += 1
+                        continue
+                raise EndpointUnavailable(
+                    f"judge {self.model} answered {response.status_code}: {response.text[:200]}"
+                )
+            break
         response.raise_for_status()
         call_cost = 0.0
         # A malformed header charges nothing; the ledger reconciles against bills.
@@ -210,6 +266,29 @@ class GatewayJudgeClient:
         self._output_tokens += call_output
         text = content if isinstance(content, str) else str(content)
         return MeteredCompletion(text, call_cost, call_input, call_output)
+
+    def _wait_before_retry(
+        self, retries: int, deadline: float, retry_after: float | None = None
+    ) -> bool:
+        """Sleep before retry ``retries`` (0-based); ``False`` when a budget is spent.
+
+        The wait is ``random * base * 2**retries`` (full jitter) unless the upstream
+        asked for a specific ``Retry-After``, and is capped at ``retry_cap_s``. The
+        call never sleeps past its own timeout budget: when the remaining time cannot
+        cover the wait, the caller raises ``EndpointUnavailable`` as it always has.
+        """
+        if retries >= self._retry_attempts:
+            return False
+        delay = (
+            retry_after
+            if retry_after is not None
+            else (self._random_source() * self._retry_base_s * (2**retries))
+        )
+        delay = min(delay, self._retry_cap_s)
+        if self._monotonic() + delay > deadline:
+            return False
+        self._sleep(delay)
+        return True
 
     def complete(self, prompt: str) -> str:
         return self.complete_metered(prompt).text
