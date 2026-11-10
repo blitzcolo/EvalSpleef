@@ -1,0 +1,23 @@
+# Example hostd daemon config for the compose stack (service `hostd`, profile `hosts`).
+#
+# hostd registers with a hostd-gateway (the control-plane registration and
+# heartbeat server, part of evalspleef-hostd) over mTLS and serves the Hostd
+# gRPC service to the control plane. The compose stack does not run a
+# hostd-gateway: fill in the address of one (for a control plane on the same
+# Docker network it is the service name and the gateway port) and mount or
+# provision the CA file before starting the profile.
+host_id: docker-host-1
+listen: 0.0.0.0:50051
+advertise: hostd:50051
+service_names: ["hostd"]
+
+control:
+  registration_address: hostd-gateway:50052
+  gateway_address: hostd-gateway:50051
+  ca_file: /etc/evalspleef/ca.pem
+
+providers:
+  - name: local
+    adapter: docker
+    config:
+      instance: compose-docker

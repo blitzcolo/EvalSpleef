@@ -54,6 +54,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       HF_TOKEN: ${HF_TOKEN:-}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,6 +77,7 @@ services:
       DATABASE_URL: ${SPLEEF_GATEWAY_STORE:-postgresql://evalspleef:evalspleef_dev_pw@postgres:5432/evalspleef}
       SPLEEF_GATEWAY_ADMIN_TOKEN: ${SPLEEF_GATEWAY_ADMIN_TOKEN:-dev_admin_token}
       SPLEEF_GATEWAY_ADMIN_URL: http://gateway:8391
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     depends_on:
       postgres:
@@ -111,6 +114,26 @@ services:
       - "/var/log/evalspleef"
       - "--trial-id"
       - "compose-shared"
+
+  # Host agent daemon: serves local sandbox providers to the control plane over
+  # mTLS gRPC. Disabled by default (`--profile hosts`): it only starts once a
+  # hostd config and a reachable hostd-gateway registration address exist.
+  hostd:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/hostd.Dockerfile
+    image: evalspleef/hostd:latest
+    profiles: ["hosts"]
+    restart: unless-stopped
+    environment:
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    volumes:
+      - ./hostd.yaml:/etc/evalspleef/hostd.yaml:ro
+      - logs_data:/var/log/evalspleef
+    networks:
+      - internal
+    command: ["/etc/evalspleef/hostd.yaml"]
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.111.0

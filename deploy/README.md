@@ -72,6 +72,18 @@ docker compose -f deploy/compose/docker-compose.yml up -d
 - **Egress Proxy**: `127.0.0.1:3128` (loopback only).
 - **OTel Collector OTLP**: `127.0.0.1:4317` (gRPC) and `127.0.0.1:4318` (HTTP).
 
+### Tracing
+
+The gateway, control and (with the `hosts` profile) hostd export OpenTelemetry
+traces to the collector when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; the compose
+services pin `OTEL_EXPORTER_OTLP_PROTOCOL` to `grpc` (the OTLP default) against
+the collector's gRPC receiver on 4317. Set the protocol to `http/protobuf` to
+use the HTTP receiver on 4318 instead. Spans land in the shared volume at
+`/var/log/evalspleef/traces.jsonl` through the collector's file exporter. The
+`hostd` service is opt-in (`docker compose --profile hosts up -d hostd`) and
+needs `deploy/compose/hostd.yaml` adjusted to a reachable hostd-gateway before
+it can register; see the comments in that file.
+
 To tear down the stack and remove volumes:
 
 ```bash
