@@ -491,6 +491,70 @@ async def test_route_tpm_counts_projected_tokens(state: GatewayState) -> None:
         assert (await _chat_status(client, secret, max_tokens=100)).status_code == 429
 
 
+async def test_route_tpm_counts_max_completion_tokens(state: GatewayState) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=canned_chat())
+
+    add_route(state, overrides={"tpm": 150})
+    secret = await issue(state)
+
+    async def send(client: httpx.AsyncClient) -> httpx.Response:
+        return await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "ep_ep1",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_completion_tokens": 100,
+            },
+            headers=auth(secret),
+        )
+
+    async with client_for(state, handler) as client:
+        assert (await send(client)).status_code == 200
+        limited = await send(client)
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "rate_limited"
+
+
+async def test_request_without_an_output_limit_reserves_zero_by_default(
+    state: GatewayState,
+) -> None:
+    add_route(state)
+    # A zero token cap admits only a request whose projection reserves nothing.
+    secret = await issue(state, max_tokens=0)
+    async with client_for(state, ok_upstream) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={"model": "ep_ep1", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth(secret),
+        )
+    assert response.status_code == 200
+
+
+async def test_default_reservation_tokens_covers_a_body_without_a_limit(
+    state: GatewayState,
+) -> None:
+    forwarded: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        forwarded.append(json.loads(request.content))
+        return httpx.Response(200, json=canned_chat())
+
+    add_route(state, overrides={"default_params": {"default_reservation_tokens": 50}})
+    # 49 rejects and 50 admits, so the reservation is exactly the configured value.
+    tight = await issue(state, trial_id="trial-tight", max_tokens=49)
+    exact = await issue(state, trial_id="trial-exact", max_tokens=50)
+    body = {"model": "ep_ep1", "messages": [{"role": "user", "content": "hi"}]}
+    async with client_for(state, handler) as client:
+        rejected = await client.post("/v1/chat/completions", json=body, headers=auth(tight))
+        admitted = await client.post("/v1/chat/completions", json=body, headers=auth(exact))
+    assert rejected.status_code == 429
+    assert rejected.json()["error"]["code"] == TOKEN_CAP
+    assert admitted.status_code == 200
+    assert len(forwarded) == 1
+    assert "default_reservation_tokens" not in forwarded[0]
+
+
 # -- budgets --------------------------------------------------------------------------
 
 
@@ -527,6 +591,25 @@ async def test_token_cap_rejection_with_429(state: GatewayState) -> None:
         )
         assert response.status_code == 429
         assert response.json()["error"]["code"] == TOKEN_CAP
+
+
+async def test_token_cap_rejection_counts_max_completion_tokens(state: GatewayState) -> None:
+    add_route(state)
+    secret = await issue(state, max_tokens=10)
+    async with client_for(state, ok_upstream) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "ep_ep1",
+                "messages": [{"role": "user", "content": "hi"}],
+                # Both fields: the larger one is the worst case and must be reserved.
+                "max_tokens": 1,
+                "max_completion_tokens": 500,
+            },
+            headers=auth(secret),
+        )
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == TOKEN_CAP
 
 
 async def test_revoked_key_gets_401(state: GatewayState) -> None:

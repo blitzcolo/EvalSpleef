@@ -106,7 +106,11 @@ PROMPT_CACHING_KEY = "prompt_caching"
 DROP_PARAMS_KEY = "drop_params"
 UPSTREAM_TIMEOUT_KEY = "upstream_timeout_s"
 """Read timeout for this route's upstream calls; the gateway default (120 s) when unset."""
-ROUTE_CONTROL_KEYS = frozenset({PROMPT_CACHING_KEY, DROP_PARAMS_KEY, UPSTREAM_TIMEOUT_KEY})
+DEFAULT_RESERVATION_KEY = "default_reservation_tokens"
+"""Output tokens to reserve for a request that carries no output limit; unset reserves 0."""
+ROUTE_CONTROL_KEYS = frozenset(
+    {PROMPT_CACHING_KEY, DROP_PARAMS_KEY, UPSTREAM_TIMEOUT_KEY, DEFAULT_RESERVATION_KEY}
+)
 
 
 def chat_url(route: UpstreamRoute) -> str:
@@ -188,12 +192,31 @@ def apply_default_params(route: UpstreamRoute, body: dict[str, Any]) -> dict[str
     return merged
 
 
+def _requested_output_tokens(body: dict[str, Any]) -> int | None:
+    """The body's own output limit: the larger of ``max_completion_tokens`` and ``max_tokens``."""
+    requested = [
+        value
+        for value in (body.get("max_completion_tokens"), body.get("max_tokens"))
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    ]
+    return max(requested) if requested else None
+
+
+def _default_reservation(route: UpstreamRoute) -> int:
+    """The route's ``default_reservation_tokens`` control value; unset or invalid means 0."""
+    value = route.default_params.get(DEFAULT_RESERVATION_KEY)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
 def projection_for(
     route: UpstreamRoute, price_entry: RouteEntry, body: dict[str, Any]
 ) -> BudgetProjection:
-    """What the admission check reserves: minimum cost plus the requested max_tokens."""
-    max_tokens = body.get("max_tokens")
-    tokens = max_tokens if isinstance(max_tokens, int) else 0
+    """Reserve the body's larger output limit, else the route's default (0 when unset)."""
+    tokens = _requested_output_tokens(body)
+    if tokens is None:
+        tokens = _default_reservation(route)
     return BudgetProjection(cost_usd=projected_min_cost(price_entry.price), tokens=tokens)
 
 
