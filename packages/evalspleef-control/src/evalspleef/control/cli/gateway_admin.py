@@ -54,6 +54,7 @@ class HttpGatewayAdmin(GatewayAdmin):
             "api_key_ref": route.api_key_ref,
             "default_params": dict(route.default_params),
             "extra_headers": dict(route.extra_headers),
+            "api_key_header": route.api_key_header,
             "provider_lock": (
                 None
                 if lock is None

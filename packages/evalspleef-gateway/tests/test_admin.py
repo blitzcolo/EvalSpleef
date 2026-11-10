@@ -23,6 +23,7 @@ def route(**overrides: object) -> UpstreamRoute:
         model=raw["model"],  # type: ignore[arg-type]
         protocol=raw["protocol"],  # type: ignore[arg-type]
         api_key_ref=raw["api_key_ref"],  # type: ignore[arg-type]
+        api_key_header=raw.get("api_key_header"),  # type: ignore[arg-type]
     )
 
 
@@ -99,6 +100,25 @@ async def test_route_rate_limits_survive_the_admin_api(
         "/admin/routes/ep_ep2", json={**TEST_ROUTE, "rpm": 0}, headers=ADMIN
     )
     assert bad.status_code == 422
+
+
+async def test_api_key_header_survives_the_admin_round_trip(
+    state: GatewayState, admin_client: httpx.AsyncClient
+) -> None:
+    body = {**TEST_ROUTE, "api_key_header": "x-goog-api-key"}
+    response = await admin_client.put("/admin/routes/ep_ep1", json=body, headers=ADMIN)
+    assert response.status_code == 200
+    entry = state.route_entry("ep_ep1")
+    assert entry is not None and entry.route.api_key_header == "x-goog-api-key"
+
+    http_admin = HttpGatewayAdmin("http://gw-admin.test", "admin-token", client=admin_client)
+    await http_admin.upsert_route("ep_ep2", route(api_key_header="x-custom-key"))
+    assert state.route_entry("ep_ep2") is not None
+    assert state.route_entry("ep_ep2").route.api_key_header == "x-custom-key"  # type: ignore[union-attr]
+
+    # The default stays Bearer: no header name on the route.
+    await http_admin.upsert_route("ep_ep3", route())
+    assert state.route_entry("ep_ep3").route.api_key_header is None  # type: ignore[union-attr]
 
 
 async def test_issue_and_revoke_key(state: GatewayState, admin_client: httpx.AsyncClient) -> None:

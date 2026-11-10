@@ -170,6 +170,11 @@ def upstream_headers(state: GatewayState, route: UpstreamRoute) -> dict[str, str
         headers = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION}
         overridden = {name.lower() for name in extra}
         return {**{k: v for k, v in headers.items() if k not in overridden}, **extra}
+    if route.api_key_header is not None:
+        # A named key header replaces the Bearer scheme entirely; an Authorization
+        # value in extra_headers would leak a second, wrong credential scheme upstream.
+        extra = {k: v for k, v in extra.items() if k.lower() != "authorization"}
+        return {route.api_key_header: api_key, **extra}
     return {"Authorization": f"Bearer {api_key}", **extra}
 
 

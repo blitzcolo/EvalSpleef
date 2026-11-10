@@ -144,6 +144,10 @@ class UpstreamRoute:
     api_key_ref: str
     default_params: Mapping[str, Any] = field(default_factory=dict)
     extra_headers: Mapping[str, str] = field(default_factory=dict)
+    api_key_header: str | None = None
+    """Header name carrying the API key upstream instead of ``Authorization: Bearer``.
+    Set for vendors that demand their own key header; ``None`` keeps the Bearer default.
+    Ignored for ``anthropic_messages`` routes, which always use ``x-api-key``."""
     provider_lock: ProviderLock | None = None
     cold_start_window_s: int = 0
     """When above zero the gateway retries 503 and connect timeouts for this many seconds (endpoint wake-up)."""

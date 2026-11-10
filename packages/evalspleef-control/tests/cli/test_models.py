@@ -16,6 +16,7 @@ from evalspleef.control.events import JsonlEventStore
 from evalspleef.gateway.admin_app import create_admin_app
 from evalspleef.gateway.state import GatewayState
 from evalspleef.gateway.store import MemoryStore
+from evalspleef.spi.model import UpstreamRoute
 from evalspleef.testing.fake_gateway import InMemoryGatewayAdmin
 from evalspleef.testing.fake_openai import FakeOpenAIServer
 from evalspleef.testing.secrets import DictSecretResolver
@@ -79,6 +80,27 @@ def test_warm_and_retire(cli_runner: CliRunner, args: list[str], env: Path) -> N
     )
     assert retire.exit_code == 0, retire.output
     assert "retired" in retire.output
+
+
+async def test_control_admin_client_carries_api_key_header_to_the_gateway() -> None:
+    """The CLI's admin client serializes api_key_header into the gateway admin API."""
+    store = MemoryStore()
+    state = GatewayState(key_store=store, usage_store=store, secrets=DictSecretResolver({}))
+    admin_app = create_admin_app(state, "test-token")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=admin_app), base_url="http://gw-admin.test"
+    ) as client:
+        admin = HttpGatewayAdmin("http://gw-admin.test", "test-token", client=client)
+        route = UpstreamRoute(
+            api_base="http://upstream.test/v1",
+            model="fake-model",
+            protocol="chat_completions",
+            api_key_ref="vault://upstream/key",
+            api_key_header="x-goog-api-key",
+        )
+        await admin.upsert_route("ep_hdr", route)
+    entry = state.route_entry("ep_hdr")
+    assert entry is not None and entry.route.api_key_header == "x-goog-api-key"
 
 
 def test_retire_of_an_endpoint_that_never_got_a_route_succeeds(

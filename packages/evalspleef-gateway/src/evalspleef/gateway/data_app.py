@@ -257,6 +257,13 @@ def _usage_counts(usage: dict[str, Any] | None) -> dict[str, int]:
         if isinstance(completion_details, dict)
         else 0
     )
+    # Some vendors report reasoning tokens outside completion_tokens, so their
+    # total is prompt + completion + reasoning; others (the OpenAI convention) fold
+    # reasoning into completion_tokens. Only when the reported reasoning exactly
+    # explains the gap between total and prompt+completion is it billable output.
+    gap = _int_of(usage.get("total_tokens")) - input_tokens - output_tokens
+    if reasoning > 0 and gap == reasoning:
+        output_tokens += reasoning
     return {
         "input": input_tokens,
         "output": output_tokens,
@@ -445,8 +452,12 @@ async def _transport_failure(
 
 
 def _upstream_error_payload(
-    payload: dict[str, Any], *, anthropic_upstream: bool = False
+    payload: Any, *, anthropic_upstream: bool = False
 ) -> tuple[str, str | None]:
+    # Some upstreams answer errors with a non-object JSON body (a bare list or
+    # string); only an object shaped like an error carries extractable detail.
+    if not isinstance(payload, dict):
+        return "upstream error", None
     error = payload.get("error")
     if not isinstance(error, dict):
         return "upstream error", None

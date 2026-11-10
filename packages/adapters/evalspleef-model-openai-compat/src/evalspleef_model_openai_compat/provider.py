@@ -9,6 +9,9 @@ Configuration (provider config, overridable per ``ModelSpec.deployment.params``)
 - ``base_url``: the upstream OpenAI-compatible base URL (usually ending in ``/v1``);
 - ``model``: the ``model`` field sent upstream and expected back;
 - ``api_key_ref``: a ``SecretRef`` resolved through the injected resolver;
+- ``api_key_header``: header name carrying the key when the vendor rejects
+  ``Authorization: Bearer`` (for example a vendor-scoped key header); the published
+  route sends the key in this header and never also as Bearer;
 - ``extra_headers``: additional request headers;
 - ``protocol``: ``chat_completions`` (default), ``responses`` or ``anthropic_messages``;
 - ``rpm`` / ``tpm``: rate limits carried on the gateway route;
@@ -133,6 +136,10 @@ class OpenAICompatibleProvider(ModelEndpointProvider):
         value = self.config.get("api_key_ref", spec.deployment.params.get("api_key_ref"))
         return value if isinstance(value, str) and value else None
 
+    def _api_key_header(self, spec: ModelSpec) -> str | None:
+        value = self.config.get("api_key_header", spec.deployment.params.get("api_key_header"))
+        return value if isinstance(value, str) and value else None
+
     def _protocol(self, spec: ModelSpec) -> WireProtocol:
         raw = self.config.get("protocol", spec.deployment.params.get("protocol"))
         resolved = _protocol(raw if raw is not None else "chat_completions")
@@ -151,27 +158,41 @@ class OpenAICompatibleProvider(ModelEndpointProvider):
     def _provider_lock(self) -> ProviderLock | None:
         return _parse_provider_lock(self.config.get("provider_lock"))
 
-    def _auth_headers(self, key: str, protocol: WireProtocol) -> dict[str, str]:
+    def _auth_headers(
+        self, key: str, protocol: WireProtocol, api_key_header: str | None
+    ) -> dict[str, str]:
         if protocol == "anthropic_messages":
             headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+        elif api_key_header is not None:
+            headers = {api_key_header: key}
         else:
             headers = {"Authorization": f"Bearer {key}"}
         headers.update(self._extra_headers())
         return headers
 
-    async def _get(self, url: str, *, key: str, protocol: WireProtocol) -> httpx.Response:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(self._timeout_s), transport=self._transport
-        ) as client:
-            return await client.get(url, headers=self._auth_headers(key, protocol))
-
-    async def _post(
-        self, url: str, *, key: str, protocol: WireProtocol, json: Mapping[str, Any]
+    async def _get(
+        self, url: str, *, key: str, protocol: WireProtocol, api_key_header: str | None
     ) -> httpx.Response:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(self._timeout_s), transport=self._transport
         ) as client:
-            return await client.post(url, headers=self._auth_headers(key, protocol), json=json)
+            return await client.get(url, headers=self._auth_headers(key, protocol, api_key_header))
+
+    async def _post(
+        self,
+        url: str,
+        *,
+        key: str,
+        protocol: WireProtocol,
+        api_key_header: str | None,
+        json: Mapping[str, Any],
+    ) -> httpx.Response:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(self._timeout_s), transport=self._transport
+        ) as client:
+            return await client.post(
+                url, headers=self._auth_headers(key, protocol, api_key_header), json=json
+            )
 
     def _health_body(self, model: str, protocol: WireProtocol) -> dict[str, Any]:
         if protocol == "responses":
@@ -228,7 +249,12 @@ class OpenAICompatibleProvider(ModelEndpointProvider):
 
         if base_url is not None and key is not None and protocol is not None:
             try:
-                response = await self._get(_join(base_url, "models"), key=key, protocol=protocol)
+                response = await self._get(
+                    _join(base_url, "models"),
+                    key=key,
+                    protocol=protocol,
+                    api_key_header=self._api_key_header(spec),
+                )
             except httpx.HTTPError as exc:
                 checks.append(("models_endpoint", False, f"GET /models failed: {exc}"))
             else:
@@ -324,7 +350,13 @@ class OpenAICompatibleProvider(ModelEndpointProvider):
         url = _join(base_url, _HEALTH_PATHS[handle.protocol])
         body = self._health_body(model, handle.protocol)
         try:
-            response = await self._post(url, key=key, protocol=handle.protocol, json=body)
+            response = await self._post(
+                url,
+                key=key,
+                protocol=handle.protocol,
+                api_key_header=self._api_key_header(handle.model),
+                json=body,
+            )
         except httpx.HTTPError as exc:
             return EndpointState.FAILED, f"health request failed: {exc}", None, True
         if response.status_code == 429:
@@ -416,6 +448,7 @@ class OpenAICompatibleProvider(ModelEndpointProvider):
             model=handle.upstream_model or handle.model.slug,
             protocol=handle.protocol,
             api_key_ref=handle.credential_ref,
+            api_key_header=self._api_key_header(handle.model),
             default_params=default_params,
             extra_headers=self._extra_headers(),
             provider_lock=self._provider_lock(),

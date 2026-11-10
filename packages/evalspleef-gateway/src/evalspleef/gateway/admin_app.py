@@ -35,6 +35,7 @@ class RouteIn(BaseModel):
     api_key_ref: str
     default_params: dict[str, Any] = Field(default_factory=dict)
     extra_headers: dict[str, str] = Field(default_factory=dict)
+    api_key_header: str | None = None
     provider_lock: ProviderLockIn | None = None
     cold_start_window_s: int = 0
     rpm: int | None = Field(default=None, ge=1)
@@ -48,6 +49,7 @@ class RouteIn(BaseModel):
             api_key_ref=self.api_key_ref,
             default_params=self.default_params,
             extra_headers=self.extra_headers,
+            api_key_header=self.api_key_header,
             provider_lock=(
                 ProviderLock(
                     response_field=self.provider_lock.response_field,

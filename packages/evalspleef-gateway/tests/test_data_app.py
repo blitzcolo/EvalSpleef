@@ -95,6 +95,7 @@ def add_route(
         api_key_ref=raw["api_key_ref"],
         default_params=raw.get("default_params", {}),
         extra_headers=raw.get("extra_headers", {}),
+        api_key_header=raw.get("api_key_header"),
         provider_lock=ProviderLock(**lock) if lock else None,
         cold_start_window_s=raw.get("cold_start_window_s", 0),
         rpm=raw.get("rpm"),
@@ -201,6 +202,151 @@ async def test_chat_non_stream_passthrough_and_usage(state: GatewayState) -> Non
         assert stored is not None
         assert stored.spent_tokens == 13
         assert stored.spent_cost_usd == pytest.approx(0.000015)
+
+
+async def test_named_api_key_header_replaces_bearer(state: GatewayState) -> None:
+    add_route(state, overrides={"api_key_header": "x-goog-api-key"})
+    secret = await issue(state)
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=canned_chat())
+
+    async with client_for(state, handler) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={"model": "ep_ep1", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth(secret),
+        )
+        assert response.status_code == 200
+        upstream = seen[-1]
+        assert upstream.headers["x-goog-api-key"] == UPSTREAM_KEY
+        assert "authorization" not in upstream.headers
+
+
+# Vendors that think before answering report reasoning outside completion_tokens:
+# total = prompt + completion + reasoning. Those reasoning tokens are generated output
+# and bill at the output price; the OpenAI convention (reasoning folded into
+# completion_tokens, total = prompt + completion) must stay untouched.
+REASONING_USAGE = {
+    "prompt_tokens": 38,
+    "completion_tokens": 3,
+    "total_tokens": 102,
+    "completion_tokens_details": {"reasoning_tokens": 61},
+}
+
+
+async def test_reasoning_outside_completion_is_billed_as_output(state: GatewayState) -> None:
+    add_route(state)
+    state.set_price("ep_ep1", PriceSpec(input_per_mtok=4.0, output_per_mtok=20.0))
+    secret = await issue(state)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={**canned_chat(), "usage": REASONING_USAGE})
+
+    async with client_for(state, handler) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={"model": "ep_ep1", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth(secret),
+        )
+        assert response.status_code == 200
+        # 38 in * $4/M + (3 + 61) out * $20/M
+        assert float(response.headers[COST_HEADER]) == pytest.approx(0.001432)
+        record = (await state.usage_for("trial-ep1"))[0]
+        assert record.output_tokens == 64
+        assert record.reasoning_tokens == 61
+        assert record.cost_usd == pytest.approx(0.001432)
+
+
+async def test_reasoning_outside_completion_stream_usage(state: GatewayState) -> None:
+    add_route(state)
+    state.set_price("ep_ep1", PriceSpec(input_per_mtok=4.0, output_per_mtok=20.0))
+    secret = await issue(state)
+    chunks = [
+        {
+            "id": "c",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "fake-model",
+            "choices": [{"index": 0, "delta": {"content": "fake"}, "finish_reason": "stop"}],
+        },
+        {
+            "id": "c",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "fake-model",
+            "choices": [],
+            "usage": REASONING_USAGE,
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse_body(*chunks))
+
+    async with client_for(state, handler) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "ep_ep1",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+            headers=auth(secret),
+        )
+        assert response.status_code == 200
+        record = (await state.usage_for("trial-ep1"))[0]
+        assert record.output_tokens == 64
+        assert record.cost_usd == pytest.approx(0.001432)
+
+
+async def test_reasoning_folded_into_completion_stays_unchanged(state: GatewayState) -> None:
+    add_route(state)
+    state.set_price("ep_ep1", PriceSpec(input_per_mtok=4.0, output_per_mtok=20.0))
+    secret = await issue(state)
+    usage = {
+        "prompt_tokens": 38,
+        "completion_tokens": 64,
+        "total_tokens": 102,
+        "completion_tokens_details": {"reasoning_tokens": 61},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={**canned_chat(), "usage": usage})
+
+    async with client_for(state, handler) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={"model": "ep_ep1", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth(secret),
+        )
+        assert response.status_code == 200
+        # 38 in * $4/M + 64 out * $20/M: no double counting of the folded reasoning.
+        assert float(response.headers[COST_HEADER]) == pytest.approx(0.001432)
+        record = (await state.usage_for("trial-ep1"))[0]
+        assert record.output_tokens == 64
+
+
+async def test_upstream_error_body_that_is_not_an_object_still_surfaces_status(
+    state: GatewayState,
+) -> None:
+    """Some upstreams answer errors with a bare JSON list; the status must still pass through."""
+    add_route(state)
+    secret = await issue(state)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json=["API_KEY_SERVICE_BLOCKED"])
+
+    async with client_for(state, handler) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={"model": "ep_ep1", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth(secret),
+        )
+        assert response.status_code == 401
+        usage = await state.usage_for("trial-ep1")
+        assert len(usage) == 1 and usage[0].status_code == 401 and usage[0].cost_usd == 0.0
 
 
 async def test_chat_stream_passthrough_and_usage(state: GatewayState) -> None:

@@ -326,6 +326,38 @@ async def test_upstream_route_carries_lock_limits_and_headers() -> None:
     assert route.cold_start_window_s == 30
 
 
+async def test_upstream_route_carries_api_key_header_from_account_or_deployment() -> None:
+    provider = make_provider({"api_key_header": "x-account-key"})
+    handle = await deploy(provider, make_spec())
+    assert provider.upstream(handle).api_key_header == "x-account-key"
+
+    per_deployment = make_provider({})
+    handle = await deploy(per_deployment, make_spec(api_key_header="x-deployment-key"))
+    assert per_deployment.upstream(handle).api_key_header == "x-deployment-key"
+
+    absent = make_provider({})
+    handle = await deploy(absent, make_spec())
+    assert absent.upstream(handle).api_key_header is None
+
+
+async def test_health_request_uses_named_api_key_header() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"model": "fake-model"})
+
+    provider = make_provider(
+        {"api_key_header": "x-goog-api-key"}, transport=transport_with(handler)
+    )
+    handle = await deploy(provider, make_spec())
+
+    assert await provider.status(handle) is EndpointState.READY
+    request = seen[-1]
+    assert request.headers["x-goog-api-key"] == _API_KEY
+    assert "authorization" not in request.headers
+
+
 async def test_upstream_requires_base_url() -> None:
     provider = make_provider()
     handle = await deploy(provider, make_spec())
