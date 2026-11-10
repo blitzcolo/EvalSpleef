@@ -38,7 +38,7 @@ from ._shared import (
     store_settings,
 )
 from .context import AppContext
-from .errors import EXIT_DOMAIN, EXIT_SUCCESS, NoDataError
+from .errors import EXIT_DOMAIN, EXIT_NO_DATA, EXIT_SUCCESS, NoDataError
 
 __all__ = ["register_batch_checks"]
 
@@ -82,8 +82,10 @@ def _print_regrade(summary: dict[str, Any], skipped: list[dict[str, str]]) -> No
     typer.echo(
         f"regrade tier agreement: {rendered} "
         f"({summary['matching']}/{summary['n']}, gate >= {summary['threshold']}): "
-        + ("PASS" if summary["passed"] else "BELOW")
+        + summary["gate"]["status"].upper()
     )
+    for entry in summary["gate"]["undefined"]:
+        typer.echo(f"{entry['metric']} undefined: {entry['reason']}; gate not decided")
 
 
 def batch_regrade_agreement(
@@ -97,8 +99,9 @@ def batch_regrade_agreement(
 
     The exact tier agreement with the latest recorded grades is the inherited
     v2 gate (AC-09 tier-regrade agreement >= 0.95); disagreements are listed per trial.
-    Exit 0 passes, 1 is below the gate, 3 means the batch recorded no gradable
-    trial.
+    Exit 0 passes, 1 is below the gate, 3 means the agreement is undefined (every
+    regrade demands a human, so no comparable tier exists) or the batch recorded
+    no gradable trial.
     """
 
     async def run() -> int:
@@ -142,14 +145,27 @@ def batch_regrade_agreement(
                 raise NoDataError(f"batch {batch_id} has no graded trial with recorded inputs")
             summary = regrade_summary(comparisons)
             summary["skipped"] = skipped
+            if summary["passed"] is None:
+                # no regrade reproduced a tier: the gate names a metric nobody computed
+                summary["gate"] = {
+                    "status": "undecided",
+                    "thresholds": {"regrade_tier_agreement": summary["threshold"]},
+                    "undefined": [{"metric": "regrade_tier_agreement", "reason": summary["note"]}],
+                }
+            else:
+                summary["gate"] = {
+                    "status": "pass" if summary["passed"] else "below",
+                    "thresholds": {"regrade_tier_agreement": summary["threshold"]},
+                    "undefined": [],
+                }
             if as_json:
                 emit_json(summary)
             else:
                 _print_regrade(summary, skipped)
-            if summary["passed"] is None:
-                # every regrade now demands a human: nothing confirms the stored tiers
-                return EXIT_DOMAIN
-            return EXIT_SUCCESS if summary["passed"] else EXIT_DOMAIN
+            status = summary["gate"]["status"]
+            if status == "undecided":
+                return EXIT_NO_DATA
+            return EXIT_SUCCESS if status == "pass" else EXIT_DOMAIN
 
     run_coro(run())
 

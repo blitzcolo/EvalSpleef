@@ -27,7 +27,7 @@ from evalspleef.control.observe.agreement import (
     vote_table_from_events,
 )
 from evalspleef.control.taskpack import TaskPackError, load_task_pack
-from evalspleef.core.agreement import ALPHA_EXPLORATORY, PERCENT_GATE
+from evalspleef.core.agreement import ALPHA_EXPLORATORY, KAPPA_GATE, PERCENT_GATE
 from evalspleef.core.events import EventType
 from evalspleef.core.models import parse_trial_id
 
@@ -44,9 +44,12 @@ from ._shared import (
     store_settings,
 )
 from .context import AppContext
-from .errors import EXIT_DOMAIN, EXIT_SUCCESS, DomainError, NoDataError, UsageError
+from .errors import EXIT_DOMAIN, EXIT_NO_DATA, EXIT_SUCCESS, DomainError, NoDataError, UsageError
 
 __all__ = ["judges_app"]
+
+#: Gate status -> process exit code (a gate with an uncomputed metric is not a failure).
+_GATE_EXIT = {"pass": EXIT_SUCCESS, "below": EXIT_DOMAIN, "undecided": EXIT_NO_DATA}
 
 judges_app = typer.Typer(no_args_is_help=True)
 
@@ -61,6 +64,75 @@ _LABELS_OPT = typer.Option(..., "--labels", help="filled labelling sheet (JSONL)
 def _fmt_metric(entry: dict[str, Any]) -> str:
     value = entry.get("value")
     return "-" if value is None else f"{float(value):.3f}"
+
+
+def _row_gate(passed: bool | None) -> str:
+    """Render one calibration row's verdict; ``None`` means its kappa was undefined."""
+    if passed is None:
+        return "undecided"
+    return "pass" if passed else "BELOW"
+
+
+def _undefined_metric(metric: str, entry: dict[str, Any], **fields: str) -> dict[str, str]:
+    """Machine-readable entry for a gate component the data could not compute."""
+    return {"metric": metric, **fields, "reason": str(entry.get("note") or "undefined")}
+
+
+def _echo_gate(label: str, gate: dict[str, Any]) -> None:
+    """Print the gate verdict, naming every component that stayed uncomputed."""
+    for entry in gate["undefined"]:
+        subject = entry["metric"]
+        if "judge" in entry:
+            subject += f" for {entry['judge']}"
+        typer.echo(f"{subject} undefined: {entry['reason']}; gate not decided")
+    typer.echo(f"{label}: {gate['status'].upper()}")
+
+
+def _agreement_gate(summary: dict[str, Any]) -> dict[str, Any]:
+    """Gate for ``judges agreement``: pooled percent >= 0.70 and alpha >= 0.667.
+
+    Undefined alpha means the gate is undecided: a PASS would claim a component
+    the data never produced.
+    """
+    percent = summary["percent_agreement"]
+    alpha = summary["alpha"]
+    undefined = [
+        _undefined_metric(name, entry)
+        for name, entry in (("percent_agreement", percent), ("alpha", alpha))
+        if entry.get("value") is None
+    ]
+    if undefined:
+        status = "undecided"
+    elif float(percent["value"]) >= PERCENT_GATE and float(alpha["value"]) >= ALPHA_EXPLORATORY:
+        status = "pass"
+    else:
+        status = "below"
+    return {
+        "status": status,
+        "thresholds": {"percent_agreement": PERCENT_GATE, "alpha": ALPHA_EXPLORATORY},
+        "undefined": undefined,
+    }
+
+
+def _calibration_gate(summary: dict[str, Any]) -> dict[str, Any]:
+    """Gate for ``judges calibrate``: per judge percent >= 0.70 and kappa >= 0.70."""
+    judges = summary["judges"]
+    undefined = [
+        _undefined_metric("cohen_kappa", row["cohen_kappa"], judge=str(row["judge"]))
+        for row in judges
+        if row["cohen_kappa"].get("value") is None
+    ]
+    if undefined:
+        status = "undecided"
+    elif judges and all(row["passed"] is True for row in judges):
+        status = "pass"
+    else:
+        status = "below"
+    return {
+        "status": status,
+        "thresholds": {"percent_agreement": PERCENT_GATE, "cohen_kappa": KAPPA_GATE},
+        "undefined": undefined,
+    }
 
 
 def _print_agreement(summary: dict[str, Any]) -> None:
@@ -98,7 +170,8 @@ def judges_agreement(
     Per judge pair Cohen kappa on item verdicts, Krippendorff alpha (nominal)
     across all judges, pooled percent agreement and the panel_split count.
     Gate: pooled percent >= 0.70 and alpha >= 0.667 (C.5 11.3). Exit 0 passes,
-    1 is below the gate, 3 means no item carries votes from two judges.
+    1 is below the gate, 3 means the gate cannot be decided: no item carries votes
+    from two judges, or a gate metric (alpha) is mathematically undefined.
     """
 
     async def run() -> int:
@@ -108,23 +181,14 @@ def judges_agreement(
                 summary = agreement_summary(votes)
             except NotEnoughDataError as exc:
                 raise NoDataError(str(exc)) from exc
+            gate = _agreement_gate(summary)
+            summary["gate"] = gate
             if as_json:
                 emit_json(summary)
             else:
                 _print_agreement(summary)
-            percent_value = summary["percent_agreement"].get("value")
-            alpha_value = summary["alpha"].get("value")
-            passed = (
-                percent_value is not None
-                and float(percent_value) >= PERCENT_GATE
-                and (alpha_value is None or float(alpha_value) >= ALPHA_EXPLORATORY)
-            )
-            if not as_json:
-                typer.echo(
-                    f"gate (percent >= {PERCENT_GATE}, alpha >= {ALPHA_EXPLORATORY}): "
-                    + ("PASS" if passed else "BELOW")
-                )
-            return EXIT_SUCCESS if passed else EXIT_DOMAIN
+                _echo_gate(f"gate (percent >= {PERCENT_GATE}, alpha >= {ALPHA_EXPLORATORY})", gate)
+            return _GATE_EXIT[gate["status"]]
 
     run_coro(run())
 
@@ -215,7 +279,8 @@ def judges_calibrate(
     Per judge Cohen kappa and percent agreement versus the labels; Krippendorff
     alpha with the label as one more rater. Gate (dual, C.5 11.4): percent
     >= 0.70 and kappa >= 0.70 per judge. Exit 0 passes, 1 means a judge is
-    below the gate, 3 means no recorded verdict matches a label row.
+    below the gate, 3 means the gate cannot be decided: no recorded verdict
+    matches a label row, or a judge's kappa is mathematically undefined.
     """
 
     async def run() -> int:
@@ -234,6 +299,8 @@ def judges_calibrate(
             except NotEnoughDataError as exc:
                 raise NoDataError(str(exc)) from exc
             judges = summary["judges"]
+            gate = _calibration_gate(summary)
+            summary["gate"] = gate
             if as_json:
                 emit_json(summary)
             else:
@@ -245,7 +312,7 @@ def judges_calibrate(
                             row["n"],
                             _fmt_metric(row["cohen_kappa"]),
                             _fmt_metric(row["percent_agreement"]),
-                            "pass" if row["passed"] else "BELOW",
+                            _row_gate(row["passed"]),
                         ]
                         for row in judges
                     ],
@@ -257,13 +324,11 @@ def judges_calibrate(
                 )
                 if summary["unmatched_items"]:
                     typer.echo(f"recorded items without a label: {summary['unmatched_items']}")
-            passed = bool(judges) and all(bool(row["passed"]) for row in judges)
-            if not as_json:
-                typer.echo(
-                    "gate (per judge percent >= 0.70 and kappa >= 0.70): "
-                    + ("PASS" if passed else "BELOW")
+                _echo_gate(
+                    "gate (per judge percent >= 0.70 and kappa >= 0.70)",
+                    gate,
                 )
-            return EXIT_SUCCESS if passed else EXIT_DOMAIN
+            return _GATE_EXIT[gate["status"]]
 
     run_coro(run())
 

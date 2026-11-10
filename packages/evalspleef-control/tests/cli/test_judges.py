@@ -34,6 +34,11 @@ SPLIT = {
     "judge-a": dict(zip(JUDGED_ITEMS, ["pass"] * 4 + ["fail"], strict=True)),
     "judge-b": dict(zip(JUDGED_ITEMS, ["pass", "pass", "fail", "fail", "fail"], strict=True)),
 }
+#: both judges pass every item: percent 1.0, but alpha (De=0) and kappa (pe=1) are undefined.
+UNANIMOUS = {
+    "judge-a": dict.fromkeys(JUDGED_ITEMS, "pass"),
+    "judge-b": dict.fromkeys(JUDGED_ITEMS, "pass"),
+}
 
 JUDGE_MODELS_YAML = """\
   - slug: judge-a
@@ -158,6 +163,19 @@ def aligned_batch(
     yield env
 
 
+@pytest.fixture
+def unanimous_batch(
+    cli_runner: CliRunner,
+    args: list[str],
+    env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_server: FakeOpenAIServer,
+) -> Iterator[Path]:
+    """A finished batch whose two judges pass every item (one rating category only)."""
+    _run_batch(cli_runner, args, env, monkeypatch, fake_server, UNANIMOUS)
+    yield env
+
+
 def test_agreement_pass(
     cli_runner: CliRunner,
     args: list[str],
@@ -179,6 +197,8 @@ def test_agreement_pass(
     assert summary["alpha"]["verdict"] == "usable"
     assert summary["panel_splits"] == 0
     assert summary["percent_agreement"]["value"] == pytest.approx(1.0)
+    assert summary["gate"]["status"] == "pass"
+    assert summary["gate"]["undefined"] == []
 
 
 def test_agreement_below_gate(
@@ -199,6 +219,29 @@ def test_agreement_below_gate(
     assert pair["percent_agreement"]["value"] == pytest.approx(0.6)
     assert summary["alpha"]["value"] == pytest.approx(0.25)
     assert summary["panel_splits"] == 2
+    assert summary["gate"]["status"] == "below"
+
+
+def test_agreement_undefined_alpha_is_undecided(
+    cli_runner: CliRunner, unanimous_batch: Path
+) -> None:
+    """All-identical votes leave alpha undefined (De=0); the gate must not PASS."""
+    result = cli_runner.invoke(app, ["judges", "agreement", "--batch-id", "2026-11-b1", "--json"])
+    assert result.exit_code == 3, result.output
+    summary = json.loads(result.output)
+    assert summary["percent_agreement"]["value"] == pytest.approx(1.0)
+    assert summary["alpha"]["value"] is None
+    assert summary["gate"]["status"] == "undecided"
+    assert [entry["metric"] for entry in summary["gate"]["undefined"]] == ["alpha"]
+    assert "De=0" in summary["gate"]["undefined"][0]["reason"]
+
+    human = cli_runner.invoke(app, ["judges", "agreement", "--batch-id", "2026-11-b1"])
+    assert human.exit_code == 3, human.output
+    assert "alpha undefined" in human.output
+    assert "gate not decided" in human.output
+    assert "UNDECIDED" in human.output
+    assert "PASS" not in human.output
+    assert "pooled percent agreement: 1.000" in human.output
 
 
 def test_agreement_not_enough_data(cli_runner: CliRunner, env: Path, args: list[str]) -> None:
@@ -245,6 +288,7 @@ def test_calibrate_pass_and_below_gate(cli_runner: CliRunner, aligned_batch: Pat
     assert [row["passed"] for row in summary["judges"]] == [True, True]
     assert all(row["cohen_kappa"]["value"] == pytest.approx(1.0) for row in summary["judges"])
     assert summary["alpha"]["value"] == pytest.approx(1.0)
+    assert summary["gate"]["status"] == "pass"
 
     # one label flipped: every judge drops below the dual gate (percent 0.8, kappa < 0.70)
     for row in rows:
@@ -258,6 +302,39 @@ def test_calibrate_pass_and_below_gate(cli_runner: CliRunner, aligned_batch: Pat
     assert result.exit_code == 1, result.output
     summary = json.loads(result.output)
     assert all(not row["passed"] for row in summary["judges"])
+    assert summary["gate"]["status"] == "below"
+
+
+def test_calibrate_undefined_kappa_is_undecided(
+    cli_runner: CliRunner, unanimous_batch: Path
+) -> None:
+    """Labels identical to a one-category panel leave kappa undefined (pe=1)."""
+    rows = [
+        {"trial_id": "logic-001.demo.scripted.e1.t01", "item_id": item, "label": "pass"}
+        for item in JUDGED_ITEMS
+    ]
+    filled = unanimous_batch.parent / "labels-unanimous.jsonl"
+    filled.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    result = cli_runner.invoke(
+        app, ["judges", "calibrate", "--batch-id", "2026-11-b1", "--labels", str(filled), "--json"]
+    )
+    assert result.exit_code == 3, result.output
+    summary = json.loads(result.output)
+    assert all(row["percent_agreement"]["value"] == pytest.approx(1.0) for row in summary["judges"])
+    assert all(row["cohen_kappa"]["value"] is None for row in summary["judges"])
+    assert all(row["passed"] is None for row in summary["judges"])
+    assert summary["gate"]["status"] == "undecided"
+    assert {entry["judge"] for entry in summary["gate"]["undefined"]} == {"judge-a", "judge-b"}
+    assert all(entry["metric"] == "cohen_kappa" for entry in summary["gate"]["undefined"])
+
+    human = cli_runner.invoke(
+        app, ["judges", "calibrate", "--batch-id", "2026-11-b1", "--labels", str(filled)]
+    )
+    assert human.exit_code == 3, human.output
+    assert "cohen_kappa for judge-a undefined" in human.output
+    assert "gate not decided" in human.output
+    assert "UNDECIDED" in human.output
+    assert "PASS" not in human.output
 
 
 def test_calibrate_split_panel_only_one_judge_fails(

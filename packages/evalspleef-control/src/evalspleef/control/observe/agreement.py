@@ -170,8 +170,9 @@ def calibration_summary(votes: VoteTable, labels: Mapping[tuple[str, str], str])
 
     Per judge: Cohen κ and percent agreement versus the labels on the items
     both rated (the C.5 11.4 gate is the dual gate percent ≥ 0.70 and κ ≥ 0.70,
-    AC-09). Across all judges plus the label as one more rater: Krippendorff α
-    (nominal, missing data).
+    AC-09); a judge whose κ is undefined (every rating identical, pe=1) reports
+    ``passed: None`` instead of a verdict. Across all judges plus the label as
+    one more rater: Krippendorff α (nominal, missing data).
     """
     labeled: list[tuple[dict[str, str], str]] = [
         (unit, labels[(trial_id, item_id)])
@@ -194,19 +195,24 @@ def calibration_summary(votes: VoteTable, labels: Mapping[tuple[str, str], str])
             kappa = {"metric": "cohen_kappa", "value": None, "note": str(exc)}
         percent = percent_agreement(pairs)
         kappa_value = kappa.get("value")
+        # None records "kappa could not be computed" (pe=1): the dual gate is undecided,
+        # neither a pass nor a failure.
+        passed: bool | None = (
+            None
+            if kappa_value is None
+            else bool(percent.value >= PERCENT_GATE and kappa_value >= KAPPA_GATE)
+        )
         rows.append(
             {
                 "judge": judge,
                 "n": len(pairs),
                 "cohen_kappa": kappa,
                 "percent_agreement": _result_dict(percent),
-                "passed": bool(
-                    percent.value >= PERCENT_GATE
-                    and kappa_value is not None
-                    and kappa_value >= KAPPA_GATE
-                ),
+                "passed": passed,
             }
         )
+    if not rows:
+        raise NotEnoughDataError("no judge voted on any labelled item")
     units_with_label = [{**unit, "__label__": label} for unit, label in labeled if len(unit) >= 1]
     alpha = _alpha_over_units(units_with_label, [*judges, "__label__"])
     unmatched = sum(
@@ -270,7 +276,7 @@ def regrade_summary(comparisons: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     ]
     n = len(comparable)
     value = matching / n if n else 0.0
-    return {
+    summary: dict[str, Any] = {
         "metric": "regrade_tier_agreement",
         "value": value if n else None,
         "n": n,
@@ -279,6 +285,9 @@ def regrade_summary(comparisons: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "passed": (value >= REGRADE_GATE) if n else None,
         "disagreements": disagreements,
     }
+    if not n:
+        summary["note"] = "every regrade demands a human, so no comparable tier exists"
+    return summary
 
 
 def stability_summary(batch_tiers: Sequence[Mapping[str, Tier]]) -> dict[str, Any]:

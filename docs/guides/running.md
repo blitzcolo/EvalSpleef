@@ -189,6 +189,17 @@ commands over the recorded `judge.verdict` events and grades. Every command prin
 a human table and accepts `--json`. Exit codes: 0 gate passed, 1 below the gate, 3
 not enough data in the store (never confused with a gate failure).
 
+A gate is decided only when every metric it names was computed. Alpha (identical
+ratings, `De=0`) and kappa (one rating category, `pe=1`) are mathematically
+undefined on degenerate panels; `regrade-agreement` has no comparable tier when
+every regrade demands a human. In those cases the metric prints as `-`, the gate
+prints `UNDECIDED`, the command exits 3, and `--json` carries
+`"gate": {"status": "undecided", "undefined": [{"metric": ..., "reason": ...}]}`.
+Percent agreement is still reported. An undecided gate is never a pass: vary the
+ratings (or add comparable items) before treating the panel as calibrated.
+`batch stability` has no undefined gate: a shared cell set always yields a
+computable within-1 share, and no shared cell exits 3.
+
 ### Panel health: `spleef judges agreement`
 
 ```bash
@@ -199,7 +210,7 @@ uv run spleef judges agreement --batch-id 2026-11-b1 --json
 Per judge pair Cohen kappa on item verdicts, Krippendorff alpha (nominal) across
 all judges with missing data, the pooled percent agreement, the `panel_split`
 count (items whose judges disagreed) and `n`. Gate: pooled percent >= 0.70 and
-alpha >= 0.667 (C.5 11.3).
+alpha >= 0.667 (C.5 11.3); an undefined alpha leaves the gate undecided (exit 3).
 
 ### Blind labelling and calibration (docs/03 11.4, AC-09)
 
@@ -215,6 +226,8 @@ The sheet is JSONL, one row per judged item:
 `{"trial_id", "task_id", "item_id", "rubric_text", "artifacts": [{"path", "sha256"}], "label": null}`.
 A judge below the gate fails the command with exit 1: fix the rubric, the feedback
 text or the judge prompt and recalibrate — never tune the threshold to fit (11.4).
+A judge whose kappa is undefined (labels and votes in a single category) leaves
+the gate undecided (exit 3), not failed.
 
 ### Seed gold set (cold start, weaker than human labels)
 
@@ -239,4 +252,6 @@ uv run spleef batch stability --batch-id 2026-11-b1 --batch-id 2026-11-b2
 `regrade-agreement` lists every disagreement (stored tier vs recomputed tier) and
 never writes: it is a check, not a regrade. `stability` compares cell tiers (the
 median of the cell's latest recorded grades) across batches and reports the exact
-agreement alongside the within-1 share.
+agreement alongside the within-1 share. `regrade-agreement` exits 3 with an
+undecided gate when no regrade reproduced a stored tier, because there is then no
+agreement share to compare against 0.95.
