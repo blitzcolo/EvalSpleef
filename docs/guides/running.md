@@ -125,7 +125,9 @@ uv run spleef batch report $C --batch config/batch.yaml --json --release out/rel
 uv run spleef batch costs  $C --batch config/batch.yaml
 ```
 
-`batch run` checks the batch budget before each trial starts, retries infrastructure failures as new trial records, and leaves endpoints as `endpoint_policy.retire_after` says. Retire self-hosted endpoints explicitly with `spleef models retire` when a run is interrupted, so GPUs do not keep billing.
+`batch run` checks the batch budget before each trial starts, retries infrastructure failures as new trial records, and leaves endpoints as `endpoint_policy.retire_after` says. Retire self-hosted endpoints explicitly with `spleef models retire` when a run is interrupted, so GPUs do not keep billing. Before it tears an endpoint down, `retire` asks the provider for the engine log and keeps it as `<state_dir>/endpoint-logs/<endpoint_id>/<utc>.log` with every configured secret value replaced by `***`; the retire event carries `engine_log` with the path, `sha256`, byte count and a `truncated` flag, or `unsupported` / the fetch error. A failed fetch never delays the teardown. The Beam adapter supports it: its log API was checked read-only (filter, paging, row limit), but not a pod's log fetched during its own teardown.
+
+A model with `mirror: true` needs a Hugging Face token that can create repositories; registration rejects it with a clear message otherwise. `mirror` defaults to `false` on every path (`spleef models register` and direct registration alike).
 
 `batch run` prints the report in every case, then exits 1 with one `error:` line when any runnable cell ended `Pending`: such a cell has no result because every trial of it ended `failed_infra` or `invalid` (the line counts the cells and their trials by state; `spleef trials list --batch-id <id>` shows why each failed). Cells in the manual-review queue (`Manual`), scored cells and skipped cells are results and keep the exit code 0. `batch report` and `batch plan` do not apply this check.
 

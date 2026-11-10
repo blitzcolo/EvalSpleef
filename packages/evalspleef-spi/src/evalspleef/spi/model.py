@@ -153,6 +153,17 @@ class UpstreamRoute:
     """Tokens per minute (projected input plus max output) the gateway admits to this route."""
 
 
+@dataclass(frozen=True)
+class EngineLog:
+    """The engine or container log of an endpoint, as text."""
+
+    text: str
+    truncated: bool = False
+    """True when the engine wrote more than was returned; ``text`` then holds the newest part."""
+    dropped: int = 0
+    """Entries the provider received but left out because they belonged to another endpoint."""
+
+
 class ModelEndpointProvider(ABC):
     name: str
     management_mode: ManagementMode
@@ -188,6 +199,13 @@ class ModelEndpointProvider(ABC):
     @abstractmethod
     async def wake(self, handle: EndpointHandle, timeout_s: int) -> EndpointState:
         """Send minimal requests until the endpoint is WARM or the timeout expires."""
+
+    async def engine_log(self, handle: EndpointHandle, *, max_bytes: int) -> EngineLog:
+        """Optional: the engine/container log, at most ``max_bytes`` of UTF-8, newest part kept.
+
+        The endpoint manager calls it right before ``teardown`` so a paid run keeps its log.
+        """
+        raise CapabilityNotSupported("engine_log")
 
     @abstractmethod
     async def teardown(self, handle: EndpointHandle, mode: TeardownMode) -> None:

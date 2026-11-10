@@ -54,6 +54,7 @@ from evalspleef.spi.model import (
 )
 from evalspleef.spi.probe import ProbeReport
 
+from .engine_logs import EngineLogStore
 from .states import (
     TRANSITIONS,
     EndpointNotFound,
@@ -830,19 +831,33 @@ class EndpointManager:
     # -- retirement -------------------------------------------------------------------------
 
     async def retire(
-        self, endpoint_id: str, policy: TeardownMode, *, batch_id: str | None = None
+        self,
+        endpoint_id: str,
+        policy: TeardownMode,
+        *,
+        batch_id: str | None = None,
+        engine_logs: EngineLogStore | None = None,
     ) -> EndpointHandle:
         """Scale to zero (``sleep``) or shut down (``terminate``) after the batch is graded.
 
         Assisted endpoints open a teardown ticket instead and change state when it is confirmed.
+        With ``engine_logs`` the engine log is stored before teardown and its outcome (path,
+        sha256, size or the reason it is missing) goes into the retire event.
         """
         handle = await self.get(endpoint_id)
         if handle.state in (S.RETIRED, S.REJECTED):
             raise InvalidTransition(f"endpoint {endpoint_id} is already {handle.state.value}")
         provider = self._provider(handle)
         current = handle.state
+        engine_log = (
+            await engine_logs.capture(provider, handle, iso_utc(self._clock.now()))
+            if engine_logs is not None
+            else None
+        )
         await provider.teardown(handle, policy)
         handle.state = current
+        if engine_log is not None:
+            handle.observed["engine_log"] = engine_log
         if provider.management_mode is ManagementMode.ASSISTED:
             action = (
                 "Set Min Replicas to 0 (scale to zero)"
@@ -868,8 +883,14 @@ class EndpointManager:
     ) -> None:
         external = self._provider(handle).management_mode is ManagementMode.EXTERNAL
         final = S.RETIRED if policy == "terminate" or external else S.SLEEPING
+        engine_log = handle.observed.pop("engine_log", None)
         await self._transition(
-            handle, final, reason=f"retire:{policy}", batch_id=batch_id, policy=policy
+            handle,
+            final,
+            reason=f"retire:{policy}",
+            batch_id=batch_id,
+            policy=policy,
+            **({} if engine_log is None else {"engine_log": engine_log}),
         )
         if final is S.RETIRED:
             await self._gateway.remove_route(public_name(handle.endpoint_id))

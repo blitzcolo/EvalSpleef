@@ -18,6 +18,7 @@ from evalspleef_model_beam.errors import (
     DeploymentNotFound,
     LaunchFailed,
     ParallelismMismatch,
+    StubIdMissing,
 )
 from evalspleef_model_beam.launcher import RESULT_PREFIX
 from evalspleef_model_beam.provider import BeamPodProvider, deployment_name, parse_launch_result
@@ -272,6 +273,101 @@ async def test_terminate_stops_and_deletes_and_is_idempotent(
     assert await provider.status(handle) is EndpointState.RETIRED
     await provider.teardown(handle, "terminate")
     assert handle.state is EndpointState.RETIRED
+
+
+# -- engine log ----------------------------------------------------------------------------------
+
+T0 = 1_800_000_000_000_000_000
+"""Nanosecond epoch the fake log entries start from."""
+
+
+def _stub_of(handle: EndpointHandle) -> str:
+    return handle.external_ids["beam_stub_id"]
+
+
+async def test_engine_log_holds_only_this_stubs_lines_without_the_beam_token(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, make_spec: SpecFactory
+) -> None:
+    handle = await deployed(provider, make_spec())
+    gateway.add_log_lines("stub-other", ["other pod"], start_ns=T0 + 500_000)
+    stamps = gateway.add_log_lines(
+        _stub_of(handle), ["sglang up", f"Authorization: Bearer {TOKEN}"], start_ns=T0
+    )
+
+    log = await provider.engine_log(handle, max_bytes=10_000)
+
+    assert log.text == f"{stamps[0]} sglang up\n{stamps[1]} Authorization: Bearer ***"
+    assert (log.truncated, log.dropped) == (False, 0)
+    first = gateway.log_queries[0]
+    assert (first["stub_id"], first["limit"]) == (_stub_of(handle), "1000")
+    assert not {"deployment_id", "tail"} & first.keys()  # the vendor ignores both
+
+
+async def test_engine_log_drops_and_counts_entries_of_other_stubs_the_api_let_through(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, make_spec: SpecFactory
+) -> None:
+    handle = await deployed(provider, make_spec())
+    gateway.ignores_stub_filter = True
+    gateway.add_log_lines("stub-other", ["other pod"], start_ns=T0)
+    gateway.add_log_lines(_stub_of(handle), ["mine"], start_ns=T0 + 1_000_000)
+
+    log = await provider.engine_log(handle, max_bytes=10_000)
+
+    assert log.text.endswith(" mine") and "other pod" not in log.text
+    assert log.dropped == 1
+
+
+async def test_engine_log_pages_back_past_the_1000_row_limit_and_keeps_every_line(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, make_spec: SpecFactory
+) -> None:
+    handle = await deployed(provider, make_spec())
+    messages = [f"line {index}" for index in range(2500)]
+    gateway.add_log_lines("stub-other", ["noise"] * 40, start_ns=T0)
+    gateway.add_log_lines(_stub_of(handle), messages, start_ns=T0)
+
+    log = await provider.engine_log(handle, max_bytes=10_000_000)
+
+    assert [line.split(" ", 1)[1] for line in log.text.splitlines()] == messages
+    assert (log.truncated, log.dropped) == (False, 0)
+    assert [query["limit"] for query in gateway.log_queries] == ["1000"] * 4  # 1000+1000+500+empty
+
+
+async def test_engine_log_stops_when_the_api_ignores_end_time_and_says_so(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, make_spec: SpecFactory
+) -> None:
+    handle = await deployed(provider, make_spec())
+    gateway.ignores_end_time = True
+    gateway.add_log_lines(_stub_of(handle), [f"line {index}" for index in range(1500)], start_ns=T0)
+
+    log = await provider.engine_log(handle, max_bytes=10_000_000)
+
+    assert len(log.text.splitlines()) == 1000  # the newest page, once
+    assert log.truncated is True
+    assert len(gateway.log_queries) <= 2  # a stalled cursor must not loop
+
+
+async def test_engine_log_keeps_the_newest_bytes_and_flags_the_cut(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, make_spec: SpecFactory
+) -> None:
+    handle = await deployed(provider, make_spec())
+    gateway.add_log_lines(_stub_of(handle), ["old line", "newest line"], start_ns=T0)
+
+    log = await provider.engine_log(handle, max_bytes=11)
+
+    assert (log.text, log.truncated) == ("newest line", True)
+
+
+async def test_engine_log_without_a_stub_id_sends_no_request(
+    provider: BeamPodProvider, gateway: FakeBeamGateway, make_spec: SpecFactory
+) -> None:
+    handle = await deployed(provider, make_spec())
+    handle.external_ids["beam_stub_id"] = ""
+    gateway.add_log_lines("stub-other", ["other pod"], start_ns=T0)
+
+    with pytest.raises(StubIdMissing):
+        await provider.engine_log(handle, max_bytes=100)
+
+    assert gateway.log_queries == []
 
 
 # -- weights from a Beam Volume ------------------------------------------------------------------

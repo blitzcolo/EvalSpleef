@@ -30,6 +30,10 @@ class LaunchFailed(EndpointUnavailable):
     """The launcher could not deploy the Pod (no capacity, image build, SDK failure, timeout)."""
 
 
+class StubIdMissing(EndpointMismatch):
+    """The handle carries no Beam stub id, so its log cannot be filtered to this endpoint."""
+
+
 class ParallelismMismatch(SpleefError):
     """The parallel layout of the engine arguments does not fit the requested GPU count."""
 

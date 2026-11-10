@@ -44,7 +44,7 @@ from evalspleef.control.bench import (
 )
 from evalspleef.control.bench.report import bench_markdown, facts_line
 from evalspleef.control.config import ConfigError
-from evalspleef.control.endpoints import make_endpoint_id, probe_failures
+from evalspleef.control.endpoints import EngineLogStore, make_endpoint_id, probe_failures
 from evalspleef.control.events import verify_projection
 from evalspleef.control.ledger import CostLedger
 from evalspleef.control.store.rows import GradeRow
@@ -834,7 +834,11 @@ async def _models_retire(
         manager = ctx.endpoint_manager()
         for spec in await _registered_specs(ctx, model):
             endpoint_id = make_endpoint_id(spec)
-            handle = await manager.retire(endpoint_id, policy)  # type: ignore[arg-type]
+            handle = await manager.retire(
+                endpoint_id,
+                policy,  # type: ignore[arg-type]
+                engine_logs=EngineLogStore(ctx.settings.state_dir / "endpoint-logs", ctx.secrets),
+            )
             typer.echo(f"{endpoint_id}  {handle.state.value}")
         return EXIT_SUCCESS
 
@@ -1684,7 +1688,13 @@ async def _batch_run(
                 policy = cast("TeardownMode", batch_config.endpoint_policy.retire_after)
                 for endpoint_id in endpoint_ids:
                     try:
-                        handle = await manager.retire(endpoint_id, policy)
+                        handle = await manager.retire(
+                            endpoint_id,
+                            policy,
+                            engine_logs=EngineLogStore(
+                                ctx.settings.state_dir / "endpoint-logs", ctx.secrets
+                            ),
+                        )
                         typer.echo(f"retire {endpoint_id}: {handle.state.value}")
                     except SpleefError as exc:
                         typer.secho(

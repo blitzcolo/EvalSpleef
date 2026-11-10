@@ -27,6 +27,7 @@ from evalspleef.spi.model import (
     DeploymentPlan,
     EndpointHandle,
     EndpointState,
+    EngineLog,
     ModelEndpointProvider,
     ModelSpec,
     TeardownMode,
@@ -308,6 +309,10 @@ class TracedEndpointProvider(_SpanMixin, ModelEndpointProvider):
     async def wake(self, handle: EndpointHandle, timeout_s: int) -> EndpointState:
         with self._start_span("wake", self._inner):
             return await self._inner.wake(handle, timeout_s)
+
+    async def engine_log(self, handle: EndpointHandle, *, max_bytes: int) -> EngineLog:
+        with self._start_span("engine_log", self._inner):
+            return await self._inner.engine_log(handle, max_bytes=max_bytes)
 
     async def teardown(self, handle: EndpointHandle, mode: TeardownMode) -> None:
         with self._start_span("teardown", self._inner):

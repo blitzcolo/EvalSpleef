@@ -19,11 +19,12 @@ import hashlib
 from collections.abc import Mapping
 from typing import Any
 
-from evalspleef.spi.errors import EndpointMismatch, EndpointUnavailable
+from evalspleef.spi.errors import CapabilityNotSupported, EndpointMismatch, EndpointUnavailable
 from evalspleef.spi.model import (
     DeploymentPlan,
     EndpointHandle,
     EndpointState,
+    EngineLog,
     HFSource,
     ManagementMode,
     ModelEndpointProvider,
@@ -188,6 +189,19 @@ class _MockProvider(ModelEndpointProvider):
         handle.observed["cold_start_s"] = cold_start_s
         handle.state = EndpointState.WARM
         return handle.state
+
+    async def engine_log(self, handle: EndpointHandle, *, max_bytes: int) -> EngineLog:
+        """Config ``engine_log`` is the log text, ``engine_log_error`` makes the fetch fail."""
+        del handle
+        if self.config.get("engine_log_error"):
+            raise EndpointUnavailable(str(self.config["engine_log_error"]))
+        text = self.config.get("engine_log")
+        if not isinstance(text, str):
+            raise CapabilityNotSupported("engine_log")
+        data = text.encode()
+        if len(data) <= max_bytes:
+            return EngineLog(text)
+        return EngineLog(data[len(data) - max_bytes :].decode(errors="ignore"), truncated=True)
 
     async def teardown(self, handle: EndpointHandle, mode: TeardownMode) -> None:
         handle.state = EndpointState.SLEEPING if mode == "sleep" else EndpointState.RETIRED

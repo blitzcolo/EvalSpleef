@@ -9,7 +9,7 @@ and no request body is ever logged or echoed into an error.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import httpx
@@ -49,20 +49,33 @@ class BeamGatewayClient:
                 text = text.replace(secret, "***")
         return text[:_MESSAGE_CHARS]
 
-    async def _request(
-        self, method: str, path: str, *, body: dict[str, Any] | None = None, rest: bool = False
-    ) -> dict[str, Any]:
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        rest: bool = False,
+        params: Mapping[str, str | int] | None = None,
+    ) -> httpx.Response:
         headers = {"authorization": f"Bearer {self._token()}"}
         base = self._rest_base if rest else self._api_base
         try:
             async with httpx.AsyncClient(
                 transport=self._transport, timeout=httpx.Timeout(self._timeout_s)
             ) as client:
-                response = await client.request(method, base + path, json=body, headers=headers)
+                return await client.request(
+                    method, base + path, json=body, headers=headers, params=params
+                )
         except httpx.TransportError as exc:
             raise EndpointUnavailable(
                 f"{method} {path}: {type(exc).__name__}", detail={"reason": "transport"}
             ) from exc
+
+    async def _request(
+        self, method: str, path: str, *, body: dict[str, Any] | None = None, rest: bool = False
+    ) -> dict[str, Any]:
+        response = await self._send(method, path, body=body, rest=rest)
         payload: Any = None
         if response.content:
             try:
@@ -142,6 +155,26 @@ class BeamGatewayClient:
                 detail={"reason": "malformed"},
             )
         return workspace_id
+
+    async def get_log_page(
+        self, workspace_id: str, query: Mapping[str, str | int]
+    ) -> list[dict[str, Any]]:
+        """One ``GET /logs/{ws}`` request; see :mod:`.logs` for the measured parameters."""
+        path = f"/logs/{workspace_id}"
+        response = await self._send("GET", path, rest=True, params=dict(query))
+        if response.status_code >= 400:
+            raise self._http_error("GET", path, response.status_code, self._scrub(response.text))
+        try:
+            payload: Any = response.json()
+        except json.JSONDecodeError:
+            payload = None
+        entries = payload.get("logs") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            raise EndpointUnavailable(
+                f"GET {path}: HTTP {response.status_code} without a 'logs' list",
+                detail={"reason": "malformed"},
+            )
+        return [entry for entry in entries if isinstance(entry, dict)]
 
     async def get_task(self, workspace_id: str, task_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/task/{workspace_id}/{task_id}", rest=True)

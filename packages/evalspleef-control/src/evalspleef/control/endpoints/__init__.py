@@ -1,5 +1,6 @@
 """Endpoint manager (TECH-DESIGN section 6.2): lifecycle, tickets, warm-up, health, retirement."""
 
+from .engine_logs import EngineLogStore
 from .health import HealthLoop, RunningBatches
 from .manager import (
     EndpointManager,
@@ -26,6 +27,7 @@ __all__ = [
     "EndpointManager",
     "EndpointManagerConfig",
     "EndpointNotFound",
+    "EngineLogStore",
     "GuardReport",
     "HealthLoop",
     "IdleSpinAlert",

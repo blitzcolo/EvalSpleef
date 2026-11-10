@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -152,6 +153,12 @@ class FakeBeamGateway:
         """Task id -> statuses answered by successive GETs; the last one repeats."""
         self.task_statuses: list[str] = ["RUNNING", "COMPLETE"]
         self.stopped_containers: list[str] = []
+        self.log_entries: list[dict[str, Any]] = []
+        """Every stub's log entries, oldest first, as ``GET /logs/{ws}`` serves them."""
+        self.log_queries: list[dict[str, str]] = []
+        self.ignores_end_time = False
+        self.ignores_stub_filter = False
+        self._log_ns: dict[str, int] = {}
         self._counter = 0
 
     def transport(self) -> httpx.MockTransport:
@@ -173,11 +180,56 @@ class FakeBeamGateway:
         self.tasks[task_id] = deque(self.task_statuses)
         return f"pod-run-{self._counter}", task_id
 
+    def add_log_lines(self, stub_id: str, lines: Sequence[str], *, start_ns: int) -> list[str]:
+        """Append one entry per line, 1 ms apart from ``start_ns``; returns their timestamps."""
+        stamps: list[str] = []
+        for index, message in enumerate(lines):
+            ns = start_ns + index * 1_000_000
+            stamp = datetime.fromtimestamp(ns // 10**9, UTC).strftime("%Y-%m-%dT%H:%M:%S")
+            stamp += f".{ns % 10**9:09d}Z"
+            self._log_ns[stamp] = ns
+            self.log_entries.append(
+                {
+                    "app_id": "app-1",
+                    "container_id": f"c-{stub_id}",
+                    "message": message,
+                    "seq_num": len(self.log_entries) + 1,
+                    "stored_at_ns": ns,
+                    "stream": "stdout",
+                    "stub_id": stub_id,
+                    "timestamp": stamp,
+                }
+            )
+            stamps.append(stamp)
+        self.log_entries.sort(key=lambda entry: entry["stored_at_ns"])
+        return stamps
+
+    def _logs(self, query: Mapping[str, str]) -> httpx.Response:
+        """The vendor's behaviour: ``limit`` (default 100, max 1000), ``stub_id`` and ``end_time``
+        are honoured; every other parameter (``tail``, ``deployment_id``, cursors) is ignored."""
+        entries = self.log_entries
+        if "stub_id" in query and not self.ignores_stub_filter:
+            entries = [entry for entry in entries if entry["stub_id"] == query["stub_id"]]
+        if "end_time" in query and not self.ignores_end_time:
+            cutoff = self._log_ns[query["end_time"]]
+            entries = [entry for entry in entries if entry["stored_at_ns"] < cutoff]
+        limit = min(int(query.get("limit", "100")), 1000)
+        return httpx.Response(
+            200,
+            json={
+                "logs": entries[len(entries) - limit :] if limit < len(entries) else entries,
+                "next_cursor": "x",
+                "object_id": "",
+                "streams": ["stdout"],
+                "total_expected": len(entries),
+            },
+        )
+
     @staticmethod
     def _ok(payload: Mapping[str, Any] | None = None) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, **(payload or {})})
 
-    def _rest(self, method: str, path: str) -> httpx.Response:
+    def _rest(self, method: str, path: str, query: Mapping[str, str]) -> httpx.Response:
         if (method, path) == ("GET", "/workspace/current"):
             return httpx.Response(
                 200,
@@ -189,6 +241,9 @@ class FakeBeamGateway:
             )
         if (method, path) == ("GET", f"/workspace/{WORKSPACE_ID}/limits"):
             return httpx.Response(200, json={"max_gpu_count": self.max_gpu_count})
+        if (method, path) == ("GET", f"/logs/{WORKSPACE_ID}"):
+            self.log_queries.append(dict(query))
+            return self._logs(query)
         parts = path.strip("/").split("/")
         if method == "GET" and len(parts) == 3 and parts[:2] == ["task", WORKSPACE_ID]:
             statuses = self.tasks.get(parts[2])
@@ -212,7 +267,7 @@ class FakeBeamGateway:
         if request.headers.get("authorization") != f"Bearer {self.token}":
             return httpx.Response(401, json={"message": "invalid token"})
         if rest:
-            return self._rest(request.method, path)
+            return self._rest(request.method, path, request.url.params)
         if (request.method, path) == ("GET", "/deployments"):
             return self._ok({"deployments": list(self.deployments.values())})
         if (request.method, path) == ("GET", "/containers"):

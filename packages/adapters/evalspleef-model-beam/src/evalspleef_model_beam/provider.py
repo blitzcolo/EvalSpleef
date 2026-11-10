@@ -31,6 +31,7 @@ from evalspleef.spi.model import (
     DeploymentPlan,
     EndpointHandle,
     EndpointState,
+    EngineLog,
     HFSource,
     ManagementMode,
     ModelEndpointProvider,
@@ -49,6 +50,7 @@ from .errors import (
     LaunchFailed,
     ParallelismMismatch,
     PlanInputMissing,
+    StubIdMissing,
 )
 from .gateway_api import DEFAULT_API_BASE, DEFAULT_REST_BASE, BeamGatewayClient
 from .inference import (
@@ -59,6 +61,7 @@ from .inference import (
     serves_models,
     wake_loop,
 )
+from .logs import read_stub_log
 from .parallel import Layout, layout
 
 LaunchRunner = Callable[
@@ -756,6 +759,34 @@ class BeamPodProvider(ModelEndpointProvider):
         handle.observed["max_replicas"] = max_replicas
         if max_replicas == 0:
             handle.state = EndpointState.SLEEPING
+
+    async def engine_log(self, handle: EndpointHandle, *, max_bytes: int) -> EngineLog:
+        """The Pod's container log (newest ``max_bytes``), scrubbed of resolved secrets.
+
+        The log API filters on the stub id only; without one the request would return the
+        workspace's other deployments, so no request is sent.
+        """
+        stub_id = handle.external_ids.get("beam_stub_id", "")
+        if not stub_id:
+            raise StubIdMissing(
+                f"endpoint {handle.endpoint_id} has no Beam stub id; refusing an unfiltered log read",
+                detail={"reason": "stub_id_missing"},
+            )
+        client = self._client(handle.credential_ref)
+        workspace_id = await client.current_workspace_id()
+
+        async def page(query: Mapping[str, str | int]) -> list[dict[str, Any]]:
+            return await client.get_log_page(workspace_id, query)
+
+        fetched = await read_stub_log(page, stub_id, max_bytes)
+        data = self._scrub("\n".join(fetched.lines)).encode()
+        cut = len(data) > max_bytes
+        text = data[len(data) - max_bytes :] if cut else data
+        return EngineLog(
+            text.decode(errors="ignore"),
+            truncated=fetched.truncated or cut,
+            dropped=fetched.dropped,
+        )
 
     async def teardown(self, handle: EndpointHandle, mode: TeardownMode) -> None:
         if mode == "sleep":

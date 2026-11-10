@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
 from evalspleef.control.cli.app import app
+from evalspleef.control.cli.gateway_admin import HttpGatewayAdmin
+from evalspleef.control.events import JsonlEventStore
+from evalspleef.gateway.admin_app import create_admin_app
+from evalspleef.gateway.state import GatewayState
+from evalspleef.gateway.store import MemoryStore
 from evalspleef.testing.fake_gateway import InMemoryGatewayAdmin
 from evalspleef.testing.fake_openai import FakeOpenAIServer
+from evalspleef.testing.secrets import DictSecretResolver
 
 
 def _invoke(runner: CliRunner, args: list[str], command: list[str]) -> object:
@@ -71,6 +79,51 @@ def test_warm_and_retire(cli_runner: CliRunner, args: list[str], env: Path) -> N
     )
     assert retire.exit_code == 0, retire.output
     assert "retired" in retire.output
+
+
+def test_retire_of_an_endpoint_that_never_got_a_route_succeeds(
+    cli_runner: CliRunner, args: list[str], env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registered but never probed endpoint has no gateway route; retiring it must exit 0.
+
+    The CLI talks to the real admin app here (the stock fixture uses an in-memory double that
+    already ignores unknown routes and so cannot show the failure).
+    """
+    store = MemoryStore()
+    state = GatewayState(key_store=store, usage_store=store, secrets=DictSecretResolver({}))
+    admin_app = create_admin_app(state, "test-token")
+    monkeypatch.setattr(
+        "evalspleef.control.cli.context.HttpGatewayAdmin",
+        lambda url, token: HttpGatewayAdmin(
+            url,
+            token,
+            client=httpx.AsyncClient(transport=httpx.ASGITransport(app=admin_app)),
+        ),
+    )
+    assert _invoke(cli_runner, args, ["models", "register", "--model", "demo"]).exit_code == 0
+    assert state.route_entry("ep_demo") is None  # never probed: no route exists
+
+    retire = _invoke(
+        cli_runner, args, ["models", "retire", "--model", "demo", "--policy", "terminate"]
+    )
+
+    assert retire.exit_code == 0, retire.output
+    assert "retired" in retire.output
+
+
+def test_retire_records_the_engine_log_outcome_in_the_retire_event(
+    cli_runner: CliRunner, args: list[str], env: Path, tmp_path: Path
+) -> None:
+    assert _invoke(cli_runner, args, ["models", "register", "--model", "demo"]).exit_code == 0
+    retire = _invoke(
+        cli_runner, args, ["models", "retire", "--model", "demo", "--policy", "terminate"]
+    )
+    assert retire.exit_code == 0, retire.output
+
+    events = asyncio.run(JsonlEventStore(tmp_path / "events", fsync=False).read("endpoints"))
+
+    assert events[-1].payload["state"] == "retired"
+    assert events[-1].payload["engine_log"] == {"status": "unsupported"}  # openai-compatible
 
 
 def test_tickets_empty(cli_runner: CliRunner, args: list[str], env: Path) -> None:

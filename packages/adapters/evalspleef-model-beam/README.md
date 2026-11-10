@@ -88,6 +88,12 @@ reads the workspace and refuses a multi-GPU launch when the workspace has multi-
 disabled or allows fewer GPUs than requested. On 2026-11-08 the workspace used here refused a
 2-GPU container, so multi-GPU layouts are **not verified on a real host**.
 
+## Engine log at teardown
+
+`engine_log` reads the Pod's container log from `GET /api/v1/logs/{workspace}`, filtered by the endpoint's `stub_id` (`external_ids["beam_stub_id"]`; without one it raises `StubIdMissing` and sends nothing), scrubs every secret value this process resolved and returns at most `max_bytes`, newest kept. The endpoint manager calls it right before `teardown` and stores the result under the state directory.
+
+Verified read-only against the real log API: `limit` is the row count (default 100, at most 1000) and `tail` is ignored; `stub_id` filters while `deployment_id` is silently ignored (an unfiltered answer would be other deployments' logs); a page holds the newest rows in ascending order; `end_time` is the honoured upper bound, so older rows are read by paging backwards, with a progress guard and a page cap; a stub with more than 1000 rows came back complete through paging. Not verified: fetching the log of a Pod during its own teardown (a log of a stopped container may be gone or delayed), and the retention of old rows. The tests run against an in-memory gateway that mimics the measured behaviour.
+
 ## Verification
 
 `tests/` and the `beam-pod-fake` conformance target run against fakes: an in-memory gateway REST
