@@ -20,6 +20,7 @@ import httpx
 
 from evalspleef.spi.model import UpstreamRoute
 
+from . import tracing
 from .state import (
     EVENT_ENDPOINT_COLD_START,
     BudgetProjection,
@@ -281,33 +282,41 @@ async def post_upstream(
     """Non-streaming forward with cold-start absorption and backoff; body is read."""
     route = entry.route
     headers = upstream_headers(state, route)
-    started_at = state.clock.now()
-    retried = False
-    attempts = 0
-    while True:
-        try:
-            response = await state.client.post(
-                upstream_url(route), json=body, headers=headers, **_timeout_kwargs(route)
-            )
-        except httpx.ConnectTimeout:
-            if route.cold_start_window_s > 0 and await _should_retry(
-                state, route, started_at, retried, endpoint_id=endpoint_id
+    with tracing.upstream_span(upstream_url(route), headers) as span:
+        started_at = state.clock.now()
+        retried = False
+        attempts = 0
+        while True:
+            try:
+                response = await state.client.post(
+                    upstream_url(route), json=body, headers=headers, **_timeout_kwargs(route)
+                )
+            except httpx.ConnectTimeout:
+                if route.cold_start_window_s > 0 and await _should_retry(
+                    state, route, started_at, retried, endpoint_id=endpoint_id
+                ):
+                    retried = True
+                    continue
+                raise
+            if (
+                response.status_code == 503
+                and route.cold_start_window_s > 0
+                and await _should_retry(state, route, started_at, retried, endpoint_id=endpoint_id)
             ):
                 retried = True
                 continue
-            raise
-        if (
-            response.status_code == 503
-            and route.cold_start_window_s > 0
-            and await _should_retry(state, route, started_at, retried, endpoint_id=endpoint_id)
-        ):
-            retried = True
-            continue
-        if await _backoff(state, response, attempts):
-            attempts += 1
-            continue
-        cold_start_ms = int((state.clock.now() - started_at) * 1000) if retried else 0
-        return response, cold_start_ms
+            if await _backoff(state, response, attempts):
+                attempts += 1
+                continue
+            cold_start_ms = int((state.clock.now() - started_at) * 1000) if retried else 0
+            span.set_attributes(
+                {
+                    "http.response.status_code": response.status_code,
+                    "gateway.upstream_retries": attempts,
+                    "gateway.cold_start_ms": cold_start_ms,
+                }
+            )
+            return response, cold_start_ms
 
 
 async def open_upstream_stream(
@@ -324,48 +333,62 @@ async def open_upstream_stream(
     started_at = state.clock.now()
     retried = False
     attempts = 0
-    while True:
-        request = state.client.build_request(
-            "POST", upstream_url(route), json=body, headers=headers, **_timeout_kwargs(route)
-        )
-        try:
-            response = await state.client.send(request, stream=True)
-        except httpx.ConnectTimeout:
-            if route.cold_start_window_s > 0 and await _should_retry(
-                state, route, started_at, retried, endpoint_id=endpoint_id
+    with tracing.upstream_span(upstream_url(route), headers) as span:
+        while True:
+            request = state.client.build_request(
+                "POST", upstream_url(route), json=body, headers=headers, **_timeout_kwargs(route)
+            )
+            try:
+                response = await state.client.send(request, stream=True)
+            except httpx.ConnectTimeout:
+                if route.cold_start_window_s > 0 and await _should_retry(
+                    state, route, started_at, retried, endpoint_id=endpoint_id
+                ):
+                    retried = True
+                    continue
+                raise
+            if (
+                response.status_code == 503
+                and route.cold_start_window_s > 0
+                and await _should_retry(state, route, started_at, retried, endpoint_id=endpoint_id)
             ):
                 retried = True
+                await response.aclose()
                 continue
-            raise
-        if (
-            response.status_code == 503
-            and route.cold_start_window_s > 0
-            and await _should_retry(state, route, started_at, retried, endpoint_id=endpoint_id)
-        ):
-            retried = True
-            await response.aclose()
-            continue
-        if response.status_code in RETRYABLE_STATUSES and attempts < state.provider_max_retries:
-            await response.aread()
-            await response.aclose()
-            await _backoff(state, response, attempts)
-            attempts += 1
-            continue
-        if response.status_code != 200:
-            await response.aread()
+            if response.status_code in RETRYABLE_STATUSES and attempts < state.provider_max_retries:
+                await response.aread()
+                await response.aclose()
+                await _backoff(state, response, attempts)
+                attempts += 1
+                continue
             cold_start_ms = int((state.clock.now() - started_at) * 1000) if retried else 0
-            return OpenedStream(response, [], None, cold_start_ms)
-        lock_field = route.provider_lock.response_field if route.provider_lock else None
-        cold_start_ms = int((state.clock.now() - started_at) * 1000) if retried else 0
-        return await OpenedStream.open(
-            response,
-            cold_start_ms=cold_start_ms,
-            lock_field=lock_field,
-            parse=parse_message_start
-            if route.protocol == "anthropic_messages"
-            else parse_data_line,
-            now=state.perf_now,
-        )
+            if response.status_code != 200:
+                await response.aread()
+                span.set_attributes(
+                    {
+                        "http.response.status_code": response.status_code,
+                        "gateway.upstream_retries": attempts,
+                        "gateway.cold_start_ms": cold_start_ms,
+                    }
+                )
+                return OpenedStream(response, [], None, cold_start_ms)
+            lock_field = route.provider_lock.response_field if route.provider_lock else None
+            span.set_attributes(
+                {
+                    "http.response.status_code": 200,
+                    "gateway.upstream_retries": attempts,
+                    "gateway.cold_start_ms": cold_start_ms,
+                }
+            )
+            return await OpenedStream.open(
+                response,
+                cold_start_ms=cold_start_ms,
+                lock_field=lock_field,
+                parse=parse_message_start
+                if route.protocol == "anthropic_messages"
+                else parse_data_line,
+                now=state.perf_now,
+            )
 
 
 def parse_message_start(line: str) -> dict[str, Any] | None:

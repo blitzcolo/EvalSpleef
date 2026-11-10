@@ -24,6 +24,7 @@ from pathlib import Path
 from evalspleef.spi.runner import AgentRunner, RunnerBudget, ShellTurn, StopReason, TokenUsage
 from evalspleef.spi.sandbox import Sandbox
 
+from . import tracing
 from .common import Clock, SystemClock
 
 WORKSPACE = "/workspace"
@@ -131,20 +132,24 @@ class NativeShellRunner(AgentRunner):
         # The message file path is passed to the CLI as an exec argument; sandboxes
         # that remap the workspace only translate cwd, so the argument stays
         # relative to /workspace (the turn exec's cwd).
-        message_file = f".spleef-native/{self.name}-home/turn-{uuid.uuid4().hex}.txt"
-        await self._upload_text(f"{WORKSPACE}/{message_file}", message)
-        argv = [self.cli, *self._turn_args, message_file]
-        result = await self._sandbox.exec(
-            argv,
-            cwd=WORKSPACE,
-            user="agent",
-            env=self.whitelist_env(),
-            timeout_s=max(1, deadline_s),
-        )
-        duration = self._clock.now() - turn_start
-        stdout = result.stdout.decode("utf-8", errors="replace")
-        stderr = result.stderr.decode("utf-8", errors="replace")
-        stop, final_message = self._parse_result(stdout, stderr, result.exit_code)
+        with tracing.tracer().start_as_current_span(
+            "runner.turn", attributes=tracing.turn_attributes(self.name, self._sandbox)
+        ) as turn_span:
+            message_file = f".spleef-native/{self.name}-home/turn-{uuid.uuid4().hex}.txt"
+            await self._upload_text(f"{WORKSPACE}/{message_file}", message)
+            argv = [self.cli, *self._turn_args, message_file]
+            result = await self._sandbox.exec(
+                argv,
+                cwd=WORKSPACE,
+                user="agent",
+                env=self.whitelist_env(),
+                timeout_s=max(1, deadline_s),
+            )
+            duration = self._clock.now() - turn_start
+            stdout = result.stdout.decode("utf-8", errors="replace")
+            stderr = result.stderr.decode("utf-8", errors="replace")
+            stop, final_message = self._parse_result(stdout, stderr, result.exit_code)
+            turn_span.set_attribute("runner.stop_reason", str(stop))
         return ShellTurn(
             stop_reason=stop,
             final_message=final_message,

@@ -7,8 +7,15 @@ name = "evalspleef-gateway"
 version = "0.1.0"
 description = "Model gateway: per-trial virtual keys, budgets, protocol conversion, usage events."
 requires-python = ">=3.12"
-dependencies = ["evalspleef-spi", "pydantic>=2.9", "httpx>=0.27", "fastapi>=0.115", "uvicorn>=0.30", "psycopg[binary,pool]>=3.2"]
-
+dependencies = [
+    "evalspleef-spi",
+    "evalspleef-telemetry",
+    "pydantic>=2.9",
+    "httpx>=0.27",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "psycopg[binary,pool]>=3.2",
+]
 
 [project.scripts]
 spleef-gateway = "evalspleef.gateway.server:main"
@@ -18,3 +25,4 @@ packages = ["src/evalspleef"]
 
 [tool.uv.sources]
 evalspleef-spi = { workspace = true }
+evalspleef-telemetry = { workspace = true }

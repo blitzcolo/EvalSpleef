@@ -21,7 +21,9 @@ import uvicorn
 import yaml
 
 from evalspleef.spi.secrets import SecretRef
+from evalspleef.telemetry import configure_tracing, flush_tracing
 
+from . import tracing
 from .admin_app import create_admin_app
 from .data_app import create_data_app
 from .state import GatewayState
@@ -84,6 +86,8 @@ class _GatewayServer(uvicorn.Server):
 
 async def serve(config: GatewayConfig) -> None:
     """Start the data and admin apps on ``config`` and run until interrupted."""
+    # A no-op unless an OTLP endpoint is configured; spans flush again at shutdown.
+    configure_tracing(tracing.SERVICE_NAME)
     key_store, usage_store = await open_stores(config.store_url)
     state = GatewayState(
         key_store=key_store,
@@ -111,6 +115,8 @@ async def serve(config: GatewayConfig) -> None:
         await asyncio.gather(data_server.serve(), admin_server.serve())
     finally:
         await state.close()
+        # The process exits right after shutdown: export the batched spans now.
+        flush_tracing()
 
 
 def main() -> None:

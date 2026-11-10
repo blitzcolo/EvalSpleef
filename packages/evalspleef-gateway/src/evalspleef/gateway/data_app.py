@@ -17,9 +17,11 @@ from typing import Any, Literal
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from opentelemetry import trace
 
 from evalspleef.spi.gateway import COST_HEADER, ENDPOINT_MISMATCH, UsageRecord
 
+from . import tracing
 from .perf import RequestTimer, RequestTiming
 from .protocols import (
     AnthropicToChatStream,
@@ -65,10 +67,39 @@ from .state import (
 
 Flavor = Literal["openai", "anthropic_messages"]
 
+SERVICE_NAME = tracing.SERVICE_NAME
+
 
 def create_data_app(state: GatewayState) -> FastAPI:
     """Build the public data-plane application bound to ``state``."""
-    app = FastAPI(title="evalspleef-gateway", docs_url=None, redoc_url=None, openapi_url=None)
+    # Native FastAPI tracing stays off: the data plane owns its server spans
+    # (one ``gateway.request`` span with gateway attributes per request).
+    app = FastAPI(
+        title="evalspleef-gateway",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        telemetry={"tracing": False, "operation_spans": False},
+    )
+
+    @app.middleware("http")
+    async def _request_span(request: Request, call_next: Any) -> Response:
+        """One server span per data-plane request, parented to the caller's trace."""
+        flavor = "anthropic_messages" if request.url.path == "/v1/messages" else "openai"
+        context = tracing.extract_context(request.headers)
+        with tracing.tracer().start_as_current_span(
+            tracing.SERVER_SPAN,
+            context=context,
+            kind=trace.SpanKind.SERVER,
+            attributes={
+                "http.request.method": request.method,
+                "url.path": request.url.path,
+                "gateway.flavor": flavor,
+            },
+        ) as span:
+            response: Response = await call_next(request)
+            span.set_attribute("http.response.status_code", response.status_code)
+            return response
 
     @app.middleware("http")
     async def _gateway_version(request: Request, call_next: Any) -> Response:
@@ -307,6 +338,15 @@ async def _record_usage(
         if charge
         else 0.0
     )
+    tracing.record_request_outcome(
+        trace.get_current_span(),
+        {
+            "gateway.status_code": status_code,
+            "gateway.input_tokens": counts["input"],
+            "gateway.output_tokens": counts["output"],
+            "gateway.cost_usd": cost,
+        },
+    )
     if charge:
         await state.charge(key.key_id, cost_usd=cost, tokens=counts["input"] + counts["output"])
     record = UsageRecord(
@@ -395,6 +435,15 @@ async def _handle(
         )
 
     round_ = _round_of(request)
+    tracing.record_request_outcome(
+        trace.get_current_span(),
+        {
+            "gateway.key_id": key.key_id,
+            "gateway.trial_id": key.trial_id,
+            "gateway.endpoint_id": key.endpoint_id,
+            "gateway.model": model,
+        },
+    )
     admitted = await _admit(state, key, entry, body, model=model, round_=round_, flavor=flavor)
     if isinstance(admitted, Response):
         return admitted

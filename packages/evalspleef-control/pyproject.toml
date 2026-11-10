@@ -18,7 +18,7 @@ dependencies = [
     "typer>=0.12",
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
-    "opentelemetry-exporter-otlp-proto-http>=1.45.2",
+    "evalspleef-telemetry",
 ]
 
 [project.scripts]
@@ -30,3 +30,4 @@ packages = ["src/evalspleef"]
 [tool.uv.sources]
 evalspleef-spi = { workspace = true }
 evalspleef-core = { workspace = true }
+evalspleef-telemetry = { workspace = true }

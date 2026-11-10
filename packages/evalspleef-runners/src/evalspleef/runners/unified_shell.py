@@ -28,6 +28,7 @@ from evalspleef.spi.gateway import COST_HEADER
 from evalspleef.spi.runner import AgentRunner, RunnerBudget, ShellTurn, StopReason, TokenUsage
 from evalspleef.spi.sandbox import Sandbox
 
+from . import tracing
 from .common import (
     Clock,
     Heartbeat,
@@ -259,79 +260,93 @@ class UnifiedShellRunner(AgentRunner):
         final_message: str | None = None
         cost_at_start = self._total_cost
 
-        async with Heartbeat(self._clock, self._heartbeat_interval_s, self._beat):
-            while True:
-                if self._cancelled:
-                    stop = StopReason.CANCELLED
-                    break
-                if self._clock.now() >= deadline:
-                    stop = StopReason.TIMEOUT
-                    break
-                if self._total_tokens >= budget.max_total_tokens:
-                    stop = StopReason.TOKEN_CAP
-                    break
-                if self._total_cost >= budget.max_cost_usd:
-                    stop = StopReason.COST_CAP
-                    break
-
-                try:
-                    completion, cost = await self._request()
-                except _FatalRequestError as exc:
-                    self.last_error = str(exc)
-                    stop = exc.stop_reason
-                    break
-                except Exception as exc:  # surfaced as the crash stop reason
-                    self.last_error = f"{type(exc).__name__}: {exc}"
-                    stop = StopReason.CRASH
-                    break
-
-                self._total_cost += cost
-                message_out = completion.choices[0].message
-                usage = self._accumulate_usage(usage, completion)
-                await self._append_assistant(message_out)
-
-                tool_calls = message_out.tool_calls or []
-                content = message_out.content or ""
-                if not tool_calls:
-                    if content.strip():
-                        self._idle_streak = 0
-                        stop = StopReason.COMPLETED
-                        final_message = content
+        with tracing.tracer().start_as_current_span(
+            "runner.turn", attributes=tracing.turn_attributes(self.name, self._sandbox)
+        ) as turn_span:
+            async with Heartbeat(self._clock, self._heartbeat_interval_s, self._beat):
+                while True:
+                    if self._cancelled:
+                        stop = StopReason.CANCELLED
                         break
-                    self._idle_streak += 1
-                    if self._idle_streak >= self._idle_turns:
-                        stop = StopReason.IDLE
+                    if self._clock.now() >= deadline:
+                        stop = StopReason.TIMEOUT
                         break
-                    # Empty assistant turn: keep looping so the model can act again.
-                    continue
+                    if self._total_tokens >= budget.max_total_tokens:
+                        stop = StopReason.TOKEN_CAP
+                        break
+                    if self._total_cost >= budget.max_cost_usd:
+                        stop = StopReason.COST_CAP
+                        break
 
-                self._idle_streak = 0
-                clarification: str | None = None
-                for call in tool_calls:
-                    steps += 1
-                    if call.type != "function":
-                        await self._append_tool(call.id, "tool error: unsupported tool call type")
-                        continue
-                    name = call.function.name
                     try:
-                        arguments = parse_tool_arguments(call.function.arguments or "{}")
-                    except ToolArgumentsError as exc:
-                        await self._append_tool(call.id, f"tool error: {exc}")
+                        completion, cost = await self._request()
+                    except _FatalRequestError as exc:
+                        self.last_error = str(exc)
+                        stop = exc.stop_reason
+                        break
+                    except Exception as exc:  # surfaced as the crash stop reason
+                        self.last_error = f"{type(exc).__name__}: {exc}"
+                        stop = StopReason.CRASH
+                        break
+
+                    self._total_cost += cost
+                    message_out = completion.choices[0].message
+                    usage = self._accumulate_usage(usage, completion)
+                    await self._append_assistant(message_out)
+
+                    tool_calls = message_out.tool_calls or []
+                    content = message_out.content or ""
+                    if not tool_calls:
+                        if content.strip():
+                            self._idle_streak = 0
+                            stop = StopReason.COMPLETED
+                            final_message = content
+                            break
+                        self._idle_streak += 1
+                        if self._idle_streak >= self._idle_turns:
+                            stop = StopReason.IDLE
+                            break
+                        # Empty assistant turn: keep looping so the model can act again.
                         continue
-                    if self._loop_detector.observe(tool_call_key(name, arguments)):
-                        stop = StopReason.LOOP_DETECTED
+
+                    self._idle_streak = 0
+                    clarification: str | None = None
+                    for call in tool_calls:
+                        steps += 1
+                        if call.type != "function":
+                            await self._append_tool(
+                                call.id, "tool error: unsupported tool call type"
+                            )
+                            continue
+                        name = call.function.name
+                        try:
+                            arguments = parse_tool_arguments(call.function.arguments or "{}")
+                        except ToolArgumentsError as exc:
+                            await self._append_tool(call.id, f"tool error: {exc}")
+                            continue
+                        if self._loop_detector.observe(tool_call_key(name, arguments)):
+                            stop = StopReason.LOOP_DETECTED
+                            break
+                        with tracing.tracer().start_as_current_span(
+                            "runner.tool",
+                            attributes={
+                                "runner": self.name,
+                                "tool": name,
+                                **tracing.turn_attributes(self.name, self._sandbox),
+                            },
+                        ):
+                            result = await self._dispatch(name, arguments)
+                        if isinstance(result, _Clarification):
+                            clarification = result.question
+                            break
+                        await self._append_tool(call.id, result)
+                    if clarification is not None:
+                        stop = StopReason.NEED_CLARIFICATION
+                        final_message = clarification
                         break
-                    result = await self._dispatch(name, arguments)
-                    if isinstance(result, _Clarification):
-                        clarification = result.question
+                    if stop is StopReason.LOOP_DETECTED:
                         break
-                    await self._append_tool(call.id, result)
-                if clarification is not None:
-                    stop = StopReason.NEED_CLARIFICATION
-                    final_message = clarification
-                    break
-                if stop is StopReason.LOOP_DETECTED:
-                    break
+            turn_span.set_attribute("runner.stop_reason", str(stop))
 
         duration = self._clock.now() - turn_start
         turn = ShellTurn(
@@ -377,18 +392,29 @@ class UnifiedShellRunner(AgentRunner):
         attempt = 0
         while True:
             try:
-                raw = await self._client.chat.completions.with_raw_response.create(
-                    model=self._model_alias,
-                    messages=self._messages,
-                    tools=cast(Any, _TOOL_SCHEMAS),
-                )
-                completion = raw.parse()
-                header = raw.headers.get(COST_HEADER)
-                try:
-                    cost = float(header) if header is not None else 0.0
-                except ValueError:
-                    cost = 0.0
-                return completion, cost
+                with tracing.tracer().start_as_current_span(
+                    "runner.model_call",
+                    kind=tracing.CLIENT,
+                    attributes={"runner": self.name, "model": self._model_alias},
+                ) as span:
+                    headers: dict[str, str] = {}
+                    tracing.inject_traceparent(headers)
+                    raw = await self._client.chat.completions.with_raw_response.create(
+                        model=self._model_alias,
+                        messages=self._messages,
+                        tools=cast(Any, _TOOL_SCHEMAS),
+                        extra_headers=headers,
+                    )
+                    completion = raw.parse()
+                    header = raw.headers.get(COST_HEADER)
+                    try:
+                        cost = float(header) if header is not None else 0.0
+                    except ValueError:
+                        cost = 0.0
+                    if completion.usage is not None:
+                        span.set_attribute("llm.usage.total_tokens", completion.usage.total_tokens)
+                    span.set_attribute("gateway.cost_usd", cost)
+                    return completion, cost
             except RateLimitError as exc:
                 code = _error_code(exc)
                 if code == "cost_cap":

@@ -28,6 +28,7 @@ from typing import Any, Literal
 
 import grpc
 import yaml
+from opentelemetry import trace
 
 from evalspleef.spi.errors import (
     CapabilityNotSupported,
@@ -38,8 +39,9 @@ from evalspleef.spi.errors import (
 )
 from evalspleef.spi.sandbox import Sandbox, SandboxCapabilities, SandboxProvider, SandboxSpec
 from evalspleef.spi.secrets import SecretRef
+from evalspleef.telemetry import configure_tracing, flush_tracing
 
-from . import codec, transfer
+from . import codec, tracing, transfer
 from ._pb import hostd_pb2 as pb
 from .clock import Clock, SystemClock
 from .hosts import HEARTBEAT_INTERVAL_S, HostMode
@@ -357,7 +359,9 @@ class HostDaemon:
     async def serve(self, listen_address: str, credentials: ClientCredentials) -> int:
         """Start the mTLS Hostd service; returns the bound port."""
         self._credentials = credentials
-        server = grpc.aio.server(options=SERVER_OPTIONS)
+        server = grpc.aio.server(
+            options=SERVER_OPTIONS, interceptors=[tracing.server_interceptor()]
+        )
         add_hostd_service(_HostdService(self), server)
 
         def fetch_configuration() -> Any:
@@ -531,12 +535,20 @@ class HostDaemon:
         return Path(tempfile.mkdtemp(prefix="hostd-", dir=self._work_dir))
 
 
+def _annotate_request(request: Any) -> None:
+    """Add the request's sandbox id to the RPC span the tracing interceptor started."""
+    attributes = tracing.request_attributes(request)
+    if attributes:
+        trace.get_current_span().set_attributes(attributes)
+
+
 def _service_call(kind: CallKind) -> Callable[[Handler], Handler]:
     def decorate(handler: Handler) -> Handler:
         @functools.wraps(handler)
         async def wrapper(self: _HostdService, request: Any, context: Any) -> Any:
             self.daemon.authorize(context)
             self.daemon.gate(kind)
+            _annotate_request(request)
             return await handler(self, request, context)
 
         return unary_guard(wrapper)
@@ -550,6 +562,7 @@ def _service_stream(kind: CallKind) -> Callable[[StreamHandler], StreamHandler]:
         async def wrapper(self: _HostdService, request: Any, context: Any) -> AsyncIterator[Any]:
             self.daemon.authorize(context)
             self.daemon.gate(kind)
+            _annotate_request(request)
             async for item in handler(self, request, context):
                 yield item
 
@@ -827,6 +840,8 @@ def _store_credentials(directory: Path, credentials: ClientCredentials) -> None:
 
 async def run_daemon(config: DaemonConfig) -> None:
     """Register (or reuse stored credentials), serve, heartbeat and guard TTLs until signalled."""
+    # A no-op unless an OTLP endpoint is configured; spans flush again at shutdown.
+    configure_tracing(tracing.SERVICE_NAME)
     daemon = build_daemon(config)
     credentials = _load_credentials(config.credentials_dir, config.link)
     if (
@@ -864,6 +879,8 @@ async def run_daemon(config: DaemonConfig) -> None:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await daemon.close()
+        # The daemon exits right after the signal: export the batched spans now.
+        flush_tracing()
 
 
 def main(argv: Sequence[str] | None = None) -> int:

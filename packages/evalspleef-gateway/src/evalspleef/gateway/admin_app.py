@@ -103,7 +103,15 @@ def _route_to_json(route: UpstreamRoute) -> dict[str, Any]:
 
 def create_admin_app(state: GatewayState, admin_token: str) -> FastAPI:
     """Build the admin application; every route requires the bearer ``admin_token``."""
-    app = FastAPI(title="evalspleef-gateway-admin", docs_url=None, redoc_url=None, openapi_url=None)
+    # Native FastAPI tracing stays off: only the data plane is traced, with its
+    # own ``gateway.request`` server spans.
+    app = FastAPI(
+        title="evalspleef-gateway-admin",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        telemetry={"tracing": False, "operation_spans": False},
+    )
 
     def _authorize(request: Request) -> None:
         authorization = request.headers.get("authorization")

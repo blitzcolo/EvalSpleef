@@ -38,7 +38,7 @@ from evalspleef.spi.sandbox import (
 )
 from evalspleef.spi.secrets import SecretResolver
 
-from . import codec, transfer
+from . import codec, tracing, transfer
 from ._pb import hostd_pb2 as pb
 from .hosts import HostRegistry
 from .rpcerrors import translate
@@ -141,6 +141,10 @@ class RemoteSandbox(Sandbox):
                     summary = event.summary
             if summary is None:
                 raise SandboxLost(f"exec stream for sandbox {self.id} ended without a result")
+            # The RPC stream is done, but the output callbacks scheduled with
+            # ``call_soon_threadsafe`` may still be sitting in the caller's loop
+            # queue: yield once so every chunk is delivered before exec returns.
+            await asyncio.sleep(0)
             return ExecResult(
                 exit_code=summary.exit_code,
                 stdout=bytes(final["stdout"]),
@@ -324,7 +328,10 @@ class RemoteProvider(SandboxProvider):
             if self._server_name is not None:
                 options.append(("grpc.ssl_target_name_override", str(self._server_name)))
             self._channel = grpc.aio.secure_channel(
-                self._address, self._credentials.channel_credentials(), options=options
+                self._address,
+                self._credentials.channel_credentials(),
+                options=options,
+                interceptors=tracing.channel_interceptors(),
             )
             self._stub = hostd_stub(self._channel)
         return self._stub

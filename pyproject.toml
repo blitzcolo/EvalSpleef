@@ -58,6 +58,7 @@ explicit_package_bases = true
 packages = [
   "evalspleef.spi",
   "evalspleef.core",
+  "evalspleef.telemetry",
   "evalspleef.egress",
   "evalspleef.gateway",
   "evalspleef.hostd",
@@ -80,6 +81,37 @@ packages = [
   "evalspleef_sbx_device_pool",
   "evalspleef_harbor_bridge",
 ]
+
+[[tool.importlinter.contracts]]
+name = "telemetry imports nothing from the workspace"
+type = "forbidden"
+source_modules = ["evalspleef.telemetry"]
+forbidden_modules = [
+  "evalspleef.spi",
+  "evalspleef.core",
+  "evalspleef.control",
+  "evalspleef.gateway",
+  "evalspleef.runners",
+  "evalspleef.hostd",
+  "evalspleef.egress",
+  "evalspleef.conformance",
+  "evalspleef.testing",
+  "evalspleef_model_openai_compat",
+  "evalspleef_model_novita",
+  "evalspleef_model_beam",
+  "evalspleef_model_vpc_vllm",
+  "evalspleef_sbx_docker",
+  "evalspleef_sbx_e2b_family",
+  "evalspleef_sbx_tart",
+  "evalspleef_sbx_apple_container",
+  "evalspleef_sbx_libvirt",
+  "evalspleef_sbx_hyperv",
+  "evalspleef_sbx_windows_sandbox",
+  "evalspleef_sbx_k8s_agent_sandbox",
+  "evalspleef_sbx_device_pool",
+  "evalspleef_harbor_bridge",
+]
+allow_indirect_imports = false
 
 [tool.importlinter]
 root_packages = [
@@ -124,6 +156,7 @@ type = "forbidden"
 source_modules = ["evalspleef.spi"]
 forbidden_modules = [
   "evalspleef.core",
+  "evalspleef.telemetry",
   "evalspleef.control",
   "evalspleef.gateway",
   "evalspleef.runners",
@@ -154,6 +187,7 @@ type = "forbidden"
 source_modules = ["evalspleef.core"]
 forbidden_modules = [
   "evalspleef.spi",
+  "evalspleef.telemetry",
   "evalspleef.control",
   "evalspleef.gateway",
   "evalspleef.runners",

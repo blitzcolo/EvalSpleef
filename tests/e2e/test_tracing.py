@@ -153,7 +153,10 @@ def _ops_by_trial(spans: list[ExportedSpan], run: str) -> dict[str, set[str]]:
     for span in spans:
         if span.resource.get("e2e.run") != run or "trial_id" not in span.attributes:
             continue
-        ops.setdefault(str(span.attributes["trial_id"]), set()).add(str(span.attributes["op"]))
+        op = span.attributes.get("op")
+        if op is None:  # runner spans carry trial_id but no SPI op
+            continue
+        ops.setdefault(str(span.attributes["trial_id"]), set()).add(str(op))
     return ops
 
 
@@ -211,6 +214,7 @@ def traced_run(
         harness,
         env=harness.env
         | {
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
             "OTEL_EXPORTER_OTLP_ENDPOINT": collector.endpoint,
             "OTEL_RESOURCE_ATTRIBUTES": "e2e.run=traced",
         },
@@ -242,7 +246,7 @@ def test_spans_carry_service_op_and_provider_instance(traced_run: TracedRun) -> 
     ]
     assert sandbox_spans
     for span in sandbox_spans:
-        assert span.resource["service.name"] == "spleef"
+        assert span.resource["service.name"] == "spleef-control"
         assert span.name == span.attributes["op"]
         assert span.attributes["provider_instance"] == "local-docker"
     execs = [span for span in sandbox_spans if span.attributes["op"] == "exec"]

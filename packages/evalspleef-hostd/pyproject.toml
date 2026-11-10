@@ -7,7 +7,14 @@ name = "evalspleef-hostd"
 version = "0.1.0"
 description = "Host agent (hostd) and RemoteProvider: local providers exposed to the control plane over mTLS gRPC."
 requires-python = ">=3.12"
-dependencies = ["evalspleef-spi", "grpcio>=1.85", "protobuf>=7", "cryptography>=43", "pyyaml>=6"]
+dependencies = [
+    "evalspleef-spi",
+    "evalspleef-telemetry",
+    "grpcio>=1.85",
+    "protobuf>=7",
+    "cryptography>=43",
+    "pyyaml>=6",
+]
 
 [project.optional-dependencies]
 conformance = ["evalspleef-conformance", "evalspleef-testing"]
@@ -26,6 +33,7 @@ packages = ["src/evalspleef"]
 
 [tool.uv.sources]
 evalspleef-spi = { workspace = true }
+evalspleef-telemetry = { workspace = true }
 evalspleef-conformance = { workspace = true }
 evalspleef-testing = { workspace = true }
 
