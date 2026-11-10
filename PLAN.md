@@ -20,7 +20,7 @@ Deliver the whole platform described in `PRD.md` and `TECH-DESIGN.md` as a uv wo
 | Inspect AI | Invoked as an external CLI by the inspect runner, not a workspace dependency | Same lock-conflict reason |
 | SPI refinements | `ModelEndpointProvider.upstream()` returns the dataclass `UpstreamRoute` instead of a free-form dict. Added `GatewayAdmin`, `HFAccessChecker`, `SecretResolver`, `ModelCapabilities`/`ProbeReport`, `IsolationProfile`, `match_requirements`, `admit_model` to `evalspleef-spi`. Added package `evalspleef-testing` | Keeps vendor shapes out of the contract; gives every lane shared doubles |
 | Python | 3.12 (uv-managed); the reference core also passes on newer interpreters | PRD fixes 3.12 |
-| `agent_judge` items | Build a real `agent_judge` component; the hash-locked pack items stay as authored. Design in "Design: the `agent_judge` component" | User answer 2026-11-09 |
+| `agent_judge` items | Build a real `agent_judge` component; the hash-locked pack items stay as authored. Design in "Design: the `agent_judge` component"; built 2026-11-10, see "Agent judge and the sandbox kit cases" | User answer 2026-11-09 |
 | Missing packs | rust, game and ios packs are a backlog item, not part of the current work | User answer 2026-11-09 |
 | Pack images | Stay local for now; pushing them to a registry and pinning digests is a backlog item | User answer 2026-11-09 |
 
@@ -88,8 +88,8 @@ Every line below comes from a command run during this build, with the exit code 
 | # | Result | Evidence | Limits |
 | --- | --- | --- | --- |
 | 1 | met | `python3 scripts/lint_commit_msg.py --history` exits 0 (147 commits, 0 failing, before the commit that records it). Running `.githooks/commit-msg` on message files exits 1 for the criterion example `feat: M1 control plane`, for lowercase messages containing `M1`, `P2.1`, `P1` or `W07` (each reported as `matched ...`), for `phase 2`, the word milestone, a `Co-Authored-By` trailer and a session link, and exits 0 for a clean message. `core.hooksPath` is `.githooks` | The hook is client side; `--no-verify` is forbidden by AGENTS.md but not blocked technically |
-| 2 | met | `uv run --frozen --no-sync pytest`: 1883 passed, 1 skipped (the e2e test, selected with `-m e2e`), exit 0, 170 s (rerun on 2026-11-08 after the second fix round; rerun on 2026-11-09 after the third round: 1907 passed, 4 skipped in 170 s, and the 4 e2e tests selected with `-m e2e` pass in 47 s; ruff check and format (532 files), mypy strict (301 source files), lint-imports (6 contracts kept), `uv lock --check` and the history lint (151 commits, 0 failing) all exit 0), including the PostgreSQL tests against a real `postgres:16` container. `ruff check .`, `ruff format --check .`, `mypy` (strict, 300 source files) and `lint-imports` (6 contracts kept) all exit 0. `uv lock --check` exits 0. All 131 reference tests are present by name: 129 in `evalspleef-core` (`check_repo.py --run` runs them: Ran 129 tests, OK) and the 2 Harbor mapping tests, which moved with their code to `evalspleef-harbor-bridge/tests/test_events.py` | Run with `--frozen --no-sync`, equivalent to `uv run` because the lock is current |
-| 3 | met | `python3 scripts/check_repo.py --run` exits 0: the core unit tests and the self-test of all ten packs on temporary copies (rerun on 2026-11-09 after the third round: exit 0) | web-001 skips Playwright and runs its static contract only |
+| 2 | met | `uv run --frozen --no-sync pytest`: 1883 passed, 1 skipped (the e2e test, selected with `-m e2e`), exit 0, 170 s (rerun on 2026-11-08 after the second fix round; rerun on 2026-11-09 after the third round: 1907 passed, 4 skipped in 170 s, and the 4 e2e tests selected with `-m e2e` pass in 47 s; ruff check and format (532 files), mypy strict (301 source files), lint-imports (6 contracts kept), `uv lock --check` and the history lint (151 commits, 0 failing) all exit 0), including the PostgreSQL tests against a real `postgres:16` container. Rerun on 2026-11-10 on the committed tree with the agent judge (HEAD 4c9c290): `pytest` 2244 passed and 16 skipped (the opt-in e2e tests are among the skipped), `ruff check .` and `ruff format --check .` (587 files), `mypy` (327 source files) and `lint-imports` (6 contracts kept) exit 0, and the history lint checked 187 commits, 0 failing. `uv.lock` and every `pyproject.toml` are unchanged since 712d9ec, and `uv lock --check` exited 0 in the gates of 2026-11-09. `ruff check .`, `ruff format --check .`, `mypy` (strict, 300 source files) and `lint-imports` (6 contracts kept) all exit 0. `uv lock --check` exits 0. All 131 reference tests are present by name: 129 in `evalspleef-core` (`check_repo.py --run` runs them: Ran 129 tests, OK) and the 2 Harbor mapping tests, which moved with their code to `evalspleef-harbor-bridge/tests/test_events.py` | Run with `--frozen --no-sync`, equivalent to `uv run` because the lock is current |
+| 3 | met | `python3 scripts/check_repo.py --run` exits 0: the core unit tests and the self-test of all ten packs on temporary copies (rerun on 2026-11-09 after the third round: exit 0; rerun late on 2026-11-09 with the agent judge code in the working tree: exit 0) | web-001 skips Playwright and runs its static contract only |
 | 4 | met | `docs/evidence/gateway-curl.md`: a real `spleef-gateway` process driven with `curl -i`: chat with a trial key and a usage record, HTTP 429 `cost_cap` for an over-budget key, 401 for a revoked key, an Anthropic Messages tool round trip | The upstream is the in-repo fake server; no real vendor traffic |
 | 5 | met at command level, with a transport fake for the Novita-hosted call | `packages/evalspleef-control/tests/cli/test_models_assisted.py` (5 tests) drives the real `spleef models register`, `tickets`, `attach` and `list`: register leaves the endpoint `awaiting_operator` with an open ticket; attach to `https://fake-endpoint.novita.ai/v1` sends one `max_tokens=1` request, the probes run, the endpoint ends `ready` with a stored probe report and the ticket closes; non-Novita hosts are refused with no request and no state change; the model is never ready without an attach. Mutation check: ignoring the stored report fails the test. Register and probe against a real gateway process are in transcripts 02 and 03 of `docs/evidence/e2e-batch.md` | The adapter accepts only `https` hosts under `*.novita.ai`, so a loopback endpoint cannot be attached by the real adapter; that guard is deliberate and untouched. Not verified against a real Novita account |
 | 6 | met | 21 conformance targets, each run as `pytest --spleef-provider <target>`, all exit 0 with 0 failures; see the next table | Only `local-docker` and `remote-docker` are real. Every adapter fake is **not verified on a real host**. Not-applicable counts follow each target's declared capabilities |
@@ -100,28 +100,30 @@ Every line below comes from a command run during this build, with the exit code 
 
 | Target | Pass | Fail | Not applicable | Real or fake |
 | --- | --- | --- | --- | --- |
-| local-docker (rerun 2026-11-09 after the egress change) | 27 | 0 | 6 | real Docker daemon |
-| remote-docker (hostd, mutual-TLS gRPC on loopback, in front of the same Docker adapter) | 27 | 0 | 6 | real Docker daemon |
-| mock-sandbox | 24 | 0 | 9 | double |
-| remote-mock (hostd in front of the mock sandbox) | 24 | 0 | 9 | double behind a real transport |
-| tart-fake | 21 | 0 | 12 | fake |
-| apple-container-fake | 25 | 0 | 8 | fake |
-| apple-container-live (`container` 1.6.1, guest kernel 6.18.35, 2026-11-09) | 26 | 0 | 7 | real Apple Container |
-| libvirt-fake | 26 | 0 | 7 | fake |
-| hyperv-fake | 21 | 0 | 12 | fake |
-| windows-sandbox-fake | 23 | 0 | 10 | fake |
-| k8s-agent-sandbox-fake | 24 | 0 | 9 | fake |
-| device-pool-fake | 24 | 0 | 9 | fake |
-| perf-host-fake | 20 | 0 | 13 | fake |
-| novita-fake (Novita sandbox) | 25 | 0 | 8 | fake |
-| novita-live (Novita sandbox, real account, 2026-11-08) | 25 | 0 | 8 | real Novita Agent Sandbox |
-| e2b-selfhost-fake | 25 | 0 | 8 | fake |
+| local-docker (rerun 2026-11-09 with the writable-path and read-only-upload cases) | 32 | 0 | 7 | real Docker daemon |
+| remote-docker (hostd, mutual-TLS gRPC on loopback, in front of the same Docker adapter; rerun 2026-11-09 with the same cases) | 32 | 0 | 7 | real Docker daemon |
+| mock-sandbox | 29 | 0 | 10 | double |
+| remote-mock (hostd in front of the mock sandbox) | 29 | 0 | 10 | double behind a real transport |
+| tart-fake | 25 | 0 | 14 | fake |
+| apple-container-fake | 30 | 0 | 9 | fake |
+| apple-container-live (`container` 1.6.1, guest kernel 6.18.35 as recorded on 2026-11-09; rerun late on 2026-11-09 with the new cases) | 31 | 0 | 8 | real Apple Container |
+| libvirt-fake | 30 | 0 | 9 | fake |
+| hyperv-fake | 22 | 0 | 17 | fake |
+| windows-sandbox-fake | 27 | 0 | 12 | fake |
+| k8s-agent-sandbox-fake | 28 | 0 | 11 | fake |
+| device-pool-fake | 28 | 0 | 11 | fake |
+| perf-host-fake | 24 | 0 | 15 | fake |
+| novita-fake (Novita sandbox) | 29 | 0 | 10 | fake |
+| novita-live (Novita sandbox, real account, 2026-11-08; not rerun with the cases added since, Novita is discontinued) | 25 | 0 | 8 | real Novita Agent Sandbox |
+| e2b-selfhost-fake | 29 | 0 | 10 | fake |
 | openai-compat-fake | 3 | 0 | 7 | fake |
 | novita-dedicated-fake | 2 | 0 | 8 | fake |
 | novita-serverless-fake | 9 | 0 | 1 | fake |
 | vpc-vllm-fake | 9 | 0 | 1 | fake |
 | beam-pod-fake | 9 | 0 | 1 | fake (the adapter itself also ran on a real Beam workspace, see Real surfaces) |
 | mock-model-api, mock-model-assisted, mock-model-external | 9, 2, 4 | 0 | 1, 8, 6 | doubles |
+
+The sandbox counts include the cases added on 2026-11-09: C-FILE-05 to C-FILE-07, C-PATH-01 to C-PATH-03, and C-NET-01 probing every observer address. On 2026-11-10 the 20 targets other than local-docker and remote-docker were rerun together (`pytest --spleef-provider <each> --spleef-report`): 377 passed, 0 failed, 171 not applicable; the model targets kept their counts, and the 12 sandbox fakes add up to 330 passed. The Docker rows come from the run of 2026-11-09 (64 passed, 14 not applicable across the two targets) and the Apple Container row from the same evening (31 passed, 8 not applicable). Environment on 2026-11-10: macOS 27.2 on an Apple M6 (arm64), Docker 29.9.3 whose server kernel is 7.0.14-linuxkit, Apple `container` CLI 1.6.1; the Apple guest kernel was not read again (6.18.35 on 2026-11-09).
 
 ## Verification boundaries
 
@@ -135,6 +137,7 @@ Every line below comes from a command run during this build, with the exit code 
 | Compose stack and Helm chart | `docker compose config` validates the compose file; the chart was checked structurally and never rendered by Helm |
 | Beam Pod model endpoint (`beam-pod`) | Run for real on 2026-11-08 (deploy, status, chat, gateway probe, Volume weights, long-context runs, terminate); multi-GPU ran for real on 2026-11-09 (2 x RTX5090, TP2, KV pool of 1,073,923 tokens, `docs/evidence/beam-1m-kv.md`) after the workspace enabled multi-GPU containers |
 | Isolation preflight probes | Docker I1-I9 run as commands in real containers (adapter test and every e2e trial); other adapters' probes are described and waived |
+| Agent judge (judge sandboxes from the pack image, action protocol, transcripts, integrity check) | Run for real on 2026-11-09 and 2026-11-10 on local Docker and on Apple Container with a **scripted judge model** (`ScriptedJudgeModel`): 5 end-to-end cases on each runtime, 10 passed in 14.6 s (`tests/e2e/test_agent_judge_docker.py`, opt-in with `-m e2e` and `SPLEEF_E2E_APPLE_CONTAINER=1`, needs the `llm-eval/backend-001:local` image). No real model has driven an agent session yet, so how well a real judge uses the five actions is not measured |
 | Novita Dedicated and Serverless GPU, Novita Agent Sandbox (all three discontinued 2026-11-09), Hugging Face, E2B self-host, Tart, Hyper-V, libvirt, Windows Sandbox, Kubernetes, device pool | Transport fakes only: **not verified on a real host or account** |
 
 ## Known limits
@@ -142,7 +145,7 @@ Every line below comes from a command run during this build, with the exit code 
 The bridges this section used to list (the gateway's extra `ep_` prefix, prose isolation probes waived on Docker, the `/tmp/verify` verifier root, duplicated hash-lock path resolution, the mock sandbox in the example routes, the missing `docs/guides/`, Hyper-V double pid files in the host `/tmp`) are fixed; see "Second fix round" below. What remains:
 
 1. **Observer limit.** When a pack checker aborts early on an invalid answer, other items' violation codes look absent and pass. The trial still fails its hard gates and lands on tier F.
-2. **`agent_judge` items.** backend-001, macos-001 and video-001 still contain items no component decides, so those packs pause for a human. Decision 2026-11-09: build the component (design in "Design: the `agent_judge` component"); the pack items stay as authored.
+2. **`agent_judge` items.** The component exists since 2026-11-10 and stays off until batch.yaml has an `agent_judge` section. Two items are still decided by nobody: video-001 R8 (needs images; the judge protocol is text only and the Anthropic upstream rejects images, so the item stays inconclusive with a stated reason) and the macos-001 dependency item (`make bench` needs macOS, which waits for Tart). Judge sandboxes run only on a verifier route whose carrier declares `writable_paths` and `read_only_upload`: Docker (also through hostd), Apple Container and the mock sandbox do; the other adapters decline, and a plan with `agent_judge` items on them is refused with `PolicyNotEnforceable`. No real judge model has run a session (see "Agent judge and the sandbox kit cases").
 3. **Described probes on the other adapters.** Only the Docker adapter's I1-I9 probes are `$ <command>`s; every other adapter still describes them, and the command line waives those loudly (warning plus `preflight.result` and freeze record entries). Each adapter needs its own commands, checked on its real carrier.
 
 ## Discontinued: Novita (2026-11-09)
@@ -202,7 +205,7 @@ Everything from the review's unfinished list that could be fixed in code here is
 | Multi-carrier template registry and cross-carrier fingerprint check; Tart and VHDX template builds | TD 7.6 | the registry maps OCI digests to Novita templates; Tart and VHDX need their own builders and hosts | 1-2 weeks plus hosts |
 | Judge calibration (kappa or alpha >= 0.70) and regrade agreement (>= 95%) as runnable tools | C.5, AC-09, NFR-01 | needs labelled calibration sets and a reviewer workflow | 1 week plus labelled data |
 | LoRA adapters on dedicated endpoints | FR-MOD-03.5 | P1 in the PRD; needs adapter support in each engine and the registry | 3-5 days |
-| `agent_judge` component: a judge agent that runs in a throw-away sandbox over a read-only copy of the artifact (decided 2026-11-09, design below) | PRD 11.1, 8.6; 03-grading 11.7 | `evaluator._cover_remaining_items` sends every `agent_judge` item to the manual queue as inconclusive, so backend-001, macos-001 and video-001 pause for a human | 1-1.5 weeks (estimate) |
+| `agent_judge` component, what is left after the build of 2026-11-10: a run with a real judge model, images for video-001 R8, the macos-001 dependency item on Tart (see "Agent judge and the sandbox kit cases") | PRD 11.1, 8.6; 03-grading 11.7 | the component is built and proven with a scripted model; a real model has not played the judge, and the two items need a multimodal route and a macOS carrier | 1 day plus judge spend for the model run (estimate) |
 | Pack authoring for the missing tracks: rust and game (Linux), ios (needs Tart); see "Pack authoring backlog" | appendix E.1, E.2 | content work on hash-locked packs | days per pack |
 | Throughput and start-latency measurements | NFR-04, NFR-06 | needs the resident service and a realistic carrier mix | 2-3 days |
 
@@ -226,7 +229,7 @@ Ordered by dependency. Estimates are rough, for one engineer who knows the code.
 
 | # | Item | Needs | Depends on | Estimate |
 | --- | --- | --- | --- | --- |
-| 1 | Conformance kit cases for uploading a directory as a mount point, for a verifier-role sandbox writing under the verify root, and a per-network observer address for C-NET-01; every fake follows. Both Docker and Apple adapters had these defects and the kit could not see them | nothing | nothing | 1-2 days |
+| 1 | **Done 2026-11-09 (cae231f, fb68aff, bb3dd70).** Conformance kit cases for uploading a directory as a mount point, for a verifier-role sandbox writing under the verify root, and a per-network observer address for C-NET-01; every fake follows. Both Docker and Apple adapters had these defects and the kit could not see them | nothing | nothing | 1-2 days |
 | 2 | Carrier-neutral template builder and cross-carrier fingerprint check (D10): registry keyed by (environment, carrier), `spleef templates build --carrier`, a fingerprint comparison; removes the test-only Docker-to-Apple image export | nothing | 1 | 3-5 days |
 | 3 | Contract gaps found on 2026-11-09: `execution_environment` in the closed `result.versions` schema; admission reserves 0 tokens when only `max_completion_tokens` is set; tools and `tool_choice` on the Anthropic upstream and Anthropic-flavoured clients with tools (D8 remainder) | schema owner decision | nothing | 3-5 days |
 | 4 | Resident control-plane service (D11), the hub: ticket expiry (`expire_tickets` has no caller), reaping loop, pause-expiry timer, persisted batch state, alerts; then resume of a paused trial, dispatch pause while an endpoint sleeps, throughput and start-latency measurements (NFR-04/06) | nothing | nothing | 2-3 weeks |
@@ -236,7 +239,7 @@ Ordered by dependency. Estimates are rough, for one engineer who knows the code.
 | 8 | hostd dials out over one stream (D3) and `RemoteProvider.environment()` over gRPC; the other adapters implement `environment()` | nothing; real hosts only to verify | nothing | 1-2 weeks |
 | 9 | Judge calibration (kappa or alpha >= 0.70) and regrade agreement (>= 95%) tools (AC-09) | labelled calibration sets from you or reviewers | nothing | 3 days plus data |
 | 10 | AC-01: the public and private Hugging Face cases (the self-served Beam batch ran on 2026-11-09, batch 2026-11-b5); rotate the Beam and Hugging Face tokens that passed through chat on 2026-11-08 | a private repo and GPU spend | nothing | 1 day |
-| 11a | `agent_judge` component (design below, decided 2026-11-09) with the SPI pieces it needs: read-only uploads, declared writable paths, a `judge` lease role, and conformance cases for them | nothing | 1 (kit cases) | 1-1.5 weeks |
+| 11a | **Done 2026-11-10 (fb68aff, abcac42, 3cd9df8; see "Agent judge and the sandbox kit cases").** `agent_judge` component (design below, decided 2026-11-09) with the SPI pieces it needs: read-only uploads, declared writable paths, a `judge` lease role, and conformance cases for them | nothing | 1 (kit cases) | 1-1.5 weeks |
 | 11b | Pack authoring: rust and game packs on Linux, the ios pack waits for Tart; see "Pack authoring backlog" | pack authors; hash-locked content | nothing | days per pack |
 | 11c | Push the pack images to a registry and pin their digests (`TODO(pin-on-host)`); deferred by decision, images stay local | a registry choice and credentials | nothing | hours |
 | 12 | AC-04 (two macOS VMs for 24 hours on Tart), AC-05 (Hyper-V), libvirt, E2B self-host, Kubernetes, device pool, Harbor (AC-08), a priced real batch with a bill to reconcile (AC-02, AC-10), Beam multi-GPU, AC-07 | hosts, installs you approve, bills or accounts | varies | varies |
@@ -244,9 +247,19 @@ Ordered by dependency. Estimates are rough, for one engineer who knows the code.
 | 14 | Manual review of the two logic-001 cells of batch 2026-11-b3 | a human reviewer | nothing | hours |
 | 15 | Last vendor names in neutral packages: the Novita bill import in the ledger (changing its CLI option changes the PRD) and the gateway's `anthropic` client-flavour literal; template kinds for tart, hyperv, libvirt, device-pool and hostd's codec | a PRD decision for the bill option | nothing | 1-2 days |
 | 16 | Inference performance metrics: built 2026-11-09 (see "Inference performance metrics: results"). Left: run `bench` on a GPU endpoint through the gateway, check the Postgres migration on a database populated before the change, stream tool calls through the Anthropic Messages converter (D8) | GPU spend for the live bench | nothing | 1-2 days (estimate) |
-| 17 | Gaps the Beam run found (the per-route upstream timeout is done): the `models retire` exit code for an endpoint that never got a route, the Hugging Face mirror default (cannot work with a read token), keeping the engine log of every paid run at teardown | nothing | nothing | 1-2 days (estimate) |
+| 17 | **Done 2026-11-09 (8937aff, d71b98b, 9976b9c); a Pod's log fetched during its own teardown is not verified.** Gaps the Beam run found (the per-route upstream timeout is done): the `models retire` exit code for an endpoint that never got a route, the Hugging Face mirror default (cannot work with a read token), keeping the engine log of every paid run at teardown | nothing | nothing | 1-2 days (estimate) |
 
-### Design: the `agent_judge` component (decided 2026-11-09, not built)
+### Design: the `agent_judge` component (decided 2026-11-09, built 2026-11-10)
+
+**Status 2026-11-10: built.** The component follows the design below, in `control/observe/agent_*.py`. Differences and additions:
+
+- `k` is configurable (1 to 9) and defaults to 3, not the spec's 5; the example config notes that 5 would cost 5/3 as much.
+- `max_invalid_replies` (default 4) caps replies without a valid action; one more ends the sample as inconclusive ("protocol"). Executed actions count toward `max_steps` (default 12) separately.
+- Judge agents run on the final verification only by default (`run_every_round: false`); earlier rounds leave these items undecided with a stated reason.
+- `/artifact` integrity: a changed tree makes the sample invalid and counts an injection attempt, as designed; a check that cannot run ends the sample inconclusive ("integrity unverifiable"), so a sample is never trusted without the hash check.
+- Items that need images (video-001 R8) stay inconclusive with a stated reason, because the judge protocol is text only.
+- The plan is refused with `PolicyNotEnforceable` when a runnable pack with `agent_judge` items has no verifier route whose carrier declares `writable_paths` and `read_only_upload`; judge sandboxes go on the first such route.
+- Transcripts are written under `<state_dir>/agent-judge/<batch>/` and referenced from `judge.verdict.agent_items` (item id, verdict, and each transcript's uri and sha256); there is no new event type.
 
 PRD 11.1 allows one `agent_judge` in a panel for checks where the judge has to run commands, and 03-grading 8.6 and 11.7 require it to run in a read-only overlay with an `allowed_tools` whitelist. Today `evaluator._cover_remaining_items` turns every such item into `inconclusive` for the manual queue. The user chose to build the component instead of rewriting the items.
 
@@ -349,7 +362,7 @@ The first real numbers come from the Beam run of `lane-beam` (2026-11-b4), which
 | AC-02 | partly: gateway budgets proven with a fake upstream; every leaderboard column now carries its cost basis (`cost_bases`, end to end on real Docker) and the drill-down carries model source and revision; not run against a real priced vendor batch since |
 | AC-03 | met on this Mac with docker and apple-container as the two real carriers (2026-11-09, `docs/evidence/ac03-carriers.md`; fake model and judge, images moved from Docker with identical digests, no platform-enforced template fingerprint yet). History: the Docker half runs for real; the Novita adapter passes conformance on the real account and packs now map to Novita templates (D10), but no batch has run on a Novita sandbox, and none will: Novita is discontinued (2026-11-09), so the second real carrier for AC-03 is an open decision |
 | AC-04, AC-05 | not met: need a Mac mini with Tart and a Hyper-V host |
-| AC-06 | met for Docker and remote-over-Docker (real) and the five in-repo doubles; the other 14 targets pass against transport fakes written together with their adapters |
+| AC-06 | met for Docker, remote-over-Docker and Apple Container live (real; 32, 32 and 31 passed on 2026-11-09 with the writable-path and read-only-upload cases) and the in-repo doubles; the other targets pass against transport fakes written together with their adapters (rerun 2026-11-10: the 20 non-Docker targets, 377 passed, 0 failed) |
 | AC-07 | not met: needs an outside engineer |
 | AC-08 | not met: Harbor not installed |
 | AC-09 | not met: no calibration or regrade-agreement tooling |
@@ -509,6 +522,42 @@ Open, found by this run: no CLI command moves an API-mode endpoint from deployin
 | Real DeepSeek bench (`deepseek-flash`, spend about 0.04 USD, probes with context cut to 16,384 and max output to 4,096 in a temporary copy of the example config) | single request about 1,430 input tokens: TTFT 1.40 s, prefill about 1,025 tok/s, decode about 170 tok/s, TPOT 5.9 ms. Concurrency 4 (the highest planned level, throughput still rising, so not saturated): system prefill 2,118 tok/s, system decode 189 tok/s, TTFT p50 1.16 s, TPOT p50 6.8 ms, E2E p50 2.03 s. A per-token API has no hourly price, so no cost per million tokens. The prompt generator's tokens-per-line figure is calibrated on Qwen, so a 2048-token target gave about 1,430 real tokens; the stored record has the real counts |
 
 Not proven: a live `bench` on an hourly-priced GPU endpoint (cost per million tokens is tested with core fixtures and the Beam data only); in-batch TTFT, ITL and TPOT for shells that do not stream (they get E2E only); judge traffic is not in the in-batch figures (judges use their own keys); a stream body generator cancelled while suspended at a `yield`; the Postgres migration on a database populated before this change; tool-call turns on a route whose upstream speaks Anthropic Messages (the converter drops `tool_use` events, the D8 remainder).
+
+### Agent judge and the sandbox kit cases (2026-11-09 to 2026-11-10)
+
+Twelve commits since the last record (712d9ec): the sandbox contract gained three declarations, the kit gained the cases that prove them, the `agent_judge` component was built on top, and three gaps from the Beam run were closed.
+
+**Sandbox contract and kit** (cae231f, fb68aff, bb3dd70):
+
+- `SandboxSpec.writable_paths` lists memory-backed directories the sandbox user can write (empty at creation, gone with the sandbox). `Sandbox.upload(..., read_only=True)` uploads a tree the sandbox user can read and run but not write, delete, rename or chmod. The capabilities `writable_paths`, `read_only_upload` and `verify_root` say what a carrier honours; a carrier that cannot honour a declaration refuses it (`PolicyNotEnforceable` at create, `CapabilityNotSupported` for the upload). A directory upload merges into an existing directory, as tar extraction does.
+- Docker (directly and through hostd) and Apple Container honour them: Docker mounts the declared paths as tmpfs and unpacks read-only trees as root; Apple does the same with `exec --user root`, checked on the real CLI with all capabilities dropped. The mock sandbox does too; the other adapters decline and name a verify root inside their writable area. The lease manager declares the verify root for verifiers and has a `judge` role with the verifier's network rule.
+- New kit cases: C-FILE-05 (a directory uploaded onto /workspace keeps names, bytes and executable bits and is usable by the run-as user), C-FILE-06 (a verifier-role sandbox runs a script from the verify root and writes there), C-FILE-07 (a directory upload keeps a sibling that was already there), C-PATH-01 to C-PATH-03 (declared writable paths, a read-only upload, loud refusal without the capabilities). C-NET-01 now probes every address the host observer is reachable at, because a host-only network satisfied the old single address. `packages/evalspleef-conformance/tests/test_negative_proofs.py` has broken providers (ignored paths, writable read-only trees, replace instead of merge) that the cases must fail.
+
+**The agent judge** (abcac42, c29be91, 3cd9df8, 2b1eb15, 4c9c290): built as in "Design: the `agent_judge` component"; the differences are listed at the top of that section. It is configured by an optional `agent_judge` section in batch.yaml (see `docs/guides/running.md` and the real-deepseek example); without the section these items stay in the manual queue as before. `GatewayJudgeClient` gained `chat_metered` for the judge's multi-turn conversations.
+
+**Evidence:**
+
+- Five end-to-end cases on each of docker and apple-container against the backend-001 image, with a scripted judge model: a write to `/artifact` fails and its hash holds; reference A passes and a broken artifact fails; no network and no credential reaches the judge; a file left in `/tmp` by one sample is gone in the next; an injection in the artifact is counted and ignored. 10 passed in 14.6 s on 2026-11-10, on the committed tree. The image came from `scripts/build_templates.py --env backend-001` against a temporary registry file, and `templates/registry.json` was unchanged afterwards.
+- Unit and wiring tests in `evalspleef-control` cover the action protocol, the panel over scripted replies and the evaluator hook, the judge lease (role, network, carrier choice), the CLI plan refusal, the config section and the `judge.verdict` payload. The whole suite: 2244 passed, 16 skipped.
+- The first three commits were each checked alone: with every other change stashed away, `ruff`, `mypy`, `lint-imports` and the tests of the touched packages passed.
+- Environment of the 2026-11-10 runs: macOS 27.2 on an Apple M6 (arm64), Docker 29.9.3 (server kernel 7.0.14-linuxkit), Apple `container` CLI 1.6.1; the Apple guest kernel was not read again (6.18.35 on 2026-11-09).
+
+**Defects these runs found, fixed:**
+
+- The Apple adapter shipped without `/verify` until a parity run found it, because each adapter decided the verifier's paths in its own `if spec.role == "verifier"` branch; the declarations above replace that (fb68aff).
+- The Docker fault injector `expire_lifetime` swept every container that carried the provider's instance label, so a kit run on a host where a batch used the same instance name destroyed that batch's live containers; it killed a judge sandbox 12 seconds after creation during a parallel review. It now sweeps only the sandboxes its provider created (9a70ab5).
+- The tart upload onto a mount point had Docker's old defect (fb68aff). Before declared paths existed, the e2b, novita, windows-sandbox, tart and libvirt fakes failed C-FILE-06 on the default `/verify` (cae231f). hostd's lifetime injector now sweeps expired sandboxes, which fixes remote-mock C-LIFE-03 (fb68aff).
+- `models retire` exited 1 for an endpoint that was never probed, because removing an absent gateway route answered 404; removal is idempotent now (8937aff).
+- The Hugging Face mirror default differed between config parsing and the endpoint manager, and a read token that cannot create repositories failed late with a Hub error; one constant decides the default (off) and the checker refuses such a token at registration, checked against the real Hub with a read token (d71b98b).
+- Nothing kept the engine log of a paid run. `ModelEndpointProvider` gained an optional `engine_log`; retire fetches it before teardown, strips every configured secret value, writes it with mode 0600 under the state directory and records path, sha256, size and redaction counts in the retire event. A real read-only run on Beam returned 3082 lines of one stub in 5 requests (9976b9c).
+
+**Not proven, or open:**
+
+- No real model has driven an agent session. Every verdict in the runs above is scripted, so the cost, the step counts and the verdict agreement of a real judge on backend-001 R11 and R13 are unmeasured. The next step is one batch with an `agent_judge` section on the real-deepseek example.
+- Judge sandboxes through hostd (`remote-docker`) are covered by the kit cases only; the end-to-end cases use the Docker and Apple Container providers directly.
+- A Pod's engine log fetched during its own teardown is not verified (9976b9c).
+- The ten end-to-end cases error in their fixture, with a message naming the build command, when `llm-eval/backend-001:local` is missing (seen on 2026-11-09). Whether the fixture should build the image or skip is undecided.
+- The Docker kit run and the end-to-end run print an aiohttp "Unclosed connector" warning (a `UnixConnector`); it does not fail anything and was not chased.
 
 ### Real surfaces
 
