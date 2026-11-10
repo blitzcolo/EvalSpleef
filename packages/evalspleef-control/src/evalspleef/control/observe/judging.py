@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import random
+import shutil
 import threading
 import time
 import uuid
@@ -36,9 +37,11 @@ from evalspleef.core.models import CheckKind, RubricItem
 from evalspleef.spi.errors import EndpointUnavailable
 from evalspleef.spi.gateway import COST_HEADER, PriceSpec
 
+from ..taskpack import load_task_pack
 from ..taskpack.models import TaskPack
 from ..trial.types import JudgeItemVotes, JudgeVote, RubricItemResult
-from .artifacts import WorkspaceExport
+from .agreement import SEED_TARGET_FAMILY, SeedGoldRow
+from .artifacts import WorkspaceExport, sanitise_tree
 
 __all__ = [
     "CHAT_PATH",
@@ -47,7 +50,9 @@ __all__ = [
     "GatewayJudgeClient",
     "JudgeRun",
     "JudgeStep",
+    "SeedCalibrationResult",
     "evidence_digest",
+    "run_seed_calibration",
 ]
 
 #: Gateway chat endpoint relative to the gateway base URL (which ends in /v1).
@@ -500,3 +505,112 @@ class _SessionClient:
             self.cost_usd += cost_usd
             self.input_tokens += input_tokens
             self.output_tokens += output_tokens
+
+
+@dataclass(frozen=True)
+class SeedCalibrationResult:
+    """The panel's votes over the seed samples and what the runs cost."""
+
+    votes: dict[str, dict[str, dict[str, str]]]
+    """sample_id -> item_id -> judge slug -> "pass" / "fail" (inconclusive is missing)."""
+    cost_usd: float
+    judged_rows: int
+    skipped_rows: int
+    """Rows naming items a chat panel cannot decide (non-``llm_judge`` kinds)."""
+
+
+def run_seed_calibration(
+    clients: Mapping[str, JudgeClient],
+    rows: Sequence[SeedGoldRow],
+    *,
+    tasks_dir: Path,
+    scratch_dir: Path,
+    k: int = 5,
+    max_retries: int = 2,
+    max_parallel_per_vendor: int = 5,
+    allow_single_vendor: bool = False,
+) -> SeedCalibrationResult:
+    """Judge every seed sample with the panel and collect per-judge votes vs the labels.
+
+    Each (task, sample) group gets the same treatment a trial's judge step gets:
+    one :class:`JudgeStep` run over the pack's ``llm_judge`` items whose evidence
+    digest is built from the sample's answer file(s) (copied into a scratch tree
+    and sanitised by the same :func:`sanitise_tree` rules as a workspace export),
+    so the judge prompts are the exact shape the batch evaluator sends. Rows
+    naming items of any other kind are skipped: chat judges cannot decide them.
+
+    Blocking, like :meth:`JudgeStep.run`: call it from a worker thread.
+    """
+    groups: dict[str, list[SeedGoldRow]] = {}
+    for row in rows:
+        groups.setdefault(row.sample_id, []).append(row)
+    votes: dict[str, dict[str, dict[str, str]]] = {}
+    packs: dict[str, TaskPack] = {}
+    total_cost = 0.0
+    judged = 0
+    skipped = 0
+    for sample_id, group in groups.items():
+        task_id = group[0].task_id
+        if task_id not in packs:
+            packs[task_id] = load_task_pack(tasks_dir / task_id)
+        pack = packs[task_id]
+        decidable = {item.id for item in pack.rubric.items if item.kind is CheckKind.LLM_JUDGE}
+        skipped += sum(1 for row in group if row.item_id not in decidable)
+        item_ids = {row.item_id for row in group} & decidable
+        if not item_ids:
+            continue
+        sample_scratch = scratch_dir / sample_id
+        export = _seed_sample_export(
+            pack, group[0].evidence, sample_scratch / "evidence-src", sample_scratch / "export"
+        )
+        step = JudgeStep(
+            clients,
+            target_family=SEED_TARGET_FAMILY,
+            target_model=sample_id,
+            k=k,
+            max_retries=max_retries,
+            max_parallel_per_vendor=max_parallel_per_vendor,
+            allow_single_vendor=allow_single_vendor,
+        )
+        run = step.run(pack, export, scratch_dir=sample_scratch / "judge")
+        total_cost += run.cost_usd
+        sample_votes = votes.setdefault(sample_id, {})
+        for item in run.item_votes:
+            for vendor, vote in item.votes.items():
+                if vote.decision in ("pass", "fail"):
+                    sample_votes.setdefault(item.item_id, {})[vendor] = vote.decision
+        judged += sum(1 for row in group if row.item_id in decidable)
+    return SeedCalibrationResult(
+        votes=votes, cost_usd=total_cost, judged_rows=judged, skipped_rows=skipped
+    )
+
+
+def _seed_sample_export(
+    pack: TaskPack, evidence: str, src_dir: Path, dest_dir: Path
+) -> WorkspaceExport:
+    """The sanitised one-answer workspace whose digest the sample's judge prompts carry."""
+    files = _seed_evidence_files(pack, evidence)
+    if src_dir.exists():
+        shutil.rmtree(src_dir)
+    src_dir.mkdir(parents=True)
+    for path in files:
+        shutil.copyfile(path, src_dir / path.name)
+    return sanitise_tree(src_dir, dest_dir, decls=())
+
+
+def _seed_evidence_files(pack: TaskPack, evidence: str) -> list[Path]:
+    """Resolve a seed row's evidence path inside the pack.
+
+    The seed set writes stems (``answers/reference-a``) because the extension
+    varies per pack (``.py``/``.patch``/...), so an exact miss falls back to a
+    stem glob — the same convention the pack loader documents.
+    """
+    base = pack.root / evidence
+    if base.is_file():
+        return [base]
+    if base.is_dir():
+        return sorted(path for path in base.rglob("*") if path.is_file())
+    matches = sorted(path for path in pack.root.glob(f"{evidence}.*") if path.is_file())
+    if matches:
+        return matches
+    raise ValueError(f"seed evidence {evidence!r} not found under {pack.root}")

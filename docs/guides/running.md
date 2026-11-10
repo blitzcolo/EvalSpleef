@@ -242,6 +242,24 @@ judge-decidable rubric item, the empty agent fails them. It is a seed set —
 expected verdicts, not real trials — and never a substitute for the 30-50 sample
 human calibration of docs/03 11.4.
 
+Calibrate the judge panel against the seed set without running a batch:
+
+```bash
+# judge every seed sample through the configured panel and gateway, then apply
+# the same dual gate as human-label calibration (exit 0 pass, 1 below, 3 undecided)
+uv run spleef judges calibrate --seed labels/gold.jsonl \
+    --models config/models.yaml --providers config/providers.yaml --batch config/batch.yaml
+# bound the spend: only some packs, or only the first N seed rows
+uv run spleef judges calibrate --seed labels/gold.jsonl --include 'logic-*' --limit 30
+```
+
+For each seed row the command builds the same judge prompt the batch evaluator
+builds for that rubric item, with the sample's answer file (resolved under
+`tasks/<task-id>/<evidence>`) as the evidence digest, runs the real panel
+through the gateway with a batch-scoped judge key and prints the judge spend.
+The output is labelled a seed calibration: it is weaker than human labels, so a
+pass is a smoke signal that the panel and the pack agree, not the AC-09 gate.
+
 ### Regrade agreement (AC-09) and rerun stability (NFR-01)
 
 ```bash

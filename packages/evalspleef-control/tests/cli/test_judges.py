@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from evalspleef.control.cli.app import app
 from evalspleef.testing.fake_openai import FakeOpenAIServer
@@ -502,4 +502,310 @@ def test_stability_pass_then_below_gate(
 
 def test_stability_needs_two_batches(cli_runner: CliRunner, aligned_batch: Path) -> None:
     result = cli_runner.invoke(app, ["batch", "stability", "--batch-id", "2026-11-b1"])
+    assert result.exit_code == 3, result.output
+
+
+#: Seed calibration (``judges calibrate --seed``): the panel judges each seed
+#: sample's answer file live and the votes meet the seed labels.
+SEED_STYLES = ("aligned", "always-pass", "always-fail")
+
+
+def _write_seed_batch_config(env: Path) -> None:
+    """Register the judge models and point batch.yaml at them (no batch run needed)."""
+    models = env / "models.yaml"
+    if "judge-a" not in models.read_text(encoding="utf-8"):
+        models.write_text(models.read_text(encoding="utf-8") + JUDGE_MODELS_YAML, encoding="utf-8")
+    (env / "batch.yaml").write_text(
+        BATCH_WITH_JUDGES.replace("{batch_id}", "2026-11-b7"), encoding="utf-8"
+    )
+
+
+def _register_judges(cli_runner: CliRunner, args: list[str]) -> None:
+    register = cli_runner.invoke(
+        app,
+        [
+            "models",
+            "register",
+            "--model",
+            "demo",
+            "--model",
+            "judge-a",
+            "--model",
+            "judge-b",
+            *args,
+        ],
+    )
+    assert register.exit_code == 0, register.output
+
+
+def _make_seed_gold(cli_runner: CliRunner, env: Path) -> Path:
+    """The logic-001 seed set: 5 llm_judge items x 3 samples (A/B pass, empty fails)."""
+    gold = env.parent / "gold.jsonl"
+    result = cli_runner.invoke(
+        app,
+        [
+            "judges",
+            "seed-gold",
+            "--tasks-dir",
+            str(REPO / "tasks"),
+            "--include",
+            "logic-001",
+            "--out",
+            str(gold),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    return gold
+
+
+def _patch_seed_judges(
+    monkeypatch: pytest.MonkeyPatch, server: FakeOpenAIServer, style: str
+) -> None:
+    """Script every judge vote; ``aligned`` agrees with the seed labels per sample."""
+    assert style in SEED_STYLES
+    real_generate = server._generate
+    item_re = re.compile(r"rubric_item_id: (R\d+)")
+
+    def generate(body: dict[str, object]) -> tuple[dict[str, object], str, int]:
+        model = str(body.get("model", ""))
+        if not (model.startswith("ep_judge-a") or model.startswith("ep_judge-b")):
+            return real_generate(body)  # type: ignore[arg-type]
+        text = "".join(
+            str(message.get("content", ""))
+            for message in body.get("messages", [])  # type: ignore[union-attr]
+        )
+        if item_re.search(text) is None:
+            return real_generate(body)  # type: ignore[arg-type]
+        # The prompt's evidence digest names the sample's answer file.
+        if style == "aligned":
+            verdict = "fail" if "empty-agent" in text else "pass"
+        else:
+            verdict = style.removeprefix("always-")
+        return (
+            {"role": "assistant", "content": json.dumps({"verdict": verdict})},
+            "stop",
+            3,
+        )
+
+    monkeypatch.setattr(server, "_generate", generate)
+
+
+def _calibrate_args(args: list[str]) -> list[str]:
+    """calibrate takes no --templates-registry; the fixture args carry it for
+    the batch-driving commands, so drop the flag and its value here."""
+    calibrate_args: list[str] = []
+    skip = False
+    for item in args:
+        if skip:
+            skip = False
+            continue
+        if item == "--templates-registry":
+            skip = True
+            continue
+        calibrate_args.append(item)
+    return calibrate_args
+
+
+def _calibrate_seed(
+    cli_runner: CliRunner, args: list[str], env: Path, gold: Path, extra: list[str] | None = None
+) -> Result:
+    return cli_runner.invoke(
+        app,
+        [
+            "judges",
+            "calibrate",
+            "--seed",
+            str(gold),
+            "--batch",
+            str(env / "batch.yaml"),
+            *_calibrate_args(args),
+            *(extra or []),
+        ],
+    )
+
+
+def test_calibrate_seed_pass(
+    cli_runner: CliRunner,
+    args: list[str],
+    env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_server: FakeOpenAIServer,
+) -> None:
+    _write_seed_batch_config(env)
+    _register_judges(cli_runner, args)
+    _patch_seed_judges(monkeypatch, fake_server, "aligned")
+    gold = _make_seed_gold(cli_runner, env)
+    result = _calibrate_seed(cli_runner, args, env, gold)
+    assert result.exit_code == 0, result.output
+    assert "seed calibration: 15 rows judged by the panel" in result.output
+    assert "weaker than human labels" in result.output
+    assert "judge spend $" in result.output
+
+    result = _calibrate_seed(cli_runner, args, env, gold, extra=["--json"])
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output)
+    assert summary["n"] == 15
+    assert [row["passed"] for row in summary["judges"]] == [True, True]
+    assert all(row["cohen_kappa"]["value"] == pytest.approx(1.0) for row in summary["judges"])
+    assert summary["gate"]["status"] == "pass"
+    assert summary["seed"]["rows"] == 15
+    assert summary["seed"]["judged"] == 15
+    assert summary["seed"]["skipped"] == 0
+
+
+def test_calibrate_seed_always_pass_is_below_gate(
+    cli_runner: CliRunner,
+    args: list[str],
+    env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_server: FakeOpenAIServer,
+) -> None:
+    """A judge that passes everything disagrees with the 5 empty-agent labels."""
+    _write_seed_batch_config(env)
+    _register_judges(cli_runner, args)
+    _patch_seed_judges(monkeypatch, fake_server, "always-pass")
+    gold = _make_seed_gold(cli_runner, env)
+    result = _calibrate_seed(cli_runner, args, env, gold, extra=["--json"])
+    assert result.exit_code == 1, result.output
+    summary = json.loads(result.output)
+    # votes all pass vs labels [pass x10, fail x5]: po = 2/3 < 0.70, kappa 0.
+    for row in summary["judges"]:
+        assert row["percent_agreement"]["value"] == pytest.approx(2 / 3)
+        assert row["cohen_kappa"]["value"] == pytest.approx(0.0)
+        assert row["passed"] is False
+    assert summary["gate"]["status"] == "below"
+
+
+def test_calibrate_seed_undefined_kappa_is_undecided(
+    cli_runner: CliRunner,
+    args: list[str],
+    env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_server: FakeOpenAIServer,
+) -> None:
+    """Reference-only rows carry one label category: pe=1 leaves kappa undefined."""
+    _write_seed_batch_config(env)
+    _register_judges(cli_runner, args)
+    _patch_seed_judges(monkeypatch, fake_server, "always-pass")
+    gold = _make_seed_gold(cli_runner, env)
+    kept = [
+        line for line in gold.read_text(encoding="utf-8").splitlines() if "empty-agent" not in line
+    ]
+    reference_only = env.parent / "gold-reference-only.jsonl"
+    reference_only.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    result = _calibrate_seed(cli_runner, args, env, reference_only)
+    assert result.exit_code == 3, result.output
+    assert "cohen_kappa for judge-a undefined" in result.output
+    assert "gate not decided" in result.output
+    assert "UNDECIDED" in result.output
+    assert "PASS" not in result.output
+
+
+def test_calibrate_seed_usage_errors(
+    cli_runner: CliRunner, args: list[str], env: Path, tmp_path: Path
+) -> None:
+    """Mixed or missing modes and malformed seed rows are usage errors (exit 2)."""
+    gold = tmp_path / "gold.jsonl"
+    gold.write_text(
+        json.dumps(
+            {
+                "sample_id": "logic-001/reference-a",
+                "task_id": "logic-001",
+                "item_id": "R6",
+                "rubric_text": "q",
+                "label": "pass",
+                "evidence": "answers/reference-a",
+                "seed_set": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    sheet = tmp_path / "sheet.jsonl"
+    sheet.write_text(
+        json.dumps({"trial_id": "t1", "item_id": "R6", "label": "pass"}) + "\n",
+        encoding="utf-8",
+    )
+    # --seed with --labels or --batch-id: mutually exclusive.
+    result = _calibrate_seed(cli_runner, args, env, gold, extra=["--labels", str(sheet)])
+    assert result.exit_code == 2, result.output
+    result = _calibrate_seed(cli_runner, args, env, gold, extra=["--batch-id", "2026-11-b1"])
+    assert result.exit_code == 2, result.output
+    # Neither mode.
+    result = cli_runner.invoke(app, ["judges", "calibrate", *_calibrate_args(args)])
+    assert result.exit_code == 2, result.output
+    assert "calibrate needs --batch-id + --labels, or --seed" in result.output
+    # The seed file cannot calibrate through the label-sheet mode either.
+    result = cli_runner.invoke(
+        app,
+        [
+            "judges",
+            "calibrate",
+            "--batch-id",
+            "2026-11-b1",
+            "--labels",
+            str(gold),
+            *_calibrate_args(args),
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert "trial_id and item_id are required" in result.output
+    # Malformed seed rows.
+    bad_label = tmp_path / "bad-label.jsonl"
+    bad_label.write_text(
+        json.dumps(
+            {
+                "sample_id": "logic-001/reference-a",
+                "task_id": "logic-001",
+                "item_id": "R6",
+                "label": "maybe",
+                "evidence": "answers/reference-a",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = _calibrate_seed(cli_runner, args, env, bad_label)
+    assert result.exit_code == 2, result.output
+    assert "label must be pass/fail" in result.output
+    missing_evidence = tmp_path / "missing-evidence.jsonl"
+    missing_evidence.write_text(
+        json.dumps(
+            {
+                "sample_id": "logic-001/reference-a",
+                "task_id": "logic-001",
+                "item_id": "R6",
+                "label": "pass",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = _calibrate_seed(cli_runner, args, env, missing_evidence)
+    assert result.exit_code == 2, result.output
+    assert "evidence is required" in result.output
+
+
+def test_calibrate_seed_include_and_limit_bound_spend(
+    cli_runner: CliRunner,
+    args: list[str],
+    env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_server: FakeOpenAIServer,
+) -> None:
+    """--limit caps the judged rows; --include filters packs by glob."""
+    _write_seed_batch_config(env)
+    _register_judges(cli_runner, args)
+    # always-fail vs the first sample's pass labels: percent 0.0, below the gate.
+    _patch_seed_judges(monkeypatch, fake_server, "always-fail")
+    gold = _make_seed_gold(cli_runner, env)
+    result = _calibrate_seed(cli_runner, args, env, gold, extra=["--limit", "5"])
+    assert result.exit_code == 1, result.output
+    assert "5 rows judged by the panel" in result.output
+    assert "judge spend $" in result.output
+
+    # --include with no matching pack leaves nothing to judge.
+    result = _calibrate_seed(
+        cli_runner, args, env, gold, extra=["--include", "no-such-task-*", "--json"]
+    )
     assert result.exit_code == 3, result.output

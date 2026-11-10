@@ -23,9 +23,11 @@ from evalspleef.control.observe.agreement import (
     agreement_summary,
     calibration_summary,
     parse_label_file,
+    parse_seed_file,
     seed_gold_rows,
     vote_table_from_events,
 )
+from evalspleef.control.observe.judging import run_seed_calibration
 from evalspleef.control.taskpack import TaskPackError, load_task_pack
 from evalspleef.core.agreement import ALPHA_EXPLORATORY, KAPPA_GATE, PERCENT_GATE
 from evalspleef.core.events import EventType
@@ -43,7 +45,7 @@ from ._shared import (
     run_coro,
     store_settings,
 )
-from .context import AppContext
+from .context import AppContext, Settings
 from .errors import EXIT_DOMAIN, EXIT_NO_DATA, EXIT_SUCCESS, DomainError, NoDataError, UsageError
 
 __all__ = ["judges_app"]
@@ -55,10 +57,19 @@ judges_app = typer.Typer(no_args_is_help=True)
 
 _BATCH_ID_OPT = typer.Option(..., "--batch-id", help="batch to analyse")
 _EXPORT_BATCH_ID_OPT = typer.Option(..., "--batch-id", help="batch to export")
-_CALIBRATE_BATCH_ID_OPT = typer.Option(..., "--batch-id", help="batch whose verdicts to calibrate")
+_CALIBRATE_BATCH_ID_OPT = typer.Option(None, "--batch-id", help="batch whose verdicts to calibrate")
 _OUT_OPT = typer.Option(..., "--out", help="JSONL labelling sheet to write")
 _GOLD_OUT_OPT = typer.Option(..., "--out", help="JSONL gold set to write")
-_LABELS_OPT = typer.Option(..., "--labels", help="filled labelling sheet (JSONL)")
+_LABELS_OPT = typer.Option(None, "--labels", help="filled labelling sheet (JSONL)")
+_SEED_OPT = typer.Option(None, "--seed", help="seed gold set (JSONL) to calibrate against")
+_MODELS_OPT = typer.Option(Path("config/models.yaml"), "--models", help="models.yaml path")
+_PROVIDERS_OPT = typer.Option(
+    Path("config/providers.yaml"), "--providers", help="providers.yaml path"
+)
+_PANEL_BATCH_OPT = typer.Option(
+    Path("config/batch.yaml"), "--batch", help="batch.yaml defining the judge panel"
+)
+_LIMIT_OPT = typer.Option(None, "--limit", min=1, help="judge at most this many seed rows")
 
 
 def _fmt_metric(entry: dict[str, Any]) -> str:
@@ -265,25 +276,78 @@ def judges_export_labels(
     run_coro(run())
 
 
+def _print_calibration(summary: dict[str, Any], gate: dict[str, Any]) -> None:
+    """Human-readable rendering shared by the label and seed calibration modes."""
+    emit_table(
+        ["judge", "n", "kappa", "percent", "gate"],
+        [
+            [
+                row["judge"],
+                row["n"],
+                _fmt_metric(row["cohen_kappa"]),
+                _fmt_metric(row["percent_agreement"]),
+                _row_gate(row["passed"]),
+            ]
+            for row in summary["judges"]
+        ],
+    )
+    alpha = summary["alpha"]
+    typer.echo(
+        f"alpha with label as rater: {_fmt_metric(alpha)} "
+        f"({alpha.get('verdict', '-')}) over {summary['n']} labelled items"
+    )
+    if summary["unmatched_items"]:
+        typer.echo(f"recorded items without a label: {summary['unmatched_items']}")
+    _echo_gate(
+        "gate (per judge percent >= 0.70 and kappa >= 0.70)",
+        gate,
+    )
+
+
 @judges_app.command("calibrate")
 def judges_calibrate(
-    batch_id: str = _CALIBRATE_BATCH_ID_OPT,
-    labels: Path = _LABELS_OPT,
+    batch_id: str | None = _CALIBRATE_BATCH_ID_OPT,
+    labels: Path | None = _LABELS_OPT,
+    seed: Path | None = _SEED_OPT,
+    models: Path = _MODELS_OPT,
+    providers: Path = _PROVIDERS_OPT,
+    batch_config: Path = _PANEL_BATCH_OPT,
+    include: list[str] = INCLUDE_OPT,
+    limit: int | None = _LIMIT_OPT,
+    tasks_dir: Path = TASKS_OPT,
     store_url: str | None = STORE_OPT,
     events_url: str | None = EVENTS_OPT,
     state_dir: Path | None = STATE_OPT,
     as_json: bool = JSON_OPT,
 ) -> None:
-    """Calibrate every judge against a filled label file (docs/03 11.4, AC-09).
+    """Calibrate every judge against labels (docs/03 11.4, AC-09).
 
-    Per judge Cohen kappa and percent agreement versus the labels; Krippendorff
-    alpha with the label as one more rater. Gate (dual, C.5 11.4): percent
-    >= 0.70 and kappa >= 0.70 per judge. Exit 0 passes, 1 means a judge is
-    below the gate, 3 means the gate cannot be decided: no recorded verdict
-    matches a label row, or a judge's kappa is mathematically undefined.
+    Two input modes, mutually exclusive:
+
+    * ``--batch-id`` + ``--labels``: the recorded verdicts of a finished batch
+      versus a filled labelling sheet.
+    * ``--seed``: judges every seed sample live, through the judge panel the
+      batch config defines (``--models``/``--providers``/``--batch``), and
+      compares the votes with the seed labels. The seed set is weaker than
+      human labels: a pass here is a smoke signal, not the AC-09 gate.
+      ``--include``/``--limit`` bound how many rows (and so how much spend)
+      the panel judges.
+
+    Both modes use the same dual gate (C.5 11.4): percent >= 0.70 and kappa
+    >= 0.70 per judge. Exit 0 passes, 1 means a judge is below the gate, 3
+    means the gate cannot be decided: no recorded verdict matches a label row,
+    or a judge's kappa is mathematically undefined.
     """
 
     async def run() -> int:
+        if seed is not None:
+            if labels is not None or batch_id is not None:
+                raise UsageError("--seed is mutually exclusive with --labels/--batch-id")
+            return await _calibrate_seed(
+                seed, models, providers, batch_config, include, limit, tasks_dir, as_json
+            )
+        if labels is None or batch_id is None:
+            raise UsageError("calibrate needs --batch-id + --labels, or --seed")
         try:
             text = await asyncio.to_thread(labels.read_text, encoding="utf-8")
         except OSError as exc:
@@ -298,39 +362,107 @@ def judges_calibrate(
                 summary = calibration_summary(votes, label_map)
             except NotEnoughDataError as exc:
                 raise NoDataError(str(exc)) from exc
-            judges = summary["judges"]
             gate = _calibration_gate(summary)
             summary["gate"] = gate
             if as_json:
                 emit_json(summary)
             else:
-                emit_table(
-                    ["judge", "n", "kappa", "percent", "gate"],
-                    [
-                        [
-                            row["judge"],
-                            row["n"],
-                            _fmt_metric(row["cohen_kappa"]),
-                            _fmt_metric(row["percent_agreement"]),
-                            _row_gate(row["passed"]),
-                        ]
-                        for row in judges
-                    ],
-                )
-                alpha = summary["alpha"]
-                typer.echo(
-                    f"alpha with label as rater: {_fmt_metric(alpha)} "
-                    f"({alpha.get('verdict', '-')}) over {summary['n']} labelled items"
-                )
-                if summary["unmatched_items"]:
-                    typer.echo(f"recorded items without a label: {summary['unmatched_items']}")
-                _echo_gate(
-                    "gate (per judge percent >= 0.70 and kappa >= 0.70)",
-                    gate,
-                )
+                _print_calibration(summary, gate)
             return _GATE_EXIT[gate["status"]]
 
     run_coro(run())
+
+
+async def _calibrate_seed(
+    seed: Path,
+    models: Path,
+    providers: Path,
+    batch_config_path: Path,
+    include: list[str],
+    limit: int | None,
+    tasks_dir: Path,
+    as_json: bool,
+) -> int:
+    """Judge the seed samples with the configured panel and gate the judges.
+
+    The votes table is keyed by ``sample_id`` where the label-sheet mode keys
+    by ``trial_id``; :func:`calibration_summary` and the gate treat them the
+    same, so the exit codes match the ``--labels`` rules exactly.
+    """
+    try:
+        text = await asyncio.to_thread(seed.read_text, encoding="utf-8")
+    except OSError as exc:
+        raise UsageError(f"cannot read seed file {seed}: {exc}") from exc
+    try:
+        rows = parse_seed_file(text)
+    except ValueError as exc:
+        raise UsageError(str(exc)) from exc
+    if include:
+        rows = [row for row in rows if any(fnmatch.fnmatch(row.task_id, g) for g in include)]
+    if limit is not None:
+        rows = rows[:limit]
+    if not rows:
+        raise NoDataError("no seed rows to calibrate (check --include/--limit)")
+    settings = Settings.from_options(
+        models=models,
+        providers=providers,
+        batch=batch_config_path,
+        tasks_dir=tasks_dir,
+        templates_registry=None,
+        store_url=None,
+        events_url=None,
+        state_dir=None,
+    )
+    async with AppContext(settings) as ctx:
+        batch_config = ctx.load_batch_config()
+        if not batch_config.judges:
+            raise UsageError(f"batch config {batch_config_path} names no judges")
+        clients = await ctx.build_judges(batch_config, ctx.gateway_data_url())
+        try:
+            result = await asyncio.to_thread(
+                run_seed_calibration,
+                clients,
+                rows,
+                tasks_dir=tasks_dir,
+                scratch_dir=ctx.settings.state_dir / "judges" / "seed-calibrate",
+                max_parallel_per_vendor=batch_config.judge_max_parallel_per_vendor,
+                allow_single_vendor=batch_config.allow_single_judge_vendor,
+            )
+        except ValueError as exc:
+            raise UsageError(str(exc)) from exc
+        finally:
+            for client in clients.values():
+                client.close()
+    if result.judged_rows == 0:
+        raise NoDataError("no seed row names an llm_judge item the chat panel can judge")
+    label_map = {(row.sample_id, row.item_id): row.label for row in rows}
+    try:
+        summary = calibration_summary(result.votes, label_map)
+    except NotEnoughDataError as exc:
+        raise NoDataError(str(exc)) from exc
+    gate = _calibration_gate(summary)
+    summary["gate"] = gate
+    summary["seed"] = {
+        "rows": len(rows),
+        "judged": result.judged_rows,
+        "skipped": result.skipped_rows,
+        "spend_usd": result.cost_usd,
+        "note": "seed gold set: weaker than human labels (docs/03 11.4)",
+    }
+    if as_json:
+        emit_json(summary)
+    else:
+        _print_calibration(summary, gate)
+        typer.echo(
+            f"seed calibration: {result.judged_rows} rows judged by the panel, "
+            f"{result.skipped_rows} skipped (non-llm_judge items); "
+            f"judge spend ${result.cost_usd:.4f}"
+        )
+        typer.echo(
+            "seed labels are weaker than human labels (docs/03 11.4): "
+            "a pass here is a smoke signal, not the AC-09 gate"
+        )
+    return _GATE_EXIT[gate["status"]]
 
 
 @judges_app.command("seed-gold")

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from evalspleef.core.agreement import (
@@ -36,10 +37,12 @@ from ..taskpack.models import TaskPack
 
 __all__ = [
     "NotEnoughDataError",
+    "SeedGoldRow",
     "VoteTable",
     "agreement_summary",
     "calibration_summary",
     "parse_label_file",
+    "parse_seed_file",
     "regrade_summary",
     "seed_gold_rows",
     "stability_summary",
@@ -52,6 +55,10 @@ type VoteTable = dict[str, dict[str, dict[str, str]]]
 #: Keys of one row in a label file (a ``judges export-labels`` artifact).
 LABEL_ROW_KEYS = ("trial_id", "task_id", "item_id", "rubric_text", "artifacts", "label")
 
+#: Keys a seed gold row must carry (a ``judges seed-gold`` artifact); ``rubric_text`` and
+#: ``seed_set`` are informational and not required to consume the file.
+_SEED_ROW_REQUIRED = ("sample_id", "task_id", "item_id", "label", "evidence")
+
 #: Rubric item kinds the seed gold set covers (judge-decidable items; script/human are out of
 #: calibration scope).
 _DECIDABLE_KINDS = (CheckKind.LLM_JUDGE, CheckKind.AGENT_JUDGE)
@@ -59,6 +66,26 @@ _DECIDABLE_KINDS = (CheckKind.LLM_JUDGE, CheckKind.AGENT_JUDGE)
 
 class NotEnoughDataError(ValueError):
     """The recorded data is insufficient to compute this metric (no pairable judge votes / labels)."""
+
+
+@dataclass(frozen=True)
+class SeedGoldRow:
+    """One row of a seed gold set: the expected verdict for a pack sample's rubric item.
+
+    ``sample_id`` names the pack sample (``<task_id>/<sample>``) and ``evidence``
+    the answer file inside the pack the judges must see (``answers/reference-a``).
+    """
+
+    sample_id: str
+    task_id: str
+    item_id: str
+    label: str
+    evidence: str
+
+
+#: Seed rows reference answers, never a model under test: the judge panel's
+#: same-family ban has no target family to compare against.
+SEED_TARGET_FAMILY = ""
 
 
 def _result_dict(result: AgreementResult) -> dict[str, Any]:
@@ -260,6 +287,39 @@ def parse_label_file(text: str) -> dict[tuple[str, str], str]:
             raise ValueError(f"label file line {lineno}: trial_id and item_id are required")
         labels[(trial_id, item_id)] = str(label)
     return labels
+
+
+def parse_seed_file(text: str) -> list[SeedGoldRow]:
+    """Parse a seed gold set (a ``judges seed-gold`` artifact) into typed rows.
+
+    Unlike a labelling sheet, seed rows are keyed by ``sample_id`` (a task pack
+    sample such as ``logic-001/reference-a``), carry their ``evidence`` path
+    inside the pack and always have a ``label``; a row without one of those is
+    a malformed file, not a blank to skip.
+    """
+    rows: list[SeedGoldRow] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"seed file line {lineno}: invalid JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"seed file line {lineno}: each row must be a JSON object")
+        fields: dict[str, str] = {}
+        for key in _SEED_ROW_REQUIRED:
+            value = str(payload.get(key) or "")
+            if not value:
+                raise ValueError(f"seed file line {lineno}: {key} is required")
+            fields[key] = value
+        if fields["label"] not in ("pass", "fail"):
+            raise ValueError(
+                f"seed file line {lineno}: label must be pass/fail, got {fields['label']!r}"
+            )
+        rows.append(SeedGoldRow(**fields))
+    return rows
 
 
 def regrade_summary(comparisons: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
