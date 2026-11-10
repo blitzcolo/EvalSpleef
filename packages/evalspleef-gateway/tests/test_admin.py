@@ -71,8 +71,20 @@ async def test_route_and_price_management(
     response = await admin_client.delete("/admin/routes/ep_ep1", headers=ADMIN)
     assert response.status_code == 204
     assert state.route_entry("ep_ep1") is None
-    response = await admin_client.delete("/admin/routes/ep_ep1", headers=ADMIN)
-    assert response.status_code == 404
+
+
+async def test_removing_an_absent_route_succeeds_but_still_needs_the_token(
+    state: GatewayState, admin_client: httpx.AsyncClient
+) -> None:
+    response = await admin_client.delete("/admin/routes/ep_never_probed", headers=ADMIN)
+    assert response.status_code == 204
+    response = await admin_client.delete("/admin/routes/ep_never_probed")
+    assert response.status_code == 401
+    http_admin = HttpGatewayAdmin("http://gw-admin.test", "admin-token", client=admin_client)
+    await http_admin.remove_route("ep_never_probed")
+    wrong_token = HttpGatewayAdmin("http://gw-admin.test", "nope", client=admin_client)
+    with pytest.raises(RuntimeError, match="401"):
+        await wrong_token.remove_route("ep_never_probed")
 
 
 async def test_route_rate_limits_survive_the_admin_api(

@@ -124,8 +124,9 @@ def create_admin_app(state: GatewayState, admin_token: str) -> FastAPI:
     @app.delete("/admin/routes/{name}")
     async def delete_route(name: str, request: Request) -> Response:
         _authorize(request)
-        if not state.remove_route(name):
-            raise HTTPException(status_code=404, detail=f"unknown route: {name!r}")
+        # Idempotent like key revocation: an endpoint that was never probed has no route, and
+        # retiring it must not fail after the provider has already stopped the paid resource.
+        state.remove_route(name)
         return Response(status_code=204)
 
     @app.put("/admin/routes/{name}/price")
