@@ -34,7 +34,7 @@ import os
 import re
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -66,7 +66,15 @@ from evalspleef.control.events import EventStore, open_event_store
 from evalspleef.control.hf import HuggingFaceChecker
 from evalspleef.control.leases import LeaseManager
 from evalspleef.control.observe import Evaluator
-from evalspleef.control.observe.judging import JUDGE_MAX_TOKENS, JUDGE_TIMEOUT_S
+from evalspleef.control.observe.agent_config import agent_judge_settings
+from evalspleef.control.observe.agent_judge import AgentJudgeStep
+from evalspleef.control.observe.agent_lease import LeaseJudgeOpener
+from evalspleef.control.observe.agent_plan import refuse_unfit_plan
+from evalspleef.control.observe.judging import (
+    JUDGE_MAX_TOKENS,
+    JUDGE_TIMEOUT_S,
+    GatewayJudgeClient,
+)
 from evalspleef.control.probes import ProbeRunner, ProbeTarget, report_from_row
 from evalspleef.control.probes.clock import SystemClock
 from evalspleef.control.providers import ProviderRegistry
@@ -752,7 +760,7 @@ class AppContext:
 
     async def build_judges(
         self, batch: BatchFileConfig, gateway_url: str
-    ) -> Mapping[str, JudgeClient]:
+    ) -> Mapping[str, GatewayJudgeClient]:
         """Judge panel clients for the batch's judges, keyed by model slug.
 
         Each judge endpoint gets one batch-scoped gateway key (judges are not
@@ -761,8 +769,6 @@ class AppContext:
         if not batch.judges:
             return {}
         from datetime import UTC, datetime
-
-        from evalspleef.control.observe.judging import GatewayJudgeClient
 
         # Judge clients speak the OpenAI protocol and post to "/chat/completions"
         # themselves, so their base URL needs the /v1 suffix like the runners'.
@@ -774,7 +780,7 @@ class AppContext:
         expires_at = datetime.fromtimestamp(SystemClock().now() + 86400, UTC).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
-        clients: dict[str, JudgeClient] = {}
+        clients: dict[str, GatewayJudgeClient] = {}
         for slug in batch.judges:
             try:
                 spec = await self.model_registry.resolve(slug)
@@ -852,6 +858,35 @@ class AppContext:
             }
         return seeds
 
+    async def build_agent_judge(
+        self, batch: BatchFileConfig, plan: BatchPlan, gateway_url: str
+    ) -> AgentJudgeStep | None:
+        """Judge agents for agent_judge items when batch.yaml has an ``agent_judge`` section.
+
+        Refuses the plan with ``PolicyNotEnforceable`` when a runnable pack with agent_judge
+        items has no verifier route that can host judge sandboxes. The judge clients come
+        from :meth:`build_judges`, so they carry batch-scoped judge keys like chat judges;
+        transcripts are kept under the state directory, beyond the trial's scratch.
+        """
+        config = batch.agent_judge
+        if config is None:
+            return None
+        refuse_unfit_plan(
+            plan,
+            lambda task_id: load_task_pack(self.settings.tasks_dir / task_id),
+            self.providers.capabilities,
+        )
+        judges = batch.model_copy(update={"judges": batch.agent_judge_slugs})
+        clients = await self.build_judges(judges, gateway_url)
+        family = (await self.model_registry.resolve(batch.models[0])).family
+        transcripts = self.settings.state_dir / "agent-judge" / batch.batch
+        settings = replace(
+            agent_judge_settings(config, family, transcripts),
+            allow_single_vendor=batch.allow_single_judge_vendor,
+        )
+        opener = LeaseJudgeOpener(self.lease_manager(), self.providers.capabilities)
+        return AgentJudgeStep(clients, opener, settings)
+
     def make_trial_runner(
         self,
         *,
@@ -861,6 +896,7 @@ class AppContext:
         target_family: str = "",
         versions_by_endpoint: Mapping[str, Mapping[str, Any]] | None = None,
         allow_single_judge_vendor: bool = False,
+        agent_judge: AgentJudgeStep | None = None,
     ) -> TrialRunner:
         """The real TrialExecutor: packs from the task directory, runners from entry points."""
         # The lease manager declares the same root as a writable path where needed.
@@ -869,6 +905,7 @@ class AppContext:
             target_family=target_family,
             allow_single_judge=allow_single_judge_vendor,
             verify_root=self.verify_root(),
+            agent_judge=agent_judge,
         )
         # Agent runners speak the OpenAI protocol: the gateway data-plane URL they
         # get must carry the /v1 suffix (probes take the bare origin instead).

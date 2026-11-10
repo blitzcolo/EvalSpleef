@@ -22,7 +22,7 @@ import contextlib
 import hashlib
 import threading
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -164,12 +164,21 @@ class GatewayJudgeClient:
         A timeout, a dropped connection, a rate limit or a 5xx is a provider failure the
         batch retries (``EndpointUnavailable``), not a reason to invalidate the trial.
         """
+        return self.chat_metered([{"role": "user", "content": prompt}])
+
+    def chat_metered(self, messages: Sequence[Mapping[str, str]]) -> MeteredCompletion:
+        """One chat completion over a whole conversation (the agent judge's turns).
+
+        Same metering and failure rules as :meth:`complete_metered`; prompt caching is
+        the route's own setting (``prompt_caching``), so a growing conversation reuses
+        its cached prefix without anything sent from here.
+        """
         try:
             response = self._client.post(
                 CHAT_PATH,
                 json={
                     "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": [dict(message) for message in messages],
                     "max_tokens": self._max_tokens,
                     "temperature": 0.0,
                 },

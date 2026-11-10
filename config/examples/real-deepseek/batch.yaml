@@ -15,4 +15,13 @@ endpoint_policy:
   retire_after: terminate
 judges: [claude-sonnet-5-5]
 allow_single_judge_vendor: true # development run: one judge vendor (appendix C.5 wants two)
+agent_judge: # judge agents for agent_judge items (backend-001 R11/R13); absent = manual queue
+  judges: [] # empty: the judges above also serve agent items
+  k: 3 # samples per item; each boots one judge sandbox (the spec's 5 costs 5/3 as much)
+  max_steps: 12 # executed actions per sample
+  max_invalid_replies: 4 # replies without a valid action; the 5th ends the sample
+  command_timeout_s: 60
+  wall_clock_s: 300
+  output_cap_bytes: 8192
+  run_every_round: false # judge agents on the final verification only
 pricing_table: "2026-11"

@@ -11,7 +11,9 @@ One evaluation runs the full pipeline:
    signals, independent of gate exit codes (I12);
 5. map gate results onto the pack's script-kind rubric items
    (:mod:`...observe.mapping`);
-6. send ``llm_judge`` items to the judge panel through the gateway (I15).
+6. send ``llm_judge`` items to the judge panel through the gateway (I15);
+7. send ``agent_judge`` items to the agent judge (:mod:`...observe.agent_judge`), one fresh
+   judge sandbox per sample, on the final verification unless configured for every round.
 
 ``Evaluator.for_regrade`` builds the verify-only mode used to regrade stored
 artifacts: the export step reads a sanitised tree from local disk instead of the
@@ -31,6 +33,8 @@ from evalspleef.spi.gateway import PriceSpec
 from ..batch.executor import LeaseHandle
 from ..taskpack.models import TaskPack
 from ..trial.types import CheatSignal, EvaluationResult, RubricItemResult, TrialContext
+from .agent_judge import AgentJudgeRun, AgentJudgeStep, judge_totals
+from .agent_plan import split_agent_items
 from .artifacts import (
     REASON_MISSING,
     ExportCaps,
@@ -56,6 +60,8 @@ __all__ = ["ArtifactSource", "Evaluator", "SandboxSource", "StoredArtifactSource
 CHEAT_HASH_LOCK = "hash_lock"
 CHEAT_SMUGGLE = "artifact_smuggle"
 CHEAT_REWARD = "reward_planted"
+#: 03-grading 8.6: three or more judge injection attempts send the trial to a human.
+INJECTION_MANUAL_THRESHOLD = 3
 
 
 class ArtifactSource(Protocol):
@@ -114,6 +120,7 @@ class Evaluator:
         allow_single_judge: bool = False,
         verify_root: str = "/verify",
         host_tools: Callable[[TaskPack], str | None] | None = None,
+        agent_judge: AgentJudgeStep | None = None,
     ) -> None:
         self._source = source or SandboxSource()
         self._judges = dict(judges or {})
@@ -124,15 +131,20 @@ class Evaluator:
         self._allow_single_judge = allow_single_judge
         self._verify_root = verify_root
         self._host_tools = host_tools or requires_host_tools
+        self._agent_judge = agent_judge
 
     @classmethod
     def for_regrade(cls, artifact_dir: str | Path, **kwargs: Any) -> Evaluator:
-        """Verify-only evaluator for regrading stored (sanitised) artifacts."""
+        """Verify-only evaluator for regrading stored (sanitised) artifacts.
+
+        Regrade never re-runs a judge agent: grading reads the recorded verdicts.
+        """
+        if kwargs.get("agent_judge") is not None:
+            raise ValueError("a regrade never re-runs a judge agent")
         return cls(source=StoredArtifactSource(Path(artifact_dir)), **kwargs)
 
     async def evaluate(self, ctx: TrialContext, round_no: int, final: bool) -> EvaluationResult:
-        """Run the pipeline; ``final`` drives nothing here — every round is verified."""
-        del final  # observations and the final call run the same verification
+        """Run the pipeline; every round is verified, ``final`` only gates judge agents."""
         pack = ctx.pack
         host_reason = self._host_tools(pack)
         if host_reason is not None:
@@ -149,9 +161,10 @@ class Evaluator:
         missing = [issue.path for issue in export.issues if issue.reason == REASON_MISSING]
         rubric = list(map_script_items(pack, output.gates, missing_artifacts=missing))
         judge_run, judge_manual = await self._judge(ctx, pack, export, rubric)
+        agent_run, agent_manual = await self._run_agent_judge(ctx, export, rubric, final)
         self._cover_remaining_items(pack, rubric)
 
-        manual: list[str] = [*judge_manual]
+        manual: list[str] = [*judge_manual, *agent_manual]
         cheat = [
             *(CheatSignal(CHEAT_HASH_LOCK, detail=_lock_detail(lock)) for lock in locks),
             *(
@@ -160,6 +173,9 @@ class Evaluator:
             ),
             *(CheatSignal(CHEAT_REWARD, detail=path) for path in output.planted_rewards),
         ]
+        if agent_run is not None and agent_run.injection_attempts and cheat:
+            manual.append("agent judge injection attempts together with cheat signals (8.6)")
+        cost, consistency, samples = judge_totals(judge_run, agent_run)
         return EvaluationResult(
             hard_gates=output.hard_gates(),
             rubric=tuple(rubric),
@@ -167,9 +183,9 @@ class Evaluator:
             artifacts=export.artifacts,
             verifier_lease_id=verifier.lease_id,
             manual_reasons=tuple(manual),
-            judge_cost_usd=0.0 if judge_run is None else judge_run.cost_usd,
-            judge_consistency=None if judge_run is None else judge_run.agreement,
-            judge_samples=0 if judge_run is None else judge_run.samples,
+            judge_cost_usd=cost,
+            judge_consistency=consistency,
+            judge_samples=samples,
         )
 
     async def _verify(
@@ -223,6 +239,33 @@ class Evaluator:
         run = await asyncio.to_thread(step.run, pack, export, scratch_dir=ctx.scratch_dir / "judge")
         rubric.extend(run.results)
         manual = [f"judge manual queue: {', '.join(run.manual_queue)}"] if run.manual_queue else []
+        return run, manual
+
+    async def _run_agent_judge(
+        self,
+        ctx: TrialContext,
+        export: WorkspaceExport,
+        rubric: list[RubricItemResult],
+        final: bool,
+    ) -> tuple[AgentJudgeRun | None, list[str]]:
+        """Judge agents for agent_judge items; every item left undecided says why."""
+        runnable, manual = split_agent_items(ctx.pack)
+        step = self._agent_judge
+        if not runnable:
+            return None, manual
+        ids = ", ".join(item.id for item in runnable)
+        if step is None:
+            manual.append(f"agent_judge items {ids}: no agent judge configured")
+            return None, manual
+        if not final and not step.settings.run_every_round:
+            manual.append(f"agent_judge items {ids}: judge agents run on the final verification")
+            return None, manual
+        run = await step.run(ctx, export, runnable)
+        rubric.extend(run.results)
+        if run.manual_queue:
+            manual.append(f"agent judge manual queue: {', '.join(run.manual_queue)}")
+        if run.injection_attempts >= INJECTION_MANUAL_THRESHOLD:
+            manual.append(f"agent judge injection attempts: {run.injection_attempts} (8.6)")
         return run, manual
 
     @staticmethod

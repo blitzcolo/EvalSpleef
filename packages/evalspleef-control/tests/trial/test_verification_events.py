@@ -5,7 +5,7 @@ from typing import Any
 
 from evalspleef.control.trial.runner import verification_events
 from evalspleef.core.events import EventType
-from evalspleef.core.models import CheckKind
+from evalspleef.core.models import CheckKind, Evidence, EvidenceKind
 
 
 def _pack(**kinds: CheckKind) -> Any:
@@ -14,7 +14,9 @@ def _pack(**kinds: CheckKind) -> Any:
 
 
 def _final(verdicts: dict[str, str], **judge: Any) -> Any:
-    rubric = [SimpleNamespace(item_id=item_id, verdict=v) for item_id, v in verdicts.items()]
+    rubric = [
+        SimpleNamespace(item_id=item_id, verdict=v, evidence=()) for item_id, v in verdicts.items()
+    ]
     defaults = {"judge_consistency": None, "judge_samples": 0, "judge_cost_usd": 0.0}
     return SimpleNamespace(rubric=rubric, **{**defaults, **judge})
 
@@ -44,3 +46,20 @@ def test_script_items_are_the_hidden_test_result_and_judge_items_the_verdict() -
 def test_a_pack_without_judge_items_emits_no_judge_verdict() -> None:
     events = verification_events(_pack(R1=CheckKind.SCRIPT), _final({"R1": "pass"}))
     assert [event_type for event_type, _ in events] == [EventType.HIDDENTEST_RESULT]
+
+
+def test_agent_judge_verdicts_reference_their_transcripts() -> None:
+    pack = _pack(R1=CheckKind.SCRIPT, R11=CheckKind.AGENT_JUDGE)
+    final = _final({"R1": "pass", "R11": "fail"})
+    transcript = Evidence(EvidenceKind.OTHER, uri="/runs/t1/R11.json", sha256="ab" * 32)
+    final.rubric[1].evidence = (transcript,)
+    events = dict(verification_events(pack, final))
+    judge = events[EventType.JUDGE_VERDICT]
+    assert judge["items"] == []
+    assert judge["agent_items"] == [
+        {
+            "item_id": "R11",
+            "verdict": "fail",
+            "transcripts": [{"uri": "/runs/t1/R11.json", "sha256": "ab" * 32}],
+        }
+    ]

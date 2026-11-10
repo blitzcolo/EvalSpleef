@@ -199,7 +199,8 @@ def verification_events(
 ) -> list[tuple[EventType, dict[str, Any]]]:
     """``hiddentest.result`` and ``judge.verdict`` for a final evaluation (PRD B.8).
 
-    Script items are the hidden tests; ``llm_judge`` items are the judge panel's verdicts.
+    Script items are the hidden tests; ``llm_judge`` items are the judge panel's verdicts;
+    ``agent_items`` are the agent judge's, each with its transcripts (uri and sha256).
     A pack without judge items emits no ``judge.verdict``.
     """
     kinds = {item.id: item.kind for item in pack.rubric.items}
@@ -224,19 +225,26 @@ def verification_events(
         )
     ]
     judged = verdicts(CheckKind.LLM_JUDGE)
-    if judged:
-        events.append(
-            (
-                EventType.JUDGE_VERDICT,
-                {
-                    "round": "final",
-                    "items": judged,
-                    "agreement": final.judge_consistency,
-                    "samples": final.judge_samples,
-                    "cost_usd": final.judge_cost_usd,
-                },
-            )
-        )
+    agent = [
+        {
+            "item_id": result.item_id,
+            "verdict": str(result.verdict),
+            "transcripts": [{"uri": e.uri, "sha256": e.sha256} for e in result.evidence],
+        }
+        for result in final.rubric
+        if kinds.get(result.item_id) is CheckKind.AGENT_JUDGE
+    ]
+    if judged or agent:
+        payload: dict[str, Any] = {
+            "round": "final",
+            "items": judged,
+            "agreement": final.judge_consistency,
+            "samples": final.judge_samples,
+            "cost_usd": final.judge_cost_usd,
+        }
+        if agent:
+            payload["agent_items"] = agent
+        events.append((EventType.JUDGE_VERDICT, payload))
     return events
 
 
