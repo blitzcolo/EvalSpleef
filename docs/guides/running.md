@@ -42,7 +42,7 @@ One entry per model, immutable per `(slug, spec_version)`: bump `spec_version` o
 - `deployment.adapter` and `deployment.account` (an account in `providers.yaml`): `openai-compatible` for any OpenAI-style API, `beam-pod` for SGLang on Beam GPUs, `vpc-vllm`. `novita-dedicated` / `novita-serverless-gpu` are discontinued (2026-11-09): still in the tree, no longer verified.
 - `deployment.params`: adapter parameters. For self-hosted engines, name a preset instead of writing launch arguments by hand (below).
 - `pricing_ref`: `api:...`, `ref:...` or `assumed:...`. It sets the cost basis the leaderboard prints for the column; explicit prices go in `deployment.params.pricing` (USD per million tokens).
-- `roles`: `target`, `judge` and/or `user`. Judges must come from a different `family` than the models they grade.
+- `roles`: `target`, `judge` and/or `user`. Judges must come from a different `family` than the models they grade, and the panel wants at least two judge vendors (appendix C.5): `config/examples/real-deepseek/` panels Claude Sonnet 5.5 (`anthropic_messages`) with Gemini 4 Carbon on Vertex (`chat_completions`, key in `x-goog-api-key`).
 
 An API model, for example:
 
@@ -76,7 +76,7 @@ At load time the preset is expanded into the parameters; the preset id and its d
 
 ### `providers.yaml`: accounts, sandbox carriers and routes
 
-- `model_accounts`: where each adapter connects, with `api_key_ref` as a SecretRef (`env://DEEPSEEK_API_KEY`, `vault://...`), never the key itself.
+- `model_accounts`: where each adapter connects, with `api_key_ref` as a SecretRef (`env://DEEPSEEK_API_KEY`, `vault://...`), never the key itself. Vendors that reject `Authorization: Bearer` take `api_key_header` instead: the gateway then sends the key in that named header and never also as Bearer (for example the Vertex account in `config/examples/real-deepseek/providers.yaml` uses `x-goog-api-key`).
 - `sandbox_instances`: carriers (`docker`, `remote` for a host running `spleef-hostd`, `novita-sandbox` (discontinued 2026-11-09), `tart`, ...) and their limits.
 - `routes`: which carriers a task may use, by OS and role, in order. Name real carriers only.
 - `gateway.internal_url`: the gateway data plane the runners call.

@@ -1,7 +1,8 @@
 # models.yaml for a real-model development batch (see providers.yaml next to it).
-# Prices are USD per million tokens at DeepSeek's peak rates (the conservative side) and at
-# Claude Sonnet 5.5's list rates; declared_context_tokens is the ceiling the probes bisect from,
-# kept at 131072 so probe P-09 does not send million-token prompts.
+# Prices are USD per million tokens at DeepSeek's peak rates (the conservative side),
+# at Claude Sonnet 5.5's list rates and at Gemini 4 Carbon's global list rates
+# (input 4.00 / cached 0.20 / output 20.00); declared_context_tokens is the ceiling
+# the probes bisect from, kept at 131072 so probe P-09 does not send million-token prompts.
 models:
   - slug: deepseek-flash
     spec_version: 1
@@ -57,5 +58,27 @@ models:
     declared_context_tokens: 131072
     declared_max_output_tokens: 16384
     pricing_ref: "api:anthropic@2026-11"
+    license: proprietary
+    owner: eval-dev
+
+  - slug: gemini-4-carbon
+    spec_version: 1
+    family: google # a third vendor family, not deepseek and not anthropic (appendix C.5)
+    roles: [judge]
+    source: {type: vendor, vendor: google, model_id: gemini-4-carbon}
+    deployment:
+      adapter: openai-compatible
+      account: vertex
+      params:
+        model: google/gemini-4-carbon
+        judge_max_tokens: 16384 # thinking burns output tokens before the verdict
+        judge_timeout_s: 600 # a high-effort verdict with long thinking can take minutes
+        pricing:
+          input_per_mtok: 4.00
+          output_per_mtok: 20.00
+          cached_per_mtok: 0.20 # context cache read
+    declared_context_tokens: 131072
+    declared_max_output_tokens: 16384
+    pricing_ref: "api:google@2026-11"
     license: proprietary
     owner: eval-dev

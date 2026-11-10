@@ -1,7 +1,7 @@
 # providers.yaml for a real-model development batch: DeepSeek models under test,
-# Claude Sonnet 5.5 as the judge, local Docker sandboxes. Keys are env:// references
-# only; export them in the shell that runs the gateway and the CLI
-# (set -a; . ~/.config/evalspleef/secrets.env; set +a).
+# Claude Sonnet 5.5 and Gemini 4 Carbon as the judge panel, local Docker sandboxes.
+# Keys are env:// references only; export them in the shell that runs the gateway and
+# the CLI (set -a; . ~/.config/evalspleef/secrets.env; set +a).
 model_accounts:
   deepseek:
     adapter: openai-compatible
@@ -17,6 +17,15 @@ model_accounts:
         output_config: {effort: high} # Sonnet 5.5 default; stated so the batch records it
         drop_params: [temperature, top_p, top_k] # Sonnet 5.5 answers 400 to sampling parameters
         # prompt_caching defaults to on for anthropic_messages routes; "1h" or false change it
+  vertex:
+    adapter: openai-compatible
+    base_url: https://aiplatform.googleapis.com/v1/projects/941777257763/locations/global/endpoints/openapi
+    api_key_ref: env://VERTEX_API_KEY
+    params:
+      api_key_header: x-goog-api-key # Vertex rejects Bearer; the key travels in this header
+      default_params:
+        upstream_timeout_s: 600 # thinking-mode first byte can exceed the gateway 120 s default
+        reasoning_effort: low # probes cap max_tokens low; default thinking would eat the budget
 
 sandbox_instances:
   local-docker:
