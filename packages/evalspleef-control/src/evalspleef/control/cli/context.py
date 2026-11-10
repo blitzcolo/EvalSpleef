@@ -526,8 +526,10 @@ class _LazyProbeRunner:
     def __init__(self, context: AppContext) -> None:
         self._context = context
 
-    async def run(self, target: ProbeTarget) -> ProbeReport:
-        return await self._context.probe_runner().run(target)
+    async def run(
+        self, target: ProbeTarget, *, request_timeout_s: float | None = None
+    ) -> ProbeReport:
+        return await self._context.probe_runner().run(target, request_timeout_s=request_timeout_s)
 
     async def ping(
         self, endpoint_id: str, model_name: str, *, timeout_s: float | None = None

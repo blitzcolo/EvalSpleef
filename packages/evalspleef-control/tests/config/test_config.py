@@ -214,6 +214,35 @@ def test_uppercase_sha_rejected(tmp_path: Path) -> None:
         load_models(path)
 
 
+def test_probe_timeout_is_kept_for_the_probe_client(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "models.yaml",
+        MODELS_YAML.replace(
+            "      params:\n        gpu_type: H100-SXM-80GB",
+            "      params:\n        probe_timeout_s: 180\n        gpu_type: H100-SXM-80GB",
+        ),
+    )
+    specs = load_models(path)
+    assert specs[0].deployment.params["probe_timeout_s"] == 180
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", "'60s'", "true"])
+def test_probe_timeout_must_be_a_positive_number(tmp_path: Path, bad: str) -> None:
+    path = _write(
+        tmp_path,
+        "models.yaml",
+        MODELS_YAML.replace(
+            "      params:\n        gpu_type: H100-SXM-80GB",
+            f"      params:\n        probe_timeout_s: {bad}\n        gpu_type: H100-SXM-80GB",
+        ),
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        load_models(path)
+    assert excinfo.value.path == "models[0].deployment.params"
+    assert "probe_timeout_s" in str(excinfo.value)
+
+
 def test_error_names_file_and_path_for_scalars(tmp_path: Path) -> None:
     bad = MODELS_YAML.replace("declared_context_tokens: 131072", "declared_context_tokens: -5")
     path = _write(tmp_path, "models.yaml", bad)

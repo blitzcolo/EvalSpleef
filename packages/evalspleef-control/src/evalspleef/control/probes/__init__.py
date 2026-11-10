@@ -2,7 +2,7 @@
 
 from .client import ProbeResponseError
 from .clock import Clock, SystemClock, iso_utc
-from .config import PROBE_IDS, ProbeConfig, ProbeTarget
+from .config import PROBE_IDS, ProbeConfig, ProbeTarget, request_timeout_override
 from .report import (
     build_capabilities,
     build_report,
@@ -31,4 +31,5 @@ __all__ = [
     "iso_utc",
     "report_from_row",
     "report_to_row",
+    "request_timeout_override",
 ]

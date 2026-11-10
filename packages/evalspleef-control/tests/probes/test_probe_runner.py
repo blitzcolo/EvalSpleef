@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+import httpx
 import pytest
 
 from evalspleef.control.probes import (
@@ -19,6 +20,7 @@ from evalspleef.control.probes import (
 )
 from evalspleef.spi.gateway import GatewayAdmin
 from evalspleef.spi.probe import ProbeCheck
+from evalspleef.testing.fake_gateway import InMemoryGatewayAdmin
 
 # The ``Stack`` dataclass lives in conftest.py (not importable under importlib mode).
 Stack = Any
@@ -233,3 +235,53 @@ def test_capabilities_survive_a_json_round_trip() -> None:
 
     stored = json.loads(json.dumps(capabilities_to_dict(caps)))
     assert capabilities_from_dict(stored) == caps
+
+
+_TIMEOUT_REPLY = {
+    "choices": [{"message": {"role": "assistant", "content": "ready"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+}
+
+_DEFAULT_TARGET = ProbeTarget(
+    endpoint_id="ep_test_0001",
+    model_name="ep_test",
+    declared_context_tokens=4096,
+    declared_max_output_tokens=1000,
+    expected_models=frozenset({"ep_test"}),
+)
+
+
+class _TimeoutRecorder(httpx.AsyncBaseTransport):
+    """Answers every request and keeps the read timeout httpx applied to it."""
+
+    def __init__(self) -> None:
+        self.read_timeouts: list[float] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.read_timeouts.append(float(request.extensions["timeout"]["read"]))
+        return httpx.Response(200, json=_TIMEOUT_REPLY)
+
+
+def _timeout_runner(transport: _TimeoutRecorder) -> ProbeRunner:
+    return ProbeRunner(
+        InMemoryGatewayAdmin(),
+        gateway_url="http://gateway.test",
+        config=ProbeConfig(include=frozenset({"P-01"})),
+        transport=transport,
+    )
+
+
+async def test_run_override_sets_the_read_timeout_of_the_probe_requests() -> None:
+    transport = _TimeoutRecorder()
+
+    await _timeout_runner(transport).run(_DEFAULT_TARGET, request_timeout_s=180.0)
+
+    assert transport.read_timeouts == [180.0]
+
+
+async def test_without_an_override_the_default_request_timeout_is_used() -> None:
+    transport = _TimeoutRecorder()
+
+    await _timeout_runner(transport).run(_DEFAULT_TARGET)
+
+    assert transport.read_timeouts == [60.0]

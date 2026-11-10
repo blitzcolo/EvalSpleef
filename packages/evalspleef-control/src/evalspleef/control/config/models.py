@@ -131,6 +131,21 @@ class DeploymentConfig(BaseModel):
     account: str
     params: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("params")
+    @classmethod
+    def _probe_timeout(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # A control-plane key, not an adapter parameter: it must be usable as a timeout.
+        timeout = value.get("probe_timeout_s")
+        if timeout is None:
+            return value
+        if isinstance(timeout, bool) or not isinstance(timeout, int | float):
+            raise ValueError(
+                f"probe_timeout_s must be a positive number of seconds, got {timeout!r}"
+            )
+        if timeout <= 0:
+            raise ValueError(f"probe_timeout_s must be greater than 0, got {timeout!r}")
+        return value
+
 
 class ModelConfig(BaseModel):
     """One entry of ``models.yaml``."""

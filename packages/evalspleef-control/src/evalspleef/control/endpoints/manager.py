@@ -25,7 +25,7 @@ from evalspleef.control.hf.mirror import MIRROR_DEFAULT
 from evalspleef.control.hf.tokens import check_token_expiry
 from evalspleef.control.probes.client import as_dict
 from evalspleef.control.probes.clock import Clock, SystemClock, iso_utc
-from evalspleef.control.probes.config import ProbeTarget
+from evalspleef.control.probes.config import ProbeTarget, request_timeout_override
 from evalspleef.control.probes.report import report_from_row, report_to_row
 from evalspleef.control.probes.runner import PingResult, ProbeRunner
 from evalspleef.control.providers.registry import ProviderRegistry
@@ -577,7 +577,8 @@ class EndpointManager:
                 declared_context_tokens=spec.declared_context_tokens,
                 declared_max_output_tokens=spec.declared_max_output_tokens,
                 expected_models=frozenset(m for m in (handle.upstream_model, name) if m),
-            )
+            ),
+            request_timeout_s=request_timeout_override(spec.deployment.params),
         )
         if await self._reports.get(report.report_id) is None:
             await self._reports.insert(report_to_row(report))

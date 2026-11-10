@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
-__all__ = ["PROBE_IDS", "ProbeConfig", "ProbeTarget"]
+__all__ = ["PROBE_IDS", "ProbeConfig", "ProbeTarget", "request_timeout_override"]
+
+
+def request_timeout_override(params: Mapping[str, Any]) -> float | None:
+    """The ordinary probe request timeout a deployment asks for, if it names one.
+
+    ``probe_timeout_s`` raises the fixed default so a slow thinking model is not failed by
+    the probe client's read timeout; its value is validated when ``models.yaml`` is parsed.
+    """
+    value = params.get("probe_timeout_s")
+    return None if value is None else float(value)
+
 
 PROBE_IDS = tuple(f"P-{number:02d}" for number in range(1, 16))
 

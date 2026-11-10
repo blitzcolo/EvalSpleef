@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import httpx
 import pytest
 
 from evalspleef.control.endpoints import InvalidTransition, make_endpoint_id, public_name
@@ -294,7 +295,9 @@ async def test_probe_traffic_is_costed_at_the_route_price_from_the_first_request
     probe_costs: list[float] = []
     run = ProbeRunner.run
 
-    async def priced_run(self: ProbeRunner, target: ProbeTarget) -> Any:
+    async def priced_run(
+        self: ProbeRunner, target: ProbeTarget, *, request_timeout_s: float | None = None
+    ) -> Any:
         # What the gateway does with a request on this route while the probe runs.
         usage = world.admin.record_usage(
             trial_id=f"probe-{target.endpoint_id}",
@@ -304,7 +307,7 @@ async def test_probe_traffic_is_costed_at_the_route_price_from_the_first_request
             output_tokens=1_000_000,
         )
         probe_costs.append(usage.cost_usd)
-        return await run(self, target)
+        return await run(self, target, request_timeout_s=request_timeout_s)
 
     monkeypatch.setattr(ProbeRunner, "run", priced_run)
     handle = await world.manager.register(spec_factory())
@@ -320,3 +323,35 @@ async def test_probe_traffic_is_costed_at_the_route_price_from_the_first_request
 
     # 1M input at 1.0 + 1M output at 2.0 USD per million, during both probes.
     assert probe_costs == [pytest.approx(3.0), pytest.approx(3.0)]
+
+
+class _RecordingTimeouts(httpx.AsyncBaseTransport):
+    """Forwards to the gateway stand-in and keeps the read timeout of each request."""
+
+    def __init__(self) -> None:
+        self.read_timeouts: list[float] = []
+        self._inner = httpx.AsyncHTTPTransport()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.read_timeouts.append(float(request.extensions["timeout"]["read"]))
+        return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+async def test_deployment_probe_timeout_raises_the_probe_client_timeout(
+    make_world: MakeWorld, spec_factory: SpecFactory
+) -> None:
+    transport = _RecordingTimeouts()
+    world = await make_world(mode="external", probe_transport=transport)
+
+    slow = await world.manager.register(spec_factory(slug="slow", params={"probe_timeout_s": 180}))
+    await world.manager.probe(slow.endpoint_id)
+    assert transport.read_timeouts[0] == 180.0
+
+    # A model that names no timeout keeps the probe client default it was built with.
+    start = len(transport.read_timeouts)
+    default = await world.manager.register(spec_factory(slug="default"))
+    await world.manager.probe(default.endpoint_id)
+    assert transport.read_timeouts[start] == 30.0

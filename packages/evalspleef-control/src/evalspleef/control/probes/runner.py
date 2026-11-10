@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 
@@ -87,16 +87,27 @@ class ProbeRunner:
         finally:
             await self._admin.revoke_key(key.key_id)
 
-    async def run(self, target: ProbeTarget) -> ProbeReport:
-        """Run the suite and return the immutable report (not persisted here)."""
+    async def run(
+        self, target: ProbeTarget, *, request_timeout_s: float | None = None
+    ) -> ProbeReport:
+        """Run the suite and return the immutable report (not persisted here).
+
+        request_timeout_s replaces the ordinary read timeout for this run only, so a
+        deployment can raise it without changing the long-request timeout of P-09/P-10.
+        """
+        config = (
+            self._config
+            if request_timeout_s is None
+            else replace(self._config, request_timeout_s=request_timeout_s)
+        )
         async with self._session(
             target.endpoint_id,
             "probe",
-            budget_usd=self._config.key_budget_usd,
-            token_cap=self._config.key_token_cap,
-            request_timeout_s=self._config.request_timeout_s,
+            budget_usd=config.key_budget_usd,
+            token_cap=config.key_token_cap,
+            request_timeout_s=config.request_timeout_s,
         ) as client:
-            suite = ProbeSuite(target, client, self._config, now=self._clock.now)
+            suite = ProbeSuite(target, client, config, now=self._clock.now)
             checks = await suite.run()
         return build_report(
             target.endpoint_id,

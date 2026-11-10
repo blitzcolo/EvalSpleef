@@ -13,6 +13,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -203,6 +204,7 @@ async def make_world(tmp_path: Path) -> AsyncIterator[Callable[..., Awaitable[Wo
             mode: str = "assisted",
             provider_params: Mapping[str, Any] | None = None,
             probe_config: ProbeConfig | None = None,
+            probe_transport: httpx.AsyncBaseTransport | None = None,
             config: EndpointManagerConfig | None = None,
             token_expiry: Mapping[str, date | None] | None = None,
             checker: HFAccessChecker | None = None,
@@ -262,6 +264,7 @@ async def make_world(tmp_path: Path) -> AsyncIterator[Callable[..., Awaitable[Wo
                 or ProbeConfig(
                     request_timeout_s=30.0, long_request_timeout_s=60.0, throughput_requests=2
                 ),
+                transport=probe_transport,
             )
             manager = EndpointManager(
                 models=models,

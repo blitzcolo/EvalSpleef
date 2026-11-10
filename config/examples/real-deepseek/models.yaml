@@ -62,7 +62,7 @@ models:
     owner: eval-dev
 
   - slug: gemini-4-carbon
-    spec_version: 1
+    spec_version: 2
     family: google # a third vendor family, not deepseek and not anthropic (appendix C.5)
     roles: [judge]
     source: {type: vendor, vendor: google, model_id: gemini-4-carbon}
@@ -71,6 +71,7 @@ models:
       account: vertex
       params:
         model: google/gemini-4-carbon
+        probe_timeout_s: 180 # thinking model: Vertex latency after the P-12 sweep outlasts the 60 s probe timeout
         judge_max_tokens: 16384 # thinking burns output tokens before the verdict
         judge_timeout_s: 600 # a high-effort verdict with long thinking can take minutes
         pricing:
