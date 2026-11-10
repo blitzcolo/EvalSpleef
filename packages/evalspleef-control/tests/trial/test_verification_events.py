@@ -17,7 +17,12 @@ def _final(verdicts: dict[str, str], **judge: Any) -> Any:
     rubric = [
         SimpleNamespace(item_id=item_id, verdict=v, evidence=()) for item_id, v in verdicts.items()
     ]
-    defaults = {"judge_consistency": None, "judge_samples": 0, "judge_cost_usd": 0.0}
+    defaults = {
+        "judge_consistency": None,
+        "judge_samples": 0,
+        "judge_cost_usd": 0.0,
+        "judge_votes": (),
+    }
     return SimpleNamespace(rubric=rubric, **{**defaults, **judge})
 
 
@@ -63,3 +68,38 @@ def test_agent_judge_verdicts_reference_their_transcripts() -> None:
             "transcripts": [{"uri": "/runs/t1/R11.json", "sha256": "ab" * 32}],
         }
     ]
+
+
+def test_judge_verdicts_carry_per_judge_votes() -> None:
+    """llm_judge items carry per-judge votes (decision + per-sample votes) for agreement recomputation."""
+    from evalspleef.control.trial.types import JudgeItemVotes, JudgeVote
+
+    pack = _pack(R1=CheckKind.LLM_JUDGE, R2=CheckKind.LLM_JUDGE)
+    final = _final({"R1": "pass", "R2": "inconclusive"})
+    final.judge_votes = (
+        JudgeItemVotes(
+            "R1",
+            {
+                "judge-a": JudgeVote("pass", (True, True, True, True, False)),
+                "judge-b": JudgeVote("fail", (False, False, True, False, False)),
+            },
+        ),
+        JudgeItemVotes(
+            "R2",
+            {
+                "judge-a": JudgeVote("inconclusive", (None, None, True, None, None)),
+                "judge-b": JudgeVote("inconclusive", (None, None, None, None, None)),
+            },
+        ),
+    )
+    events = dict(verification_events(pack, final))
+    judge = events[EventType.JUDGE_VERDICT]
+    assert judge["items"][0] == {
+        "item_id": "R1",
+        "verdict": "pass",
+        "judge_votes": {
+            "judge-a": {"decision": "pass", "samples": [True, True, True, True, False]},
+            "judge-b": {"decision": "fail", "samples": [False, False, True, False, False]},
+        },
+    }
+    assert judge["items"][1]["judge_votes"]["judge-a"]["decision"] == "inconclusive"

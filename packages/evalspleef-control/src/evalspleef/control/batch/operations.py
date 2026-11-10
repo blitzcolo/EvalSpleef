@@ -40,7 +40,7 @@ from ..events import EventStore, replay_trial_machine
 from ..store.repos import GradeRepository, TrialRepository
 from ..store.rows import GradeRow, TrialRow
 
-__all__ = ["OperationRefused", "TrialOperations"]
+__all__ = ["OperationRefused", "TrialOperations", "recorded_inputs"]
 
 _ACTOR = "operator"
 MANUAL_PAUSE_LIMIT_S = 1800
@@ -66,7 +66,7 @@ class TrialOperations:
         row, log = await self._load(trial_id)
         if row.state != str(TrialState.SCORED):
             raise OperationRefused(f"{trial_id} is {row.state}; only a scored trial is regraded")
-        inputs = _recorded_inputs(log)
+        inputs = recorded_inputs(log)
         if inputs is None:
             raise OperationRefused(f"{trial_id} has no recorded grading inputs to regrade from")
         outcome = inputs.grade(decided_at=self.now())
@@ -255,7 +255,7 @@ class TrialOperations:
         decision = Decision.for_rule(
             RuleId.HUMAN_99, f"human decision: tier {tier}, penalty {penalty}"
         )
-        inputs = _recorded_inputs(log)
+        inputs = recorded_inputs(log)
         computed = inputs.grade(decided_at=decided_at).grade if inputs is not None else None
         if computed is not None:
             grade = computed
@@ -303,7 +303,7 @@ class TrialOperations:
         )
 
 
-def _recorded_inputs(log: list[EventEnvelope]) -> GradingInputs | None:
+def recorded_inputs(log: list[EventEnvelope]) -> GradingInputs | None:
     """The grading inputs of the latest grade or manual-review pause that recorded them."""
     for event in reversed(log):
         inputs = event.payload.get("inputs") if event.payload else None

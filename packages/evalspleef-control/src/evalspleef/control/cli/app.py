@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
-from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -43,14 +43,12 @@ from evalspleef.control.bench import (
     save,
 )
 from evalspleef.control.bench.report import bench_markdown, facts_line
-from evalspleef.control.config import ConfigError
 from evalspleef.control.endpoints import EngineLogStore, make_endpoint_id, probe_failures
 from evalspleef.control.events import verify_projection
 from evalspleef.control.ledger import CostLedger
 from evalspleef.control.providers import ProviderNotFoundError
 from evalspleef.control.store.rows import GradeRow
 from evalspleef.control.taskpack import lint_task_pack_dir
-from evalspleef.core.batch import BatchGuardFailed
 from evalspleef.core.models import CellStatus
 from evalspleef.core.report import BatchReport, TrialResult, cell_id_for
 from evalspleef.spi.errors import SpleefError
@@ -63,6 +61,18 @@ from evalspleef.spi.model import (
     VendorSource,
 )
 
+from ._shared import (
+    emit_json as _emit_json,
+)
+from ._shared import (
+    emit_table as _emit_table,
+)
+from ._shared import (
+    run_coro as _run,
+)
+from ._shared import (
+    store_settings as _store_settings,
+)
 from .context import (
     AppContext,
     Settings,
@@ -97,6 +107,14 @@ app.add_typer(batch_app, name="batch")
 app.add_typer(trials_app, name="trials")
 app.add_typer(gateway_app, name="gateway")
 app.add_typer(presets_app, name="presets")
+
+# Judge calibration/agreement and the batch-level regrade/stability checks live in
+# their own modules; they never import this one (shared plumbing is in ._shared).
+from .batch_checks import register_batch_checks  # noqa: E402
+from .judges import judges_app  # noqa: E402
+
+app.add_typer(judges_app, name="judges")
+register_batch_checks(batch_app)
 
 
 # -- shared options -------------------------------------------------------------
@@ -145,43 +163,9 @@ _MODEL_FILTER_OPT = typer.Option([], "--model", help="restrict the command to th
 _INCLUDE_OPT = typer.Option([], "--include", help="glob, default: every pack")
 
 
-# -- output helpers ---------------------------------------------------------------
+# -- output helpers (shared with the judges/batch_checks command modules) ----------
 
-
-def _emit_table(headers: Sequence[str], rows: Sequence[Sequence[object]]) -> None:
-    text = [[str(cell) for cell in row] for row in rows]
-    widths = [len(str(header)) for header in headers]
-    for row in text:
-        for index, cell in enumerate(row):
-            widths[index] = max(widths[index], len(cell))
-    line = "  ".join(str(header).ljust(widths[index]) for index, header in enumerate(headers))
-    typer.echo(line)
-    typer.echo("  ".join("-" * width for width in widths))
-    for row in text:
-        typer.echo("  ".join(cell.ljust(widths[index]) for index, cell in enumerate(row)))
-
-
-def _emit_json(data: Mapping[str, Any] | Sequence[Mapping[str, Any]]) -> None:
-    typer.echo(json.dumps(data, indent=2, sort_keys=True, default=str))
-
-
-def _run(coro: Coroutine[Any, Any, int]) -> None:
-    """Run a command coroutine and map failures to the CLI exit codes."""
-    try:
-        code = asyncio.run(coro)
-    except CliError as exc:
-        typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(exc.exit_code) from None
-    except ConfigError as exc:
-        typer.secho(f"configuration error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(EXIT_USAGE) from None
-    except BatchGuardFailed as exc:
-        typer.secho(f"batch guard failed: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(EXIT_DOMAIN) from None
-    except SpleefError as exc:
-        typer.secho(f"error: {exc.message}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(EXIT_DOMAIN) from None
-    raise typer.Exit(code)
+# (the helpers themselves live in ._shared and are imported above)
 
 
 # -- config ------------------------------------------------------------------------
@@ -2010,24 +1994,6 @@ def gateway_serve(ctx: typer.Context) -> None:
 
 
 # -- trials -----------------------------------------------------------------------
-
-
-def _store_settings(
-    store_url: str | None,
-    events_url: str | None,
-    state_dir: Path | None,
-    providers: Path | None = None,
-) -> Settings:
-    return _settings(
-        Path("config/models.yaml"),
-        providers,
-        None,
-        Path("tasks"),
-        None,
-        store_url,
-        events_url,
-        state_dir,
-    )
 
 
 async def _trial_operation(

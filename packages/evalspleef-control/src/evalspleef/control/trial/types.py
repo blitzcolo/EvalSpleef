@@ -17,6 +17,8 @@ __all__ = [
     "Artifact",
     "CheatSignal",
     "EvaluationResult",
+    "JudgeItemVotes",
+    "JudgeVote",
     "ModelEndpoint",
     "RubricItemResult",
     "RubricVerdict",
@@ -84,6 +86,41 @@ RubricVerdict = Literal["pass", "fail", "inconclusive"]
 
 
 @dataclass(frozen=True)
+class JudgeVote:
+    """One judge's decision on one rubric item, with its k raw samples.
+
+    Stored on the ``judge.verdict`` event (AGENTS rule 8) so inter-judge agreement
+    can be recomputed; ``decision`` is the vendor's median decision and ``samples``
+    the per-sample votes (None = that sample was unparseable).
+    """
+
+    decision: RubricVerdict
+    samples: tuple[bool | None, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-ready dict."""
+        return {
+            "decision": self.decision,
+            "samples": [None if sample is None else bool(sample) for sample in self.samples],
+        }
+
+
+@dataclass(frozen=True)
+class JudgeItemVotes:
+    """All judge votes recorded for one rubric item (keyed by judge-model slug)."""
+
+    item_id: str
+    votes: Mapping[str, JudgeVote]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-ready dict."""
+        return {
+            "item_id": self.item_id,
+            "judge_votes": {judge: vote.to_dict() for judge, vote in self.votes.items()},
+        }
+
+
+@dataclass(frozen=True)
 class RubricItemResult:
     """The verdict on one rubric item in one evaluation."""
 
@@ -129,6 +166,8 @@ class EvaluationResult:
     judge_cost_usd: float = 0.0
     judge_consistency: float | None = None
     judge_samples: int = 0
+    judge_votes: tuple[JudgeItemVotes, ...] = ()
+    """Per-judge votes for llm_judge items, stored on the ``judge.verdict`` event."""
 
     @property
     def hard_gates_passed(self) -> bool:

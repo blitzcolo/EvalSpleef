@@ -181,3 +181,62 @@ Prompts come from a seeded generator (`--seed`, random when unset, always record
 - `spleef trials regrade` / `spleef trials void`: regrade from the recorded inputs, or take a trial out of the leaderboard.
 
 Results live in the store (`SPLEEF_STORE_URL`), the append-only event log (`SPLEEF_EVENTS_URL`, the authority every row is projected from), and the release directory written by `batch report --release`: leaderboard, cell drill-down, version manifest, probe summary, inference performance, judge panel and costs.
+
+## 6. Judge calibration and agreement
+
+The judge half of appendix C.5 (11.2/11.3), AC-09 and NFR-01 is a set of read-only
+commands over the recorded `judge.verdict` events and grades. Every command prints
+a human table and accepts `--json`. Exit codes: 0 gate passed, 1 below the gate, 3
+not enough data in the store (never confused with a gate failure).
+
+### Panel health: `spleef judges agreement`
+
+```bash
+uv run spleef judges agreement --batch-id 2026-11-b1
+uv run spleef judges agreement --batch-id 2026-11-b1 --json
+```
+
+Per judge pair Cohen kappa on item verdicts, Krippendorff alpha (nominal) across
+all judges with missing data, the pooled percent agreement, the `panel_split`
+count (items whose judges disagreed) and `n`. Gate: pooled percent >= 0.70 and
+alpha >= 0.667 (C.5 11.3).
+
+### Blind labelling and calibration (docs/03 11.4, AC-09)
+
+```bash
+# 1. export a blind sheet: (trial, item, rubric text, artifact refs) and NO judge verdicts
+uv run spleef judges export-labels --batch-id 2026-11-b1 --out labels/sheet.jsonl
+# 2. humans fill "label" ("pass"/"fail") per row, independently and blind
+# 3. calibrate every judge against the labels (dual gate per judge: percent >= 0.70 and kappa >= 0.70)
+uv run spleef judges calibrate --batch-id 2026-11-b1 --labels labels/sheet.jsonl
+```
+
+The sheet is JSONL, one row per judged item:
+`{"trial_id", "task_id", "item_id", "rubric_text", "artifacts": [{"path", "sha256"}], "label": null}`.
+A judge below the gate fails the command with exit 1: fix the rubric, the feedback
+text or the judge prompt and recalibrate — never tune the threshold to fit (11.4).
+
+### Seed gold set (cold start, weaker than human labels)
+
+```bash
+uv run spleef judges seed-gold --tasks-dir tasks --out labels/gold.jsonl
+```
+
+Generated from the task packs: reference answers A and B pass every
+judge-decidable rubric item, the empty agent fails them. It is a seed set —
+expected verdicts, not real trials — and never a substitute for the 30-50 sample
+human calibration of docs/03 11.4.
+
+### Regrade agreement (AC-09) and rerun stability (NFR-01)
+
+```bash
+# every graded trial regraded from its recorded inputs; exact tier agreement >= 0.95
+uv run spleef batch regrade-agreement --batch-id 2026-11-b1
+# two or more batches with the same config; share of cells within 1 tier >= 0.90
+uv run spleef batch stability --batch-id 2026-11-b1 --batch-id 2026-11-b2
+```
+
+`regrade-agreement` lists every disagreement (stored tier vs recomputed tier) and
+never writes: it is a check, not a regrade. `stability` compares cell tiers (the
+median of the cell's latest recorded grades) across batches and reports the exact
+agreement alongside the within-1 share.

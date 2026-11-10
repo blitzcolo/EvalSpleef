@@ -87,6 +87,7 @@ from evalspleef.control.secrets import (
     VaultKv2Resolver,
 )
 from evalspleef.control.store import (
+    ArtifactRepository,
     BenchmarkRepository,
     Database,
     EndpointRepository,
@@ -550,6 +551,7 @@ class AppContext:
         self.benchmarks: BenchmarkRepository
         self.trials: TrialRepository
         self.grades: GradeRepository
+        self.artifacts: ArtifactRepository
         self.lease_rows: SandboxLeaseRepository
         self.hosts: HostRepository
         self.templates: TemplateBuildRepository
@@ -577,6 +579,7 @@ class AppContext:
         self.benchmarks = BenchmarkRepository(self.db)
         self.trials = TrialRepository(self.db)
         self.grades = GradeRepository(self.db)
+        self.artifacts = ArtifactRepository(self.db)
         self.lease_rows = SandboxLeaseRepository(self.db)
         self.hosts = HostRepository(self.db)
         self.templates = TemplateBuildRepository(self.db)

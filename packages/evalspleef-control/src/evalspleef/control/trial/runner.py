@@ -205,7 +205,7 @@ def verification_events(
     """
     kinds = {item.id: item.kind for item in pack.rubric.items}
 
-    def verdicts(kind: CheckKind) -> list[dict[str, str]]:
+    def verdicts(kind: CheckKind) -> list[dict[str, Any]]:
         return [
             {"item_id": result.item_id, "verdict": str(result.verdict)}
             for result in final.rubric
@@ -225,6 +225,19 @@ def verification_events(
         )
     ]
     judged = verdicts(CheckKind.LLM_JUDGE)
+    votes_by_item = {votes.item_id: votes for votes in final.judge_votes}
+    judged = [
+        {
+            **item,
+            "judge_votes": {
+                judge: vote.to_dict()
+                for judge, vote in votes_by_item[item["item_id"]].votes.items()
+            },
+        }
+        if item["item_id"] in votes_by_item
+        else item
+        for item in judged
+    ]
     agent = [
         {
             "item_id": result.item_id,

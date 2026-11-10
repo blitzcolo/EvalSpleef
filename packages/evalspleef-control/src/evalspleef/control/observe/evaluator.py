@@ -186,6 +186,7 @@ class Evaluator:
             judge_cost_usd=cost,
             judge_consistency=consistency,
             judge_samples=samples,
+            judge_votes=() if judge_run is None else judge_run.item_votes,
         )
 
     async def _verify(

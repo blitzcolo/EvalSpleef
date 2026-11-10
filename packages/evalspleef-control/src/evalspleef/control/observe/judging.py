@@ -35,7 +35,7 @@ from evalspleef.spi.errors import EndpointUnavailable
 from evalspleef.spi.gateway import COST_HEADER, PriceSpec
 
 from ..taskpack.models import TaskPack
-from ..trial.types import RubricItemResult
+from ..trial.types import JudgeItemVotes, JudgeVote, RubricItemResult
 from .artifacts import WorkspaceExport
 
 __all__ = [
@@ -249,6 +249,8 @@ class JudgeRun:
     samples: int
     manual_queue: tuple[str, ...]
     session_id: str
+    item_votes: tuple[JudgeItemVotes, ...] = ()
+    """Per-judge votes per item, recorded in the ``judge.verdict`` event."""
 
 
 class JudgeStep:
@@ -313,6 +315,21 @@ class JudgeStep:
             )
             for item in result.items
         )
+        item_votes = tuple(
+            JudgeItemVotes(
+                item_id=item.item_id,
+                votes={
+                    vendor: JudgeVote(
+                        decision=(
+                            "inconclusive" if decision is None else ("pass" if decision else "fail")
+                        ),
+                        samples=tuple(item.votes_by_vendor.get(vendor, ())),
+                    )
+                    for vendor, decision in item.vendor_decisions.items()
+                },
+            )
+            for item in result.items
+        )
         cost = self._cost(sessions)
         return JudgeRun(
             results=verdicts,
@@ -323,6 +340,7 @@ class JudgeStep:
             samples=result.samples,
             manual_queue=result.manual_queue,
             session_id=session_id,
+            item_votes=item_votes,
         )
 
     def _snapshot(
