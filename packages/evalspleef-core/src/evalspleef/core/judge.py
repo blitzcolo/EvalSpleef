@@ -212,7 +212,13 @@ class MockJudge:
 
 @dataclass(frozen=True)
 class ItemResult:
-    """单条 rubric 的评审团结果。"""
+    """Panel result for one rubric item.
+
+    ``vendor_decisions`` records each vendor's median decision (None = the vendor
+    abstained because most of its samples were unparseable); it is stored with
+    ``votes_by_vendor`` on the ``judge.verdict`` event so inter-judge agreement
+    (kappa/alpha) can be recomputed later (AGENTS rule 8).
+    """
 
     item_id: str
     passed: bool
@@ -220,6 +226,7 @@ class ItemResult:
     votes_by_vendor: Mapping[str, tuple[bool | None, ...]]
     manual_required: bool = False
     reasons: tuple[str, ...] = ()
+    vendor_decisions: Mapping[str, bool | None] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为可 JSON 的 dict。"""
@@ -231,6 +238,7 @@ class ItemResult:
                 vendor: [None if vote is None else vote for vote in votes]
                 for vendor, votes in self.votes_by_vendor.items()
             },
+            "vendor_decisions": dict(self.vendor_decisions),
             "manual_required": self.manual_required,
             "reasons": list(self.reasons),
         }
@@ -334,6 +342,7 @@ class JudgePanel:
         reasons: list[str] = []
         valid_votes: list[bool] = []
         vendor_decisions: list[bool] = []
+        decisions_by_vendor: dict[str, bool | None] = {}
         manual = False
         for vendor, votes in votes_by_vendor.items():
             valid = [vote for vote in votes if vote is not None]
@@ -341,9 +350,11 @@ class JudgePanel:
             valid_votes.extend(valid)
             if invalid > len(votes) // 2:
                 manual = True
+                decisions_by_vendor[vendor] = None
                 reasons.append(f"{vendor} 多数采样无法解析（invalid={invalid}/{len(votes)}）")
                 continue
             vendor_decision = median_vote(valid)
+            decisions_by_vendor[vendor] = vendor_decision
             vendor_decisions.append(vendor_decision)
         if not vendor_decisions or not valid_votes:
             return ItemResult(
@@ -353,6 +364,7 @@ class JudgePanel:
                 votes_by_vendor=votes_by_vendor,
                 manual_required=True,
                 reasons=tuple([*reasons, "没有有效裁判投票"]),
+                vendor_decisions={vendor: None for vendor in votes_by_vendor},
             )
         passed = median_vote(valid_votes)
         agreement = judge_consistency(valid_votes)
@@ -372,6 +384,7 @@ class JudgePanel:
             votes_by_vendor=votes_by_vendor,
             manual_required=manual,
             reasons=tuple(reasons),
+            vendor_decisions=decisions_by_vendor,
         )
 
     def evaluate_items(
