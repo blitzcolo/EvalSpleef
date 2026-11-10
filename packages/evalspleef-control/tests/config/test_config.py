@@ -279,6 +279,37 @@ def test_load_batch(tmp_path: Path) -> None:
     assert batch.judges == ["claude-sonnet-5", "gpt-5-codex"]
 
 
+def test_agent_judge_section_defaults_to_the_batch_judges(tmp_path: Path) -> None:
+    assert load_batch(_write(tmp_path, "a.yaml", BATCH_YAML)).agent_judge_slugs == []
+    configured = BATCH_YAML + "agent_judge: {k: 2, max_steps: 8, max_invalid_replies: 2}\n"
+    batch = load_batch(_write(tmp_path, "b.yaml", configured))
+    assert batch.agent_judge is not None
+    assert (batch.agent_judge.k, batch.agent_judge.max_steps) == (2, 8)
+    assert batch.agent_judge.max_invalid_replies == 2
+    assert batch.agent_judge.wall_clock_s == 300.0
+    assert batch.agent_judge_slugs == ["claude-sonnet-5", "gpt-5-codex"]
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        "agent_judge: {k: 0}",
+        "agent_judge: {max_turns: 3}",
+        "agent_judge: {output_cap_bytes: 10}",
+        "agent_judge: {max_invalid_replies: -1}",
+    ],
+)
+def test_agent_judge_section_is_validated(tmp_path: Path, section: str) -> None:
+    with pytest.raises(ConfigError):
+        load_batch(_write(tmp_path, "batch.yaml", BATCH_YAML + section + "\n"))
+
+
+def test_agent_judge_needs_some_judge(tmp_path: Path) -> None:
+    text = BATCH_YAML.replace("judges: [claude-sonnet-5, gpt-5-codex]\n", "") + "agent_judge: {}\n"
+    with pytest.raises(ConfigError, match="agent_judge needs judges"):
+        load_batch(_write(tmp_path, "batch.yaml", text))
+
+
 def test_batch_id_format(tmp_path: Path) -> None:
     bad = BATCH_YAML.replace("2026-12-b1", "batch-2026-12")
     path = _write(tmp_path, "batch.yaml", bad)

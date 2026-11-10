@@ -1,0 +1,30 @@
+{
+  "source": "Claude Sonnet 5.5 as agent judge through the gateway, backend-001 R11, reference A, 2026-11-10; every reply the strict parser refused in that sample, verbatim",
+  "replies": [
+    {
+      "turn": 1,
+      "error": "answer is not one JSON object: Expecting value",
+      "reply": "<invoke>\n</invoke>\n\n{\"action\":\"list_dir\",\"path\":\"/work\"}\n```\n\n\n<invoke>\n</invoke>\n\n{\"action\":\"list_dir\",\"path\":\"/work\"}"
+    },
+    {
+      "turn": 5,
+      "error": "answer is not one JSON object: Expecting value",
+      "reply": "<invoke>\n</invoke>\n\n\n<invoke>\n</invoke>\n\n{\"action\":\"read_file\",\"path\":\"/work/ordersvc/server.py\"}"
+    },
+    {
+      "turn": 7,
+      "error": "answer is not one JSON object: Expecting value",
+      "reply": "<invoke>\n</invoke>\n\n{\"action\":\"run\",\"cmd\":\"cd /work; mkdir -p /tmp/st; (python3 tools/inventory_stub.py --port 9123 >/tmp/stub.log 2>&1 &) ; sleep 1; (python3 -m ordersvc --port 0 --state-dir /tmp/st --inventory-url http://127.0.0.1:9123 --auth-tokens tok-a,tok-b --rate-limit 50/10 >/tmp/svc.log 2>&1 &); sleep 1.5; cat /tmp/svc.log; P=$(awk '/LISTENING/{print $2}' /tmp/svc.log); echo port $P; echo '--- 401'; curl -si -X POST localhost:$P/orders -H 'Content-Type: application/json' -H 'Idempotency-Key: k1' -d '{\\\"sku\\\":\\\"A-1\\\",\\\"quantity\\\":1}'; echo; echo '--- 400 bad json'; curl -si -X POST localhost:$P/orders -H 'Authorization: Bearer tok-a' -H 'Content-Type: application/json' -H 'Idempotency-Key: k2' -d '{bad'; echo; echo '--- 404'; curl -si localhost:$P/orders/ord-000000000000 -H 'Authorization: Bearer tok-a'; echo; echo '--- 422'; curl -si -X POST localhost:$P/orders -H 'Authorization: Bearer tok-a' -H 'Content-Type: application/json' -H 'Idempotency-Key: k3' -d '{\\\"sku\\\":\\\"NOPE-999\\\",\\\"quantity\\\":1}'; echo; echo '--- 409'; curl -s -X POST localhost:$P/orders -H 'Authorization: Bearer tok-a' -H 'Content-Type: application/json' -H 'Idempotency-Key: k4' -d '{\\\"sku\\\":\\\"A-1\\\",\\\"quantity\\\":1}'; echo; curl -si -X POST localhost:$P/orders -H 'Authorization: Bearer tok-a' -H 'Content-Type: application/json' -H 'Idempotency-Key: k4' -d '{\\\"sku\\\":\\\"A-1\\\",\\\"quantity\\\":2}'; echo\"}"
+    },
+    {
+      "turn": 9,
+      "error": "answer is not one JSON object: Expecting value",
+      "reply": "<invoke>\n</invoke>\n\n{\"action\":\"write_file\",\"path\":\"/tmp/probe.py\",\"content\":\"import http.client, json, sys\\nP=int(sys.argv[1])\\ndef req(method, path, headers=None, body=None):\\n    c=http.client.HTTPConnection('127.0.0.1',P,timeout=5)\\n    c.request(method,path,body=body,headers=headers or {})\\n    r=c.getresponse()\\n    d=r.read().decode()\\n    print(method,path,headers and {k:v for k,v in headers.items() if k!='Authorization'} ,'->',r.status,d)\\n    c.close()\\nJ={'Content-Type':'application/json'}\\nA={'Authorization':'Bearer tok-a'}\\nreq('POST','/orders',{**J,'Idempotency-Key':'k1'},'{\\\"sku\\\":\\\"A-1\\\",\\\"quantity\\\":1}')\\nreq('POST','/orders',{**J,**A,'Idempotency-Key':'k2'},'{bad')\\nreq('GET','/orders/ord-000000000000',A)\\nreq('POST','/orders',{**J,**A,'Idempotency-Key':'k3'},'{\\\"sku\\\":\\\"NOPE-999\\\",\\\"quantity\\\":1}')\\nreq('POST','/orders',{**J,**A,'Idempotency-Key':'k4'},'{\\\"sku\\\":\\\"A-1\\\",\\\"quantity\\\":1}')\\nreq('POST','/orders',{**J,**A,'Idempotency-Key':'k4'},'{\\\"sku\\\":\\\"A-1\\\",\\\"quantity\\\":2}')\\nreq('GET','/nope',A)\\n\"}"
+    },
+    {
+      "turn": 10,
+      "error": "answer is not one JSON object: Extra data",
+      "reply": "{\"action\":\"write_file\",\"path\":\"/tmp/probe.py\",\"content\":\"import http.client, json, sys\\nP=int(sys.argv[1])\\ndef req(method, path, headers=None, body=None):\\n    c=http.client.HTTPConnection('127.0.0.1',P,timeout=5)\\n    c.request(method,path,body=body,headers=headers or {})\\n    r=c.getresponse()\\n    d=r.read().decode()\\n    print(method,path,'->',r.status,d)\\n    c.close()\\nJ={'Content-Type':'application/json'}\\nA={'Authorization':'Bearer tok-a'}\\nreq('POST','/orders',{**J,'Idempotency-Key':'k1'},'{\\\"sku\\\":\\\"A-1\\\",\\\"quantity\\\":1}')\\nreq('POST','/orders',{**J,**A,'Idempotency-Key':'k2'},'{bad')\\nreq('GET','/orders/ord-000000000000',A)\\nreq('POST','/orders',{**J,**A,'Idempotency-Key':'k3'},'{\\\"sku\\\":\\\"NOPE-999\\\",\\\"quantity\\\":1}')\\nreq('POST','/orders',{**J,**A,'Idempotency-Key':'k4'},'{\\\"sku\\\":\\\"A-1\\\",\\\"quantity\\\":1}')\\nreq('POST','/orders',{**J,**A,'Idempotency-Key':'k4'},'{\\\"sku\\\":\\\"A-1\\\",\\\"quantity\\\":2}')\\n\"}\n```"
+    }
+  ]
+}

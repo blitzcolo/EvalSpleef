@@ -5,12 +5,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ._yaml import load_yaml_mapping
 from .errors import ConfigError
 
 __all__ = [
+    "AgentJudgeConfig",
     "BatchBudget",
     "BatchFileConfig",
     "EndpointPolicy",
@@ -64,6 +65,36 @@ class EndpointPolicy(BaseModel):
         return value
 
 
+class AgentJudgeConfig(BaseModel):
+    """``agent_judge``: judge agents for ``agent_judge`` rubric items.
+
+    Present means configured; absent keeps such items inconclusive for a human.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: Judge model slugs serving agent items; empty means the batch's ``judges``.
+    judges: list[str] = Field(default_factory=list)
+    #: Samples per item and judge; each sample boots one judge sandbox.
+    k: int = Field(default=3, ge=1, le=9)
+    #: Executed actions per sample; replies without a valid first action do not count.
+    max_steps: int = Field(default=12, ge=1, le=64)
+    #: Invalid replies tolerated per sample; one more ends it as inconclusive ("protocol").
+    max_invalid_replies: int = Field(default=4, ge=0, le=32)
+    command_timeout_s: float = Field(default=60.0, gt=0, le=600)
+    wall_clock_s: float = Field(default=300.0, gt=0, le=3600)
+    output_cap_bytes: int = Field(default=8192, ge=1024, le=1 << 20)
+    #: False runs judge agents on the final verification only (cost: k x items x boots).
+    run_every_round: bool = False
+
+    @field_validator("judges")
+    @classmethod
+    def _judges_nonempty(cls, value: list[str]) -> list[str]:
+        if any(not name.strip() for name in value):
+            raise ValueError("entries must not be empty strings")
+        return value
+
+
 class BatchFileConfig(BaseModel):
     """Top level of ``batch.yaml``."""
 
@@ -80,6 +111,7 @@ class BatchFileConfig(BaseModel):
     #: Appendix C.5 wants judges from at least two vendors; a single-vendor panel is an
     #: explicit, recorded exception (for example a local run against one fake judge).
     allow_single_judge_vendor: bool = False
+    agent_judge: AgentJudgeConfig | None = None
     pricing_table: str
 
     @field_validator("batch")
@@ -88,6 +120,19 @@ class BatchFileConfig(BaseModel):
         if not BATCH_ID_RE.match(value):
             raise ValueError(f"batch id must look like 'YYYY-MM-bN' (PRD A.1): {value!r}")
         return value
+
+    @model_validator(mode="after")
+    def _agent_judges(self) -> BatchFileConfig:
+        if self.agent_judge is not None and not (self.agent_judge.judges or self.judges):
+            raise ValueError("agent_judge needs judges: set agent_judge.judges or judges")
+        return self
+
+    @property
+    def agent_judge_slugs(self) -> list[str]:
+        """The judge models serving agent_judge items (empty when not configured)."""
+        if self.agent_judge is None:
+            return []
+        return self.agent_judge.judges or self.judges
 
     @field_validator("models", "judges")
     @classmethod
