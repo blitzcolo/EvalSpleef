@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,24 @@ async def test_fault_injectors_drive_the_cli(monkeypatch: pytest.MonkeyPatch) ->
             assert (await sandbox.exec(["true"])).exit_code == 0
     finally:
         await _cleanup(targets)
+
+
+# ``container network list --format json`` from container 1.6.1 with the adapter's internal
+# network present (configuration objects trimmed).
+_NETWORK_LIST = """[
+ {"id": "default", "configuration": {"mode": "nat"},
+  "status": {"ipv4Gateway": "192.168.64.1", "ipv4Subnet": "192.168.64.0/24"}},
+ {"id": "spleef-conformance-internal", "configuration": {"mode": "nat"},
+  "status": {"ipv4Gateway": "192.168.128.1", "ipv4Subnet": "192.168.128.0/24"}}
+]"""
+
+
+def test_observer_hosts_cover_every_network_gateway() -> None:
+    """C-NET-01 must probe the internal network's gateway too: the old ``off`` mapping
+    reached the host there while the ``default`` gateway stayed unreachable."""
+    entries = json.loads(_NETWORK_LIST)
+    assert conformance._network_gateways(entries) == ["192.168.64.1", "192.168.128.1"]
+    assert conformance._network_gateways(entries, "default") == ["192.168.64.1"]
 
 
 async def test_live_target_needs_the_cli_on_path(

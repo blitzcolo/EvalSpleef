@@ -33,6 +33,7 @@ from evalspleef.conformance.target import ConformanceTarget
 CASE_MODULES: tuple[str, ...] = (
     "evalspleef.conformance.cases_sandbox_basic",
     "evalspleef.conformance.cases_sandbox_env",
+    "evalspleef.conformance.cases_sandbox_roots",
     "evalspleef.conformance.cases_model",
 )
 """Case library modules, imported at collection time; a missing module is skipped."""

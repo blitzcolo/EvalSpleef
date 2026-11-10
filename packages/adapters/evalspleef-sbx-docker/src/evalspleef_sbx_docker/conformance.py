@@ -12,11 +12,15 @@ Fault injectors: ``lose_sandbox`` (``docker rm -f`` the container),
 ``fail_create`` (the next create raises ``SandboxCreateError``).
 
 The target sets ``reachable_from_sandbox`` to the host gateway address so the
-network canary cases can reach an HTTP observer started on the host.
+network canary cases can reach an HTTP observer started on the host, and
+``observer_hosts`` to the host alias plus the IPv4 gateway of every Docker network,
+which C-NET-01 must all find unreachable from an ``off`` sandbox.
 """
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -124,6 +128,19 @@ def _host_gateway() -> str:
     return "host.docker.internal"
 
 
+def _observer_hosts() -> list[str]:
+    """The host alias and the IPv4 gateway of every network the daemon knows."""
+    networks = _run_docker(["network", "ls", "-q"]).split()
+    template = "{{range .IPAM.Config}}{{.Gateway}} {{end}}"
+    gateways = _run_docker(["network", "inspect", "-f", template, *networks]).split()
+    ipv4 = [gw for gw in gateways if isinstance(ipaddress.ip_address(gw), ipaddress.IPv4Address)]
+    return ["host.docker.internal", *ipv4]
+
+
+async def _observer_hosts_async() -> list[str]:
+    return await asyncio.to_thread(_observer_hosts)
+
+
 def _spec_factory(image_id: str) -> Callable[..., SandboxSpec]:
     def factory(trial_id: str, *, network: NetMode, max_lifetime_s: int) -> SandboxSpec:
         return SandboxSpec(
@@ -189,6 +206,7 @@ def build_targets() -> list[ConformanceTarget]:
             "python:3.12-slim with an unprivileged 'agent' user, /workspace and no sudo"
         ),
         cleanup=cleanup,
+        observer_hosts=_observer_hosts_async,
         reachable_from_sandbox=_host_gateway(),
     )
     return [target]

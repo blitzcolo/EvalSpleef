@@ -137,7 +137,13 @@ tools, no sudo; pulls the base only if absent) and returns the `local-docker`
 target with the `lose_sandbox`, `expire_lifetime` and `fail_create` injectors.
 The target's cleanup removes every container, the test image, and the base
 image if this target pulled it. `reachable_from_sandbox` is the bridge gateway
-address so the network canary cases can observe allow/block behaviour.
+address so the network canary cases can observe allow/block behaviour;
+`observer_hosts` adds `host.docker.internal` and the IPv4 gateway of every Docker
+network, all of which C-NET-01 requires to be unreachable under `off`. C-FILE-05
+(a directory uploaded onto the `/workspace` tmpfs) and C-FILE-06 (a verifier
+sandbox's `/verify` tmpfs) cover the two upload defects fixed earlier; the live
+run on 2026-11-10 passed 29, failed 0, 6 not applicable for `local-docker` and the
+same for `remote-docker`.
 
 Not applicable for this provider (by capability declaration): C-NET-02 (no
 native hostname allowlist — proxy only), C-NET-05 (no dynamic network policy),

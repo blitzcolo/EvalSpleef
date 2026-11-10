@@ -9,6 +9,7 @@ their own full case set.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import types
@@ -21,8 +22,9 @@ import pytest
 
 import evalspleef.conformance.plugin as plugin
 from evalspleef.conformance.builtin import build_targets
-from evalspleef.conformance.target import ConformanceTarget
-from evalspleef.spi.errors import SandboxLost
+from evalspleef.conformance.cases_sandbox_roots import WORKSPACE
+from evalspleef.conformance.target import ConformanceTarget, ObserverHosts
+from evalspleef.spi.errors import SandboxLost, TransferError
 from evalspleef.spi.isolation import IsolationProfile
 from evalspleef.spi.sandbox import (
     ExecResult,
@@ -136,6 +138,24 @@ class RetainedSandbox(DelegatingSandbox):
         return None
 
 
+class NestingUploadSandbox(DelegatingSandbox):
+    """Uploads a directory aimed at the workspace mount point as a child of it."""
+
+    async def upload(self, local: Path, remote: str) -> None:
+        if remote == WORKSPACE and await asyncio.to_thread(local.is_dir):
+            remote = f"{WORKSPACE}/{local.name}"
+        await self.inner.upload(local, remote)
+
+
+class WorkspaceOnlySandbox(DelegatingSandbox):
+    """A read-only root with only the workspace writable, whatever the sandbox's role."""
+
+    async def upload(self, local: Path, remote: str) -> None:
+        if remote != WORKSPACE and not remote.startswith(f"{WORKSPACE}/"):
+            raise TransferError(f"cannot create {remote}: Read-only file system")
+        await self.inner.upload(local, remote)
+
+
 class FaultyProvider(DelegatingProvider):
     """Wraps every created sandbox with ``sandbox_type``."""
 
@@ -176,6 +196,26 @@ class OffModeProxyProvider(DelegatingProvider):
         return await self.inner.create(spec)
 
 
+class OffModeHostOnlyProvider(DelegatingProvider):
+    """Blocks the primary observer under ``off`` but leaves the host reachable at 127.0.0.1,
+    like a host-only network whose gateway differs from the primary observer address."""
+
+    async def create(self, spec: SandboxSpec) -> Sandbox:
+        if spec.network.mode.value == "off":
+            env = {
+                **spec.env,
+                "http_proxy": BLACKHOLE_PROXY,
+                "all_proxy": BLACKHOLE_PROXY,
+                "no_proxy": "127.0.0.1",
+            }
+            spec = replace(spec, env=env)
+        return await self.inner.create(spec)
+
+
+async def _loopback_observer() -> list[str]:
+    return ["127.0.0.1"]
+
+
 @dataclass(frozen=True)
 class ObservedTarget(ConformanceTarget):
     """A target that tells the network cases where the sandbox can see this process."""
@@ -196,6 +236,7 @@ def _target(
     *,
     cleanup: Callable[[], Any] | None = None,
     observer: str = "",
+    observer_hosts: ObserverHosts | None = None,
 ) -> ConformanceTarget:
     (builtin,) = [target for target in build_targets() if target.name == "mock-sandbox"]
     return ObservedTarget(
@@ -205,6 +246,7 @@ def _target(
         fake=True,
         spec_factory=builtin.spec_factory,
         cleanup=cleanup,
+        observer_hosts=observer_hosts,
         reachable_from_sandbox=observer,
     )
 
@@ -240,6 +282,35 @@ def _network_off_ignored() -> ConformanceTarget:
 def _network_off_enforced() -> ConformanceTarget:
     return _target(
         "enforces-network-off", OffModeProxyProvider(_mock_provider()), observer="127.0.0.1"
+    )
+
+
+def _upload_nests_directory() -> ConformanceTarget:
+    return _target(
+        "nests-uploaded-directory", FaultyProvider(_mock_provider(), NestingUploadSandbox)
+    )
+
+
+def _no_verify_root() -> ConformanceTarget:
+    return _target("no-verify-root", FaultyProvider(_mock_provider(), WorkspaceOnlySandbox))
+
+
+def _host_only_off() -> ConformanceTarget:
+    # The primary observer goes through the refusing proxy, the host-only address does not.
+    return _target(
+        "host-only-off",
+        OffModeHostOnlyProvider(_mock_provider()),
+        observer="localhost",
+        observer_hosts=_loopback_observer,
+    )
+
+
+def _off_enforced_on_every_address() -> ConformanceTarget:
+    return _target(
+        "off-on-every-address",
+        OffModeProxyProvider(_mock_provider()),
+        observer="localhost",
+        observer_hosts=_loopback_observer,
     )
 
 
@@ -290,10 +361,19 @@ FAULTS = [
     Fault("C-LIFE-02", _destroy_not_idempotent, _plain_mock, "already destroyed"),
     Fault("C-EXEC-01", _exit_code_mislabeling, _plain_mock, "reported exit 0"),
     Fault("C-NET-01", _network_off_ignored, _network_off_enforced, "reachable from the sandbox"),
+    Fault(
+        "C-NET-01", _host_only_off, _off_enforced_on_every_address, "must not be: http://127.0.0.1:"
+    ),
+    Fault("C-FILE-05", _upload_nests_directory, _plain_mock, "are not at /workspace/<name>"),
+    Fault("C-FILE-06", _no_verify_root, _plain_mock, "Read-only file system"),
 ]
 
 
-@pytest.mark.parametrize("fault", FAULTS, ids=lambda fault: fault.case_id)
+def _fault_id(fault: Fault) -> str:
+    return f"{fault.case_id}-{fault.broken.__name__.strip('_')}"
+
+
+@pytest.mark.parametrize("fault", FAULTS, ids=_fault_id)
 def test_broken_provider_fails_the_matching_case(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, fault: Fault
 ) -> None:
@@ -304,13 +384,24 @@ def test_broken_provider_fails_the_matching_case(
     assert fault.detail in entry["detail"], entry["detail"]
 
 
-@pytest.mark.parametrize("fault", FAULTS, ids=lambda fault: fault.case_id)
+@pytest.mark.parametrize("fault", FAULTS, ids=_fault_id)
 def test_control_provider_passes_the_same_case(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, fault: Fault
 ) -> None:
     _restrict_to_cases(monkeypatch, {fault.case_id})
     (entry,) = _run(pytester, [fault.control()])
     assert entry["case_id"] == fault.case_id
+    assert entry["status"] == "pass", entry
+
+
+def test_verify_root_follows_the_control_plane_override(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A carrier that only writes under /workspace passes C-FILE-06 once SPLEEF_VERIFY_ROOT
+    moves the verify root there, as the control plane would run its verifier."""
+    monkeypatch.setenv("SPLEEF_VERIFY_ROOT", f"{WORKSPACE}/verify")
+    _restrict_to_cases(monkeypatch, {"C-FILE-06"})
+    (entry,) = _run(pytester, [_no_verify_root()])
     assert entry["status"] == "pass", entry
 
 

@@ -209,6 +209,7 @@ def _remote_docker_target() -> ConformanceTarget | None:
         injectors=inner.injectors,
         notes="hostd daemon on loopback in front of the docker adapter and a local Docker daemon",
         cleanup=cleanup,
+        observer_hosts=inner.observer_hosts,
         reachable_from_sandbox=getattr(inner, "reachable_from_sandbox", None),
     )
 

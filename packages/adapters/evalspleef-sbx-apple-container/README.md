@@ -18,7 +18,7 @@ target and the gated live tests in `tests/test_live_carrier.py`:
 | CLI | `container` 1.6.1 (Homebrew), apiserver 1.6.1 |
 | guest kernel | Apple's default kernel, Linux 6.18.35 aarch64 (`vmlinux-6.18.35-197-debug`) |
 | image | `docker.io/library/python:3.12-slim`, run as `nobody`, pinned by digest |
-| live conformance | 26 passed, 0 failed, 7 not applicable (by declared capability) |
+| live conformance | 28 passed, 0 failed, 7 not applicable (by declared capability), 2026-11-10 |
 
 Inside a live sandbox created with `cpus=2, memory_mb=1024`: `uname -r` prints
 `6.18.35`, `id -un` prints the requested user, `cpu.max` is `200000 100000`,
@@ -26,11 +26,15 @@ Inside a live sandbox created with `cpus=2, memory_mb=1024`: `uname -r` prints
 overhead) and slightly more `MemTotal` than requested; the cgroup limits are the
 enforced ones.
 
-Two trial-flow paths the conformance cases do not exercise are covered by live
-tests in `tests/test_live_carrier.py`: uploading a nested directory **as**
-`/workspace` (the cases only upload into it) and writing under `/verify` in a
-verifier-role sandbox (no case creates one). Both failed on the real CLI before
-the fixes (found by the AC-03 parity run, `docs/evidence/ac03-carriers.md`).
+Two trial-flow paths, uploading a nested directory **as** `/workspace` and
+writing under `/verify` in a verifier-role sandbox, failed on the real CLI before
+the fixes (found by the AC-03 parity run, `docs/evidence/ac03-carriers.md`). They
+are covered by live tests in `tests/test_live_carrier.py` and now by the
+conformance cases C-FILE-05 and C-FILE-06. C-NET-01 probes the gateway of every
+network `container network list` reports, not only the `default` one: with `off`
+mapped back to the internal network it fails on the internal gateway and the
+host's LAN address while the `default` gateway stays unreachable, which is how
+the old host-only mapping passed the single-address probe.
 
 Still verified against the fake CLI only (`fake_container.py`):
 

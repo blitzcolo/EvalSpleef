@@ -42,6 +42,7 @@ Fields that matter:
 | `injectors` | Optional async fault injectors, see below. |
 | `model_fixture` | Model only: `ModelFixture` with `spec_factory`, `operator_input_factory` (assisted providers), `upstream` (a `FakeOpenAIServer` for scripted replies and error statuses) and `hf_access`. |
 | `cleanup` | Optional async teardown, awaited once after the target's cases ran. |
+| `observer_hosts` | Sandbox only, optional: async `() -> Sequence[str]` returning every further host name or IPv4 address through which the test machine may be reachable from a sandbox (the gateway of each carrier network, a host alias). See below. |
 | `notes` | Free text shown in the report, for example what is faked. |
 
 Network cases also look for an optional `reachable_from_sandbox` attribute: the host name or
@@ -56,6 +57,17 @@ class DockerTarget(ConformanceTarget):
 
 Without it C-NET-01, C-NET-02 and C-NET-05 report not-applicable. A provider that enforces no
 network policy must therefore never be allowed to hide behind a missing observer: set it.
+
+One address is not enough for C-NET-01: a carrier can map `off` to a host-only network whose
+gateway is not the primary observer address, and the host stays reachable through it. C-NET-01
+therefore probes `reachable_from_sandbox`, every address `observer_hosts` returns and the test
+machine's primary LAN address, and fails if any of them answers. It calls `observer_hosts` after
+its sandbox exists, so a network the carrier creates on demand is listed. Targets without the
+hook keep working and are probed on the primary and LAN addresses only.
+
+C-FILE-06 uploads to and runs from the verify root of a `role="verifier"` sandbox. The root is
+`/verify` unless `SPLEEF_VERIFY_ROOT` is set, the same variable the control plane reads, so run
+the kit with the value your deployment uses for that carrier.
 
 ## 2. Injectors
 
@@ -122,8 +134,11 @@ replaced). The terminal also gets one summary line.
 `tests/test_negative_proofs.py` wraps the mock sandbox into providers with one deliberate defect and
 asserts that the matching case fails while an unbroken control passes: exec that ignores timeouts
 (C-EXEC-03), a provider that leaks a marker file between sandboxes (C-ISO-01), a non-idempotent
-destroy (C-LIFE-02), a mislabelled exit code (C-EXEC-01) and a provider that ignores network
-`off` (C-NET-01). It also asserts that the builtin targets fail no case. Run it with
+destroy (C-LIFE-02), a mislabelled exit code (C-EXEC-01), a provider that ignores network
+`off` (C-NET-01), one that blocks the primary observer but leaves the host reachable on a second
+address (C-NET-01), an upload that nests a directory under `/workspace` instead of filling it
+(C-FILE-05) and a read-only root without a writable verify root (C-FILE-06). It also asserts
+that the builtin targets fail no case. Run it with
 `uv run pytest packages/evalspleef-conformance`.
 
 Everything in this package was verified against the `evalspleef-testing` doubles only; none of it has

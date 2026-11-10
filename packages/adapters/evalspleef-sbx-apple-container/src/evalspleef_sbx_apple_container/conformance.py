@@ -18,6 +18,11 @@ The fault injectors drive the CLI in both targets: a lost sandbox is removed out
 of band with ``container delete --force``; a create failure is a real ``run``
 failing because an injector-created container already holds the pinned name;
 lifetime expiry runs the adapter's own TTL sweep with the clock past the lifetime.
+
+``observer_hosts`` lists the IPv4 gateway of every network the CLI reports when
+C-NET-01 asks (after its sandbox exists, so an internal network the adapter created
+on demand is included): from an ``off`` sandbox the host must be unreachable through
+every one of them, not only through the ``default`` network's gateway.
 """
 
 from __future__ import annotations
@@ -132,6 +137,14 @@ def _build_target(
             occupied.append(taken)
             provider.pin_next_sandbox_id(taken)
 
+    async def observer_hosts() -> list[str]:
+        result = await provider.cli.run(
+            ["network", "list", "--format", "json"], timeout_s=_CLI_TIMEOUT_S
+        )
+        if result.exit_code != 0:
+            raise SpleefError(f"container network list failed: {result.stderr_text[:400]}")
+        return _network_gateways(json.loads(result.stdout_text))
+
     async def expire_lifetime() -> None:
         lifetime = provider.capabilities().max_lifetime_s or 0
         await provider.sweep_expired(now=time.time() + lifetime + 1)
@@ -159,6 +172,7 @@ def _build_target(
         },
         notes=notes,
         cleanup=cleanup,
+        observer_hosts=observer_hosts,
         reachable_from_sandbox=reachable_from_sandbox,
     )
 
@@ -227,14 +241,25 @@ def _image_digest(executable: str, image: str) -> str:
     raise RuntimeError(f"'container image inspect {image}' reported no sha256 digest")
 
 
+def _network_gateways(entries: object, network: str | None = None) -> list[str]:
+    """IPv4 gateways from ``container network list --format json``; one network if named."""
+    gateways: list[str] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict) or network not in (None, entry.get("id")):
+            continue
+        status = entry.get("status")
+        gateway = status.get("ipv4Gateway") if isinstance(status, dict) else None
+        if isinstance(gateway, str) and gateway:
+            gateways.append(gateway)
+    return gateways
+
+
 def _host_gateway(executable: str, network: str) -> str:
     """The host address as seen from a sandbox on ``network`` (its IPv4 gateway)."""
     entries = _cli_json(executable, "network", "list", "--format", "json")
-    for entry in entries if isinstance(entries, list) else []:
-        if isinstance(entry, dict) and entry.get("id") == network:
-            gateway = entry.get("status", {}).get("ipv4Gateway")
-            if isinstance(gateway, str) and gateway:
-                return gateway
+    gateways = _network_gateways(entries, network)
+    if gateways:
+        return gateways[0]
     raise RuntimeError(f"network {network!r} reports no IPv4 gateway")
 
 

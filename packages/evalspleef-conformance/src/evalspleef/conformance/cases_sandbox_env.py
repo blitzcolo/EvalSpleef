@@ -11,6 +11,11 @@ name or address (no port, no scheme) reachable from inside a sandbox, for exampl
 ``host.docker.internal``. Targets without it report the observer-based cases as
 not-applicable with that reason; the case never guesses.
 
+C-NET-01 does not stop at that one address: a carrier can route ``off`` to a
+host-only network whose gateway differs from the primary observer address, so the
+case also probes every address from the target's ``observer_hosts`` hook and the
+test machine's primary LAN address, and all of them must be unreachable.
+
 Isolation cases run POSIX/Linux probe commands; for other OS families they report
 not-applicable because the target supplies no probe script.
 """
@@ -97,6 +102,33 @@ def _observer(target: ConformanceTarget) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
+
+
+def _host_lan_address() -> str | None:
+    """The test machine's primary IPv4 address, or None when it has no route off loopback.
+
+    Connecting a UDP socket only selects the outbound interface; no packet is sent.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        try:
+            probe.connect(("192.0.2.1", 9))  # TEST-NET-1, never routed to a real host
+        except OSError:
+            return None  # no default route: the machine has no LAN address to probe
+        address = str(probe.getsockname()[0])
+    return None if address.startswith("127.") or address == "0.0.0.0" else address
+
+
+async def _all_observer_hosts(target: ConformanceTarget) -> list[str]:
+    """Every address through which the host observer may be reachable, primary first."""
+    primary = _observer(target)
+    assert primary is not None
+    hosts = [primary]
+    if target.observer_hosts is not None:
+        hosts.extend(await target.observer_hosts())
+    lan = _host_lan_address()
+    if lan is not None:
+        hosts.append(lan)
+    return list(dict.fromkeys(host for host in hosts if host))
 
 
 def _injector(target: ConformanceTarget, name: str) -> Callable[..., Awaitable[None]] | None:
@@ -259,13 +291,22 @@ def _net01_applies(target: ConformanceTarget) -> str | None:
 
 
 async def _run_net01(target: ConformanceTarget) -> None:
-    host = _observer(target)
-    assert host is not None
     with _CanaryServer() as canary:
         async with _open_spec(
             target, _build_spec(target, "conf-net-01", network=NetMode.OFF)
         ) as sandbox:
-            await _assert_unreachable(sandbox, canary.url(host))
+            # Asked only now: a carrier may create the network it attaches on demand.
+            hosts = await _all_observer_hosts(target)
+            reached = [
+                canary.url(host)
+                for host in hosts
+                if await _probe_url(sandbox, canary.url(host)) == 0
+            ]
+    if reached:
+        raise AssertionError(
+            "network 'off' sandbox reaches the host observer; URL is reachable from the "
+            f"sandbox but must not be: {', '.join(reached)} (probed {', '.join(hosts)})"
+        )
 
 
 def _net02_mode(caps: SandboxCapabilities) -> NetMode | None:

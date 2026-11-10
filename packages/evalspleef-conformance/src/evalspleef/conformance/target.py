@@ -12,7 +12,7 @@ transports) set ``fake=True`` so the report can distinguish
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Literal
@@ -35,6 +35,10 @@ reclaims a live sandbox), ``fail_create`` (the next create raises),
 
 SpecFactory = Callable[..., SandboxSpec]
 """``(trial_id, *, network, max_lifetime_s) -> SandboxSpec`` for sandbox targets."""
+
+ObserverHosts = Callable[[], Awaitable[Sequence[str]]]
+"""Async hook returning further host names or IPv4 addresses (no scheme, no port) at which
+a process on the test machine may be reachable from inside a sandbox."""
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,13 @@ class ConformanceTarget:
 
     cleanup: Callable[[], Awaitable[None]] | None = None
     """Optional async teardown the plugin awaits after all cases of this target ran."""
+
+    observer_hosts: ObserverHosts | None = None
+    """Sandbox targets: every further address through which the host observer may be
+    reachable from a sandbox (the gateway of each carrier network, a host alias). C-NET-01
+    calls it after its sandbox exists, so networks a carrier creates on demand are listed,
+    and requires all of them, plus ``reachable_from_sandbox``, to be unreachable under
+    network ``off``. ``None`` keeps the single ``reachable_from_sandbox`` address."""
 
     @asynccontextmanager
     async def open_sandbox(
