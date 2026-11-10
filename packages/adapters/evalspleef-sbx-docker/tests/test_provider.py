@@ -175,6 +175,29 @@ async def test_sweep_removes_expired_containers(provider, spec_factory) -> None:
     await sandbox.destroy()
 
 
+async def test_expiring_live_sandboxes_spares_other_containers_of_the_instance(
+    provider, spec_factory
+) -> None:
+    # A second provider object with the same instance name stands for a batch running on the
+    # same host: its container carries the same spleef.provider label but is not ours.
+    neighbour = DockerProvider(
+        "adapter-test",
+        {"max_concurrency": 4, "pids_limit": 64, "ttl_sweep_interval_s": 1},
+        _Secrets(),
+    )
+    mine = await provider.create(spec_factory("prov-expire-mine"))
+    theirs = await neighbour.create(spec_factory("prov-expire-theirs"))
+    try:
+        await provider.expire_live_sandboxes()
+        assert await provider.list({"trial": "prov-expire-mine"}) == []
+        survivors = await provider.list({"trial": "prov-expire-theirs"})
+        assert [entry["id"] for entry in survivors] == [theirs.id]
+    finally:
+        await theirs.destroy()
+        await mine.destroy()
+        await neighbour.close()
+
+
 async def test_lose_sandbox_makes_exec_raise(provider, spec_factory) -> None:
     sandbox = await provider.create(spec_factory("prov-7"))
     await provider.lose(sandbox.id)

@@ -280,8 +280,14 @@ class DockerProvider(SandboxProvider):
             raise self.map_error(exc, sandbox_id) from exc
 
     async def expire_live_sandboxes(self) -> None:
-        """Run the TTL sweep as if every live sandbox had outlived its lifetime."""
-        await self._sweep_once(now=time.time() + self._max_lifetime_s + 1)
+        """Run the TTL sweep as if every sandbox this provider created had outlived its lifetime.
+
+        Only those: containers of the same instance that this object did not create (a batch
+        running on the same host) must survive a conformance run.
+        """
+        await self._sweep_once(
+            now=time.time() + self._max_lifetime_s + 1, only=frozenset(self._live)
+        )
 
     # -- SandboxProvider -----------------------------------------------------------
 
@@ -576,12 +582,16 @@ class DockerProvider(SandboxProvider):
                 # kill the only TTL backstop this provider has.
                 continue
 
-    async def _sweep_once(self, *, now: float | None = None) -> None:
+    async def _sweep_once(
+        self, *, now: float | None = None, only: frozenset[str] | None = None
+    ) -> None:
         filters = {"label": [f"spleef.provider={self.instance}"]}
         entries = await self.client().containers.list(all=True, filters=filters)
         now = time.time() if now is None else now
         for entry in entries:
             summary = self._summarise(entry)
+            if only is not None and summary["id"] not in only:
+                continue
             expires_at = float(summary["labels"].get("spleef.expires_at") or 0)
             if expires_at and expires_at <= now:
                 try:
