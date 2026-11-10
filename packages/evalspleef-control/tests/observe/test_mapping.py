@@ -106,6 +106,34 @@ class TestLogic001:
         assert verdicts["R1"] == "pass"
         assert verdicts["R2"] == "pass"  # the answer itself was correct
 
+    def test_malformed_answer_aborts_checker_and_unrun_items_stay_unscored(
+        self, pack_factory, hmod
+    ) -> None:
+        # a present-but-invalid answer aborts the checker at the load step: the
+        # report carries only the load-failure code and an empty per-item list,
+        # so absent violation codes prove nothing and their items stay inconclusive
+        pack: TaskPack = pack_factory("logic-001")
+        runs = _runs_from_shared_report(pack, hmod.load_fixture("logic-001.malformed"))
+        verdicts = _verdicts(pack, runs)
+        assert verdicts["R1"] == "fail"  # HG2_format_ok == false (TOP_LEVEL_KEYS fired)
+        assert verdicts["R2"] == "fail"  # HG1_answer_correct == false
+        assert verdicts["R4"] == "pass"  # the protected input was not touched
+        assert verdicts["R3"] == "inconclusive"  # RULE_NOT_SELF_CONSISTENT never checked
+        assert verdicts["R5"] == "inconclusive"
+        assert verdicts["R11"] == "inconclusive"
+        assert verdicts["R12"] == "inconclusive"
+
+    def test_malformed_answer_with_artifact_record_fails_unrun_items(
+        self, pack_factory, hmod
+    ) -> None:
+        # with the required artifact recorded missing the absent codes are fails,
+        # exactly as for the never-written answer
+        pack: TaskPack = pack_factory("logic-001")
+        runs = _runs_from_shared_report(pack, hmod.load_fixture("logic-001.malformed"))
+        verdicts = _verdicts(pack, runs, missing=("answer.json",))
+        assert verdicts["R3"] == "fail"
+        assert verdicts["R12"] == "fail"
+
 
 class TestData001:
     def test_reference(self, pack_factory, hmod) -> None:
@@ -137,6 +165,22 @@ class TestData001:
         pack: TaskPack = pack_factory("data-001")
         runs = _runs_from_shared_report(pack, hmod.load_fixture("data-001.empty"))
         assert _verdicts(pack, runs)["R3"] == "inconclusive"
+
+    def test_malformed_submission_aborts_checker_and_unrun_items_stay_unscored(
+        self, pack_factory, hmod
+    ) -> None:
+        # the submission exists but crashes: both score objects are
+        # SCRIPT_FAILED stubs with no per-item results, so the absent format
+        # codes prove nothing and their items stay inconclusive
+        pack: TaskPack = pack_factory("data-001")
+        runs = _runs_from_shared_report(pack, hmod.load_fixture("data-001.malformed"))
+        verdicts = _verdicts(pack, runs)
+        assert verdicts["R1"] == "fail"  # HG1_sample_ok == false
+        assert verdicts["R2"] == "fail"  # HG2_hidden_ok == false
+        assert verdicts["R9"] == "pass"  # the protected inputs were not touched
+        assert verdicts["R3"] == "inconclusive"
+        assert verdicts["R4"] == "inconclusive"
+        assert verdicts["R5"] == "inconclusive"
 
     def test_tampered_input(self, pack_factory, hmod) -> None:
         pack: TaskPack = pack_factory("data-001")

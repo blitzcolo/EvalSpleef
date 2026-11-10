@@ -1,0 +1,8 @@
+{
+  "task": "logic-001",
+  "scenario": "malformed",
+  "cmd": "python3 verify_submission.py --answer <malformed-answer.json> --json",
+  "exit_code": 1,
+  "stdout": "{\n  \"task_id\": \"logic-001\",\n  \"task_version\": \"1.0.0\",\n  \"HG1_answer_correct\": false,\n  \"HG2_format_ok\": false,\n  \"HG3_input_untampered\": true,\n  \"hard_gate_passed\": false,\n  \"tier_hint\": \"F\",\n  \"input_sha256\": \"d8c488889f89cf7a85f09fa967e6f11e00c648975a1df60d8f7c015a0b1578bd\",\n  \"violations\": [\n    {\n      \"code\": \"TOP_LEVEL_KEYS\",\n      \"detail\": []\n    }\n  ],\n  \"instances\": []\n}\n",
+  "stderr": ""
+}

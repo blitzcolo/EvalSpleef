@@ -38,13 +38,21 @@ A check id gets a *passed* signal when none of the failure rules fired and:
 
 - it is a **violation code** (final segment ``UPPER_SNAKE`` with an underscore, such
   as ``checker.RULE_NOT_SELF_CONSISTENT``) that appears nowhere, and the pack's
-  checker ran to completion: a gate run that did not time out emitted a JSON report
-  carrying a violation list (a list under ``violations`` or ``*_violations``). Such
-  codes exist only on failure, so their absence from a completed check is the pass.
+  checker ran to completion. A report proves completion when some
+  violation-carrying scope in it is *clean* (an empty ``violations``/
+  ``*_violations`` list: the checks ran and nothing fired) or *backed by
+  per-item results* (a non-empty non-violation list or a nested detail object
+  beside fired violations). A report whose only content is fired violations
+  (``ANSWER_MISSING``, ``SCRIPT_FAILED``, ...) is an aborted run: the checker
+  stopped at the load step, so its absence of other codes proves nothing.
 
 A violation code with no signal at all is a *fail* when a ``required`` artifact of
-task.yaml is missing from the export: the checker had nothing to inspect, and the
-item's pass criteria presuppose that artifact.
+task.yaml is missing from the export: the checker had nothing to inspect, and
+the item's pass criteria presuppose that artifact. Without that artifact record,
+or when the checker's report shows the aborted shape, an absent code is
+*inconclusive*: the check never ran, so there is no evidence for either verdict
+(docs/03-grading §2.3 and §5.2 evidence conservation: an unrun check is never
+silently scored as pass, and a fail requires evidence).
 
 Conflicting signals on one id (a ``true`` boolean but a failed named gate) are
 *undecidable*: the id contributes no pass.
@@ -176,16 +184,44 @@ def _collect_report_signals(
     return booleans, codes
 
 
-def _has_violation_list(value: object) -> bool:
-    """Whether a report carries a checker violation list (``violations``/``*_violations``)."""
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            named = str(key) == "violations" or str(key).endswith("_violations")
-            if (named and isinstance(item, list)) or _has_violation_list(item):
+def _is_violation_key(key: str) -> bool:
+    return key == "violations" or key.endswith("_violations")
+
+
+def _scope_proves_completion(scope: Mapping[str, object]) -> bool:
+    """Whether one report object proves its checks executed.
+
+    *Clean*: an empty violation list — the checks ran and found nothing.
+    *Backed by per-item results*: fired violations plus a non-empty
+    non-violation list or a nested detail object, which a load-failure stub
+    (``{"hard_gate_passed": false, "format_violations": [{"code": "SCRIPT_FAILED"}]}``)
+    never carries. Only fired violations means the checker aborted at the load
+    step and the per-item checks never ran.
+    """
+    fired = False
+    for key, item in scope.items():
+        if _is_violation_key(str(key)) and isinstance(item, list):
+            if not item:
                 return True
+            fired = True
+    if not fired:
         return False
+    for key, item in scope.items():
+        if _is_violation_key(str(key)):
+            continue
+        if (isinstance(item, list) and item) or isinstance(item, Mapping):
+            return True
+    return False
+
+
+def _report_proves_completion(value: object) -> bool:
+    """Whether a JSON report anywhere carries a scope that proves completion."""
+    if isinstance(value, Mapping):
+        return _scope_proves_completion(value) or any(
+            _report_proves_completion(item) for item in value.values()
+        )
     if isinstance(value, list):
-        return any(_has_violation_list(item) for item in value)
+        return any(_report_proves_completion(item) for item in value)
     return False
 
 
@@ -311,8 +347,10 @@ def map_script_items(
     texts = [run.output for run in runs]
     lines = [line for text in texts for line in text.splitlines()]
     reports = [_collect_report_signals(blob) for text in texts for blob in _json_blobs(text)]
+    # A timed-out run vouches for nothing; an aborted run (only load-failure
+    # violations, no per-item results) vouches for nothing either.
     checker_completed = any(
-        _has_violation_list(blob)
+        _report_proves_completion(blob)
         for run in runs
         if not run.timed_out
         for blob in _json_blobs(run.output)
