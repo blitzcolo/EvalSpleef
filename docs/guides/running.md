@@ -85,6 +85,26 @@ At load time the preset is expanded into the parameters; the preset id and its d
 
 Models (slugs), the agent shell, task patterns, `epochs` (two or more to rank a cell), `budget.max_total_usd`, the endpoint policy (warm before, sleep or terminate after), the judge panel, and the pricing table version. See `config/examples/batch.yaml`.
 
+### Agent judges for `agent_judge` rubric items
+
+Rubric items of kind `agent_judge` (for example backend-001 R11, which needs the service started and three error cases triggered) are decided by judge agents when `batch.yaml` has an `agent_judge` section; without it they stay `inconclusive` with an explicit reason and go to the manual queue. A judge agent is the batch's judge model driven through the gateway with the judge key: each turn it answers one JSON action (`run`, `read_file`, `list_dir`, `write_file`, `submit_verdict`); only the first action of a reply runs, and a `submit_verdict` counts only as the sole action of its reply, so any judge route that serves plain chat completions works, and the route's `prompt_caching` setting (on by default for `anthropic_messages`) caches the growing conversation.
+
+Every sample runs in a fresh judge sandbox from the pack's own image, on a verifier route that declares `writable_paths` and `read_only_upload` (a route without them is refused with `PolicyNotEnforceable`, never degraded): network off except loopback, no credential, the sanitised export read-only at `/artifact`, a writable copy at `/work` (the working directory), and the carrier's own `/tmp` for helper scripts. After each sample the platform hashes `/artifact` inside the sandbox; a change invalidates the sample and counts as an injection attempt. A sample that fails (sandbox, step or time limit, invalid verdict) is `inconclusive`; too many invalid samples send the item to the manual queue. Items that need images (`video_frame`, `screenshot` evidence) stay `inconclusive` with a reason: the protocol is text-only.
+
+```yaml
+agent_judge:
+  judges: []              # empty: the batch's `judges` serve agent items too
+  k: 3                    # samples per item and judge; each boots one sandbox
+  max_steps: 12           # executed actions per sample
+  max_invalid_replies: 4  # replies without a valid action; the 5th ends the sample
+  command_timeout_s: 60
+  wall_clock_s: 300
+  output_cap_bytes: 8192  # per command, head and tail kept
+  run_every_round: false  # judge agents on the final verification only
+```
+
+Each item's transcript (every action, the truncated output, the sha256 of the full output, the verdicts) is written as JSON and referenced with its sha256 from the `agent_items` of the `judge.verdict` event. A regrade reads the recorded verdicts and never re-runs a judge agent.
+
 ### Secrets
 
 Keys stay outside the repository and outside sandboxes. Export them in the shell that runs the gateway and the CLI (or use `vault://` with `SPLEEF_VAULT_URL` / `SPLEEF_VAULT_TOKEN`). The only credential that enters a sandbox is the per-trial gateway key the platform issues.
