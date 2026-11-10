@@ -33,6 +33,10 @@ class HubClient(Protocol):
         self, repo_id: str, filename: str, *, revision: str, token: str | None = None
     ) -> bytes: ...
 
+    def can_create_repos(self, *, token: str | None = None) -> bool:
+        """Whether ``token`` may create repositories (a read-only token may not)."""
+        ...
+
     def create_private_repo(self, repo_id: str, *, token: str | None = None) -> None: ...
 
     def copy_revision(
@@ -72,6 +76,24 @@ class HfHubClient:
 
         path = hf_hub_download(repo_id, filename, revision=revision, token=token)
         return Path(path).read_bytes()
+
+    def can_create_repos(self, *, token: str | None = None) -> bool:
+        """Read the token role from ``whoami``; fine-grained tokens need ``repo.write``."""
+        if token is None:
+            return False
+        access: dict[str, Any] = (
+            self._api.whoami(token=token).get("auth", {}).get("accessToken", {})
+        )
+        role = access.get("role")
+        if role in ("write", "admin"):
+            return True
+        if role != "fineGrained":
+            return False
+        fine: dict[str, Any] = access.get("fineGrained", {})
+        granted: list[str] = list(fine.get("global", []))
+        for entry in fine.get("scoped", []):
+            granted.extend(entry.get("permissions", []))
+        return "repo.write" in granted
 
     def create_private_repo(self, repo_id: str, *, token: str | None = None) -> None:
         self._api.create_repo(repo_id, private=True, exist_ok=True, token=token)

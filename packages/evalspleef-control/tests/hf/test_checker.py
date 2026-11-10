@@ -11,7 +11,7 @@ import pytest
 from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
 
 from evalspleef.control.hf import HuggingFaceChecker, default_mirror_name
-from evalspleef.control.hf.checker import HFAccessError
+from evalspleef.control.hf.checker import HFAccessError, HFMirrorNotCreatable
 from evalspleef.control.hf.client import HubRepoInfo
 from evalspleef.spi.model import HFSource
 from evalspleef.testing.secrets import DictSecretResolver
@@ -49,6 +49,7 @@ class FakeHubClient:
         self.created: list[str] = []
         self.copied: list[tuple[str, str, str]] = []
         self.tokens_seen: list[str | None] = []
+        self.can_create = True
 
     def model_info(
         self, repo_id: str, *, revision: str | None = None, token: str | None = None
@@ -71,6 +72,9 @@ class FakeHubClient:
             return repo.files[filename]
         except KeyError:
             raise FileNotFoundError(filename) from None
+
+    def can_create_repos(self, *, token: str | None = None) -> bool:
+        return self.can_create
 
     def create_private_repo(self, repo_id: str, *, token: str | None = None) -> None:
         self.created.append(repo_id)
@@ -216,6 +220,14 @@ async def test_ensure_mirror_creates_private_repo_and_copies() -> None:
     # an explicit mirror_repo wins over the generated name
     named = await checker.ensure_mirror(_source(mirror_repo="evalspleef-mirrors/custom"))
     assert named == "evalspleef-mirrors/custom"
+
+
+async def test_mirror_with_a_token_that_cannot_create_repos_fails_before_any_hub_write() -> None:
+    client = FakeHubClient({"our-org/model": _public_repo()})
+    client.can_create = False
+    with pytest.raises(HFMirrorNotCreatable, match="cannot create repositories"):
+        await _checker(client).ensure_mirror(_source())
+    assert (client.created, client.copied) == ([], [])
 
 
 def test_default_mirror_name() -> None:

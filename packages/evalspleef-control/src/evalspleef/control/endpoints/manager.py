@@ -21,6 +21,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from evalspleef.control.events.base import EventStore
+from evalspleef.control.hf.mirror import MIRROR_DEFAULT
 from evalspleef.control.hf.tokens import check_token_expiry
 from evalspleef.control.probes.client import as_dict
 from evalspleef.control.probes.clock import Clock, SystemClock, iso_utc
@@ -341,7 +342,7 @@ class EndpointManager:
                 source = dataclasses.replace(
                     source, files_sha256=dict(await self._hf.small_file_hashes(source))
                 )
-            if spec.deployment.params.get("mirror", True) and source.mirror_repo is None:
+            if spec.deployment.params.get("mirror", MIRROR_DEFAULT) and source.mirror_repo is None:
                 source = dataclasses.replace(
                     source, mirror_repo=await self._hf.ensure_mirror(source)
                 )

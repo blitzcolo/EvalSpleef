@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 
 from evalspleef.control.endpoints import InvalidTransition, make_endpoint_id, public_name
+from evalspleef.control.hf import HuggingFaceChecker
+from evalspleef.control.hf.client import HubRepoInfo
 from evalspleef.control.probes import (
     ProbeConfig,
     ProbeRunner,
@@ -17,12 +19,14 @@ from evalspleef.control.probes import (
 )
 from evalspleef.spi.errors import EndpointMismatch
 from evalspleef.spi.model import EndpointState, ModelSpec
+from evalspleef.testing.secrets import DictSecretResolver
 
 MakeWorld = Callable[..., Awaitable[Any]]
 SpecFactory = Callable[..., ModelSpec]
 
 API_BASE = "https://models.example.test/v1"
 MODEL_ID = "qwen-32b"
+HF_TOKEN_REF = "vault://hf/eval"
 
 
 async def test_assisted_flow_rejects_bad_input_then_reaches_ready(
@@ -148,7 +152,7 @@ async def test_huggingface_source_is_resolved_checked_and_mirrored_before_deploy
     make_world: MakeWorld, spec_factory: SpecFactory
 ) -> None:
     world = await make_world()
-    spec = spec_factory(hf=True)
+    spec = spec_factory(hf=True, params={"mirror": True})
     world.hf.preflight_failures = (("gated_license", False, "license not accepted"),)
 
     rejected = await world.manager.register(spec)
@@ -179,6 +183,61 @@ async def test_huggingface_source_is_resolved_checked_and_mirrored_before_deploy
         ("rejected", "registered"),
         ("registered", "awaiting_operator"),
     ]
+
+
+async def test_a_spec_without_a_mirror_choice_is_not_mirrored(
+    make_world: MakeWorld, spec_factory: SpecFactory
+) -> None:
+    world = await make_world()
+
+    await world.manager.register(spec_factory(hf=True))
+
+    assert world.hf.calls == ["resolve", "preflight", "hashes"]
+
+
+class _ReadOnlyTokenHub:
+    """A Hub client whose token reads fine but may not create repositories."""
+
+    def __init__(self) -> None:
+        self.created: list[str] = []
+
+    def model_info(
+        self, repo_id: str, *, revision: str | None = None, token: str | None = None
+    ) -> HubRepoInfo:
+        return HubRepoInfo(sha="a" * 40, siblings=("config.json", "model.safetensors"))
+
+    def file_bytes(
+        self, repo_id: str, filename: str, *, revision: str, token: str | None = None
+    ) -> bytes:
+        return b'{"architectures": ["Qwen3ForCausalLM"]}'
+
+    def can_create_repos(self, *, token: str | None = None) -> bool:
+        return False
+
+    def create_private_repo(self, repo_id: str, *, token: str | None = None) -> None:
+        self.created.append(repo_id)
+
+    def copy_revision(
+        self, src_repo_id: str, src_revision: str, dst_repo_id: str, *, token: str | None = None
+    ) -> None:
+        raise AssertionError("nothing may be copied with a read-only token")
+
+
+async def test_a_requested_mirror_with_a_read_only_token_is_rejected_at_registration(
+    make_world: MakeWorld, spec_factory: SpecFactory
+) -> None:
+    hub = _ReadOnlyTokenHub()
+    checker = HuggingFaceChecker(client=hub, secrets=DictSecretResolver({HF_TOKEN_REF: "t"}))
+    world = await make_world(checker=checker)
+
+    rejected = await world.manager.register(spec_factory(hf=True, params={"mirror": True}))
+
+    assert rejected.state is EndpointState.REJECTED
+    assert hub.created == []
+    assert await world.manager.tickets(rejected.endpoint_id) == []  # nothing was deployed
+    failures = (await world.events_in())[-1].payload["failures"]
+    assert len(failures) == 1 and failures[0].startswith("HFMirrorNotCreatable: ")
+    assert "cannot create repositories" in failures[0]
 
 
 async def test_deploy_ticket_expires_after_24_hours_and_fails_the_endpoint(

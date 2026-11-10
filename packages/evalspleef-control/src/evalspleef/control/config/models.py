@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from evalspleef.control.hf.mirror import MIRROR_DEFAULT
 from evalspleef.spi.model import (
     DeploymentSpec,
     HFSource,
@@ -71,7 +72,7 @@ class HFSourceConfig(BaseModel):
     #: not report it through its API, so the operator records it here (TECH-DESIGN
     #: 6.5); the batch freeze needs it to lie past the planned end plus 7 days.
     token_expires: date | Literal["never"] | None = None
-    mirror: bool = False
+    mirror: bool = MIRROR_DEFAULT
     mirror_repo: str | None = None
     adapter_repo: str | None = None
     files_sha256: dict[str, str] = Field(default_factory=dict)

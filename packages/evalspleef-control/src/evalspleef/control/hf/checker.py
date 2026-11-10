@@ -19,7 +19,13 @@ from evalspleef.spi.secrets import SecretResolver
 
 from .client import HfHubClient, HubClient, HubRepoInfo
 
-__all__ = ["SMALL_FILES", "HFAccessError", "HuggingFaceChecker", "default_mirror_name"]
+__all__ = [
+    "SMALL_FILES",
+    "HFAccessError",
+    "HFMirrorNotCreatable",
+    "HuggingFaceChecker",
+    "default_mirror_name",
+]
 
 #: Small files whose hashes are recorded as reproducibility fields (FR-MOD-02).
 SMALL_FILES = (
@@ -38,6 +44,10 @@ class HFAccessError(SpleefError):
 
     error_class = "provider"
     disposition = "manual"
+
+
+class HFMirrorNotCreatable(HFAccessError):
+    """A frozen mirror was requested but the Hugging Face token cannot create repositories."""
 
 
 def default_mirror_name(org: str, source: HFSource) -> str:
@@ -198,6 +208,13 @@ class HuggingFaceChecker(HFAccessChecker):
         """Create the frozen private mirror of the pinned revision; return its name."""
         token = self._token(source.token_ref)
         mirror = source.mirror_repo or default_mirror_name(self._org, source)
+        if not await self._run(self._client.can_create_repos, token=token):
+            raise HFMirrorNotCreatable(
+                f"a frozen mirror of {source.repo!r} was requested but the token behind "
+                f"{source.token_ref!r} cannot create repositories; use a write-capable token for "
+                "mirroring, or set `mirror: false` on the source when the adapter pins the "
+                "revision itself"
+            )
         await self._run(self._client.create_private_repo, mirror, token=token)
         await self._run(
             self._client.copy_revision,

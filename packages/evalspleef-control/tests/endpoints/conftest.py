@@ -205,6 +205,7 @@ async def make_world(tmp_path: Path) -> AsyncIterator[Callable[..., Awaitable[Wo
             probe_config: ProbeConfig | None = None,
             config: EndpointManagerConfig | None = None,
             token_expiry: Mapping[str, date | None] | None = None,
+            checker: HFAccessChecker | None = None,
             **server_kwargs: Any,
         ) -> World:
             clock = ObservableClock()
@@ -274,7 +275,7 @@ async def make_world(tmp_path: Path) -> AsyncIterator[Callable[..., Awaitable[Wo
                 price_for=lambda spec: PriceSpec(
                     input_per_mtok=1.0, output_per_mtok=2.0, basis="assumed", table_version="t1"
                 ),
-                hf=hf,
+                hf=checker or hf,
                 clock=clock,
                 config=config or EndpointManagerConfig(warm_ping_timeout_s=30.0),
                 hf_token_expiry=token_expiry,
