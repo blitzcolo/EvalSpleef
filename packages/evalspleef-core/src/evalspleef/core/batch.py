@@ -136,6 +136,9 @@ class FreezeGuards:
     budget_approved: bool = False
     image_digests_locked: bool = False
     endpoint_probe_reports_frozen: bool = False
+    judges_admitted: bool = False
+    """Every judge of the panel has a stored probe report whose judge-required probes
+    pass and an endpoint state that serves traffic (PRD appendix C.5)."""
     model_revisions_frozen: bool = False
     template_digest_map_frozen: bool = False
     gateway_version_frozen: bool = False
@@ -148,6 +151,7 @@ class FreezeGuards:
             "budget_approved": self.budget_approved,
             "image_digests_locked": self.image_digests_locked,
             "endpoint_probe_reports_frozen": self.endpoint_probe_reports_frozen,
+            "judges_admitted": self.judges_admitted,
             "model_revisions_frozen": self.model_revisions_frozen,
             "template_digest_map_frozen": self.template_digest_map_frozen,
             "gateway_version_frozen": self.gateway_version_frozen,

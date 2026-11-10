@@ -96,6 +96,19 @@ async def test_rebuilding_from_the_same_inputs_gives_the_same_hash(build) -> Non
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", h.freeze.version_matrix_hash)
 
 
+async def test_judge_probe_reports_are_frozen_inputs(build) -> None:
+    h = await build()
+    judge_reports = {"ep_judge-a_1": "pr_judge-a"}
+
+    with_judges = h.refreeze(judge_probe_reports=judge_reports)
+    re_reported = h.refreeze(judge_probe_reports={"ep_judge-a_1": "pr_other"})
+
+    assert with_judges.probe_report_ids["ep_judge-a_1"] == "pr_judge-a"
+    assert set(h.freeze.probe_report_ids).isdisjoint(judge_reports)
+    assert re_reported.version_matrix_hash != with_judges.version_matrix_hash
+    assert re_reported.diff(with_judges) == ("probe_report_ids",)
+
+
 async def test_hash_ignores_batch_id_timestamp_and_key_order(build) -> None:
     h = await build(n_models=2)
     base = h.freeze

@@ -96,7 +96,10 @@ def _patch_judge_votes(
                     for message in body.get("messages", [])  # type: ignore[union-attr]
                 )
                 match = item_re.search(text)
-                verdict = votes[match.group(1)] if match else "pass"
+                # Only judge votes are scripted; probes and other calls stay stock.
+                if match is None:
+                    return real_generate(body)  # type: ignore[arg-type]
+                verdict = votes[match.group(1)]
                 return (
                     {"role": "assistant", "content": json.dumps({"verdict": verdict})},
                     "stop",
@@ -117,7 +120,6 @@ def _run_batch(
     batch_id: str = "2026-11-b1",
 ) -> None:
     _write_configs(env, batch_id)
-    _patch_judge_votes(monkeypatch, server, pattern)
     register = cli_runner.invoke(
         app,
         [
@@ -133,7 +135,12 @@ def _run_batch(
         ],
     )
     assert register.exit_code == 0, register.output
-    assert cli_runner.invoke(app, ["models", "probe", "--model", "demo", *args]).exit_code == 0
+    # Probes run before the vote patch so the judges answer the stock probe suite;
+    # freeze refuses a batch whose judges are not admitted, so judges must be probed.
+    for model in ("demo", "judge-a", "judge-b"):
+        probed = cli_runner.invoke(app, ["models", "probe", "--model", model, *args])
+        assert probed.exit_code == 0, probed.output
+    _patch_judge_votes(monkeypatch, server, pattern)
     result = cli_runner.invoke(app, ["batch", "run", *args, "--batch", str(env / "batch.yaml")])
     assert result.exit_code == 0, result.output
 

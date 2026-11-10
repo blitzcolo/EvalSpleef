@@ -17,6 +17,7 @@ from .guards import (
     freeze_guards,
     run_guards,
 )
+from .judge_panel import JudgeGuardFacts
 from .plan import (
     BatchPlan,
     BatchPlanner,
@@ -35,6 +36,7 @@ __all__ = [
     "BudgetPlan",
     "EndpointStates",
     "FreezeRecord",
+    "JudgeGuardFacts",
     "LeaseHandle",
     "ModelPlanInput",
     "OutcomeStatus",

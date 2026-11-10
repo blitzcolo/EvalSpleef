@@ -43,6 +43,7 @@ from evalspleef.control.batch import (
     BatchPlan,
     BatchPlanner,
     FreezeRecord,
+    JudgeGuardFacts,
     ModelPlanInput,
     PlannedTrial,
     TaskPlanInput,
@@ -59,6 +60,7 @@ from evalspleef.control.endpoints import (
     EndpointManager,
     EndpointNotFound,
     make_endpoint_id,
+    probe_failures,
     public_name,
 )
 from evalspleef.control.environment import ProviderEnvironments
@@ -816,6 +818,45 @@ class AppContext:
                 timeout_s=timeout_s,
             )
         return clients
+
+    async def judge_guard_facts(self, batch: BatchFileConfig) -> Mapping[str, JudgeGuardFacts]:
+        """Admission facts of every judge endpoint of the batch (freeze guard input).
+
+        The panel is ``judges`` plus the ``agent_judge`` judges; a judge that cannot
+        be resolved or has no endpoint row reports ``None`` ids so the freeze guard
+        names it instead of crashing.
+        """
+        from evalspleef.control.registry import ModelNotFoundError
+
+        facts: dict[str, JudgeGuardFacts] = {}
+        for slug in batch.judge_panel:
+            try:
+                spec = await self.model_registry.resolve(slug)
+            except ModelNotFoundError:
+                facts[slug] = JudgeGuardFacts(
+                    slug=slug, endpoint_id=None, state=None, report_id=None, failed_probes=()
+                )
+                continue
+            endpoint_id = make_endpoint_id(spec)
+            row = await self.endpoints.get(endpoint_id)
+            if row is None:
+                facts[slug] = JudgeGuardFacts(
+                    slug=slug, endpoint_id=endpoint_id, state=None, report_id=None, failed_probes=()
+                )
+                continue
+            report_id = row.observed.get("report_id")
+            report_row = await self.probe_reports.get(str(report_id)) if report_id else None
+            failed: tuple[str, ...] = ()
+            if report_row is not None:
+                failed = tuple(probe_failures(report_from_row(report_row), roles=("judge",)))
+            facts[slug] = JudgeGuardFacts(
+                slug=slug,
+                endpoint_id=endpoint_id,
+                state=EndpointState(row.state),
+                report_id=str(report_id) if report_row is not None else None,
+                failed_probes=failed,
+            )
+        return facts
 
     async def trial_version_seeds(
         self, plan: BatchPlan, freeze: FreezeRecord

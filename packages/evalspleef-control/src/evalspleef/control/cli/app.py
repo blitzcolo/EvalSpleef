@@ -26,7 +26,13 @@ from typing import Any, cast
 
 import typer
 
-from evalspleef.control.batch import BatchDriver, BatchRunResult, build_freeze_record, freeze_guards
+from evalspleef.control.batch import (
+    BatchDriver,
+    BatchRunResult,
+    JudgeGuardFacts,
+    build_freeze_record,
+    freeze_guards,
+)
 from evalspleef.control.batch.operations import OperationRefused, TrialOperations
 from evalspleef.control.batch.release import ReleaseInputs, build_release
 from evalspleef.control.bench import (
@@ -1478,9 +1484,14 @@ async def _batch_freeze(
         await _require_prices(ctx, batch_config)
         plan = await ctx.build_plan(batch_config)
         lint_ok = _lint_packs(ctx, batch_config)
-        freeze = await _freeze_record(ctx, plan, batch_config)
+        judge_facts = await ctx.judge_guard_facts(batch_config)
+        freeze = await _freeze_record(ctx, plan, batch_config, judge_facts)
         guards = freeze_guards(
-            plan, freeze, lint_passed=lint_ok, budget_approved=plan.budget.within_cap
+            plan,
+            freeze,
+            lint_passed=lint_ok,
+            budget_approved=plan.budget.within_cap,
+            judge_facts=judge_facts,
         )
         problems = [str(reason) for reason in guards.reasons.values()]
         if problems or not lint_ok:
@@ -1524,7 +1535,9 @@ async def _require_prices(ctx: AppContext, batch_config: Any) -> None:
         )
 
 
-async def _freeze_record(ctx: AppContext, plan: Any, batch_config: Any) -> Any:
+async def _freeze_record(
+    ctx: AppContext, plan: Any, batch_config: Any, judge_facts: Mapping[str, JudgeGuardFacts]
+) -> Any:
     """The freeze record of a plan: versions, digests and profiles of its inputs."""
     from datetime import UTC, datetime
 
@@ -1551,7 +1564,8 @@ async def _freeze_record(ctx: AppContext, plan: Any, batch_config: Any) -> Any:
         for cell in plan.runnable_cells
     }
     judges: dict[str, dict[str, Any]] = {}
-    for slug in batch_config.judges:
+    judge_reports: dict[str, str] = {}
+    for slug in batch_config.judge_panel:
         spec = await ctx.model_registry.resolve(slug)
         source = spec.source
         judges[slug] = {
@@ -1560,6 +1574,9 @@ async def _freeze_record(ctx: AppContext, plan: Any, batch_config: Any) -> Any:
             "family": spec.family,
             "revision": getattr(source, "revision", None),
         }
+        fact = judge_facts.get(slug)
+        if fact is not None and fact.endpoint_id is not None and fact.report_id is not None:
+            judge_reports[fact.endpoint_id] = fact.report_id
     return build_freeze_record(
         plan,
         gateway_version=gateway_version,
@@ -1570,6 +1587,7 @@ async def _freeze_record(ctx: AppContext, plan: Any, batch_config: Any) -> Any:
         template_digests=digests,
         isolation_profiles=real_profiles,
         judges=judges,
+        judge_probe_reports=judge_reports,
         frozen_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         provider_environments=environments,
     )
@@ -1626,7 +1644,8 @@ async def _batch_run(
         plan = await ctx.build_plan(batch_config)
         gateway_url = ctx.gateway_data_url()
         lint_ok = _lint_packs(ctx, batch_config)
-        freeze = await _freeze_record(ctx, plan, batch_config)
+        judge_facts = await ctx.judge_guard_facts(batch_config)
+        freeze = await _freeze_record(ctx, plan, batch_config, judge_facts)
         scheduler = await ctx.build_scheduler()
         for warning in ctx.preflight_warnings:
             typer.secho(f"warning: {warning}", fg=typer.colors.YELLOW, err=True)
@@ -1667,8 +1686,14 @@ async def _batch_run(
         endpoint_ids = sorted({cell.model.endpoint_id for cell in plan.runnable_cells})
         manager = ctx.endpoint_manager()
         # The freeze guards run before any endpoint is warmed or retired: a batch that may
-        # not start leaves its endpoints as they were, so it can be fixed and rerun.
-        driver.freeze(lint_passed=lint_ok, budget_approved=plan.budget.within_cap)
+        # not start leaves its endpoints as they were, so it can be fixed and rerun. A judge
+        # whose endpoint is not admitted (probe_failed, route deleted) blocks here, before
+        # trials spend agent tokens on judge calls that would 404.
+        driver.freeze(
+            lint_passed=lint_ok,
+            budget_approved=plan.budget.within_cap,
+            judge_facts=judge_facts,
+        )
         if batch_config.endpoint_policy.warm_before_run:
             warm = await manager.warm(endpoint_ids, 1)
             for endpoint_id, warm_result in sorted(warm.items()):

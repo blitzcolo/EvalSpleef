@@ -16,6 +16,7 @@ from evalspleef.spi.model import EndpointHandle, EndpointState, ModelEndpointPro
 
 from ..scheduling import InstanceCapacity, ResourceRequest
 from .freeze import FreezeRecord
+from .judge_panel import JudgeGuardFacts, judge_problems
 from .plan import BatchPlan, PlannedCell
 
 __all__ = [
@@ -54,9 +55,20 @@ def _is_digest(digest: str) -> bool:
 
 
 def freeze_guards(
-    plan: BatchPlan, freeze: FreezeRecord, *, lint_passed: bool, budget_approved: bool
+    plan: BatchPlan,
+    freeze: FreezeRecord,
+    *,
+    lint_passed: bool,
+    budget_approved: bool,
+    judge_facts: Mapping[str, JudgeGuardFacts] | None = None,
 ) -> FreezeGuards:
-    """Draft -> Frozen: lint green, budget approved, digests locked, versions frozen."""
+    """Draft -> Frozen: lint green, budget approved, digests locked, versions frozen.
+
+    ``judge_facts`` carries the admission facts of the batch's judge panel (empty when
+    the batch has no judges): a judge that is not registered, does not serve traffic
+    or whose latest probe report fails a judge-required probe blocks the freeze, so a
+    batch never starts trials whose judge calls would 404 on a deleted gateway route.
+    """
     cells = plan.runnable_cells
     reasons: dict[str, str] = {}
 
@@ -107,6 +119,7 @@ def freeze_guards(
         endpoint_probe_reports_frozen=settle(
             "endpoint_probe_reports_frozen", [f"no probe report for {ep}" for ep in missing_probes]
         ),
+        judges_admitted=settle("judges_admitted", judge_problems(judge_facts or {})),
         model_revisions_frozen=settle(
             "model_revisions_frozen", [f"no frozen revision for {slug}" for slug in unpinned_models]
         ),

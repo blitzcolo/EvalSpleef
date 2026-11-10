@@ -223,3 +223,102 @@ def test_a_model_without_prices_cannot_be_frozen_or_run(
     assert result.exit_code == 1, result.output
     assert "no deployment.params.pricing for demo" in result.output
     assert not (Path(env).parent / "state" / "freezes" / "2026-11-b1.json").exists()
+
+
+JUDGE_YAML = """\
+  - slug: judgy
+    family: judgefam
+    roles: [judge]
+    source: {type: vendor, vendor: evalspleef, model_id: judgy}
+    deployment: {adapter: openai-compatible, account: fake, params: {model: demo, pricing: {input_per_mtok: 0, output_per_mtok: 0}}}
+    declared_context_tokens: 32768
+    declared_max_output_tokens: 4096
+    pricing_ref: "assumed:judgy@2026-11"
+    license: MIT
+    owner: test
+"""
+
+
+def _register_demo_and_judge(cli_runner: CliRunner, args: list[str], env: Path) -> None:
+    """A batch with one judge; both models registered and probed green."""
+    models = env / "models.yaml"
+    models.write_text(models.read_text(encoding="utf-8") + JUDGE_YAML, encoding="utf-8")
+    batch = env / "batch.yaml"
+    batch.write_text(
+        batch.read_text(encoding="utf-8").replace("judges: []", "judges: [judgy]"),
+        encoding="utf-8",
+    )
+    for model in ("demo", "judgy"):
+        registered = cli_runner.invoke(app, ["models", "register", "--model", model, *args])
+        assert registered.exit_code == 0, registered.output
+        probed = cli_runner.invoke(app, ["models", "probe", "--model", model, *args])
+        assert probed.exit_code == 0, probed.output
+
+
+def _fail_judges_p14(env: Path) -> None:
+    """Reproduce the incident state: P-14 failed, so the endpoint is probe_failed."""
+    with sqlite3.connect(Path(env).parent / "store.sqlite3") as db:
+        (endpoint_id, observed) = db.execute(
+            "SELECT endpoint_id, observed FROM endpoint WHERE model_slug = 'judgy'"
+        ).fetchone()
+        report_id = json.loads(observed)["report_id"]
+        db.execute(
+            "UPDATE endpoint SET state = 'probe_failed' WHERE endpoint_id = ?", (endpoint_id,)
+        )
+        (results,) = db.execute(
+            "SELECT results FROM probe_report WHERE report_id = ?", (report_id,)
+        ).fetchone()
+        checks = json.loads(results)["checks"]
+        broken = [
+            {**check, "passed": False} if check["probe_id"] == "P-14" else check for check in checks
+        ]
+        db.execute(
+            "UPDATE probe_report SET results = ? WHERE report_id = ?",
+            (json.dumps({"checks": broken}), report_id),
+        )
+
+
+def test_freeze_refuses_judge_whose_required_probe_failed(
+    cli_runner: CliRunner, args: list[str], env: Path
+) -> None:
+    _register_demo_and_judge(cli_runner, args, env)
+    _fail_judges_p14(env)
+
+    result = cli_runner.invoke(app, ["batch", "freeze", *_batch_args(env, args)])
+
+    assert result.exit_code == 1
+    assert "judge judgy" in result.output
+    assert "probe_failed" in result.output
+    assert "P-14" in result.output
+    assert not (Path(env).parent / "state" / "freezes" / "2026-11-b1.json").exists()
+
+
+def test_batch_run_refuses_to_start_when_a_judge_is_not_admitted(
+    cli_runner: CliRunner, args: list[str], env: Path
+) -> None:
+    _register_demo_and_judge(cli_runner, args, env)
+    _fail_judges_p14(env)
+
+    run = cli_runner.invoke(app, ["batch", "run", *_batch_args(env, args)])
+
+    assert run.exit_code != 0
+    assert "judge judgy" in run.output
+    assert "P-14" in run.output
+    assert "warm ep_" not in run.output
+    assert "retire ep_" not in run.output
+
+
+def test_freeze_record_covers_the_judges_probe_report(
+    cli_runner: CliRunner, args: list[str], env: Path
+) -> None:
+    _register_demo_and_judge(cli_runner, args, env)
+
+    result = cli_runner.invoke(app, ["batch", "freeze", *_batch_args(env, args)])
+
+    assert result.exit_code == 0, result.output
+    record = json.loads(
+        (Path(env).parent / "state" / "freezes" / "2026-11-b1.json").read_text(encoding="utf-8")
+    )
+    judge_endpoint = record["judges"]["judgy"]["endpoint_id"]
+    assert judge_endpoint.startswith("ep_judgy_")
+    assert record["probe_report_ids"][judge_endpoint].startswith("pr_")

@@ -134,6 +134,11 @@ class BatchFileConfig(BaseModel):
             return []
         return self.agent_judge.judges or self.judges
 
+    @property
+    def judge_panel(self) -> list[str]:
+        """Every judge endpoint the batch serves: the llm_judge panel plus agent_judge judges."""
+        return sorted({*self.judges, *self.agent_judge_slugs})
+
     @field_validator("models", "judges")
     @classmethod
     def _names_nonempty(cls, value: list[str]) -> list[str]:

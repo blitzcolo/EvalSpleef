@@ -49,6 +49,7 @@ from ..store.rows import GradeRow, TrialRow
 from .executor import LeaseHandle, PlannedTrial, TrialExecutor, TrialLeases, TrialOutcome
 from .freeze import FreezeRecord
 from .guards import EndpointStates, freeze_guards, run_guards
+from .judge_panel import JudgeGuardFacts
 from .plan import BatchPlan, PlannedCell
 
 __all__ = ["BatchDriver", "BatchRunResult"]
@@ -144,10 +145,25 @@ class BatchDriver:
 
     # -- lifecycle ---------------------------------------------------------------------
 
-    def freeze(self, *, lint_passed: bool, budget_approved: bool) -> dict[str, Any]:
-        """Draft -> Frozen; raises ``BatchGuardFailed`` listing every unmet FR-FLOW-01 guard."""
+    def freeze(
+        self,
+        *,
+        lint_passed: bool,
+        budget_approved: bool,
+        judge_facts: Mapping[str, JudgeGuardFacts] | None = None,
+    ) -> dict[str, Any]:
+        """Draft -> Frozen; raises ``BatchGuardFailed`` listing every unmet FR-FLOW-01 guard.
+
+        ``judge_facts`` is the admission state of the batch's judge panel; without it
+        the ``judges_admitted`` guard sees an empty panel, so callers with judges must
+        pass the facts they gathered.
+        """
         guards = freeze_guards(
-            self._plan, self._freeze, lint_passed=lint_passed, budget_approved=budget_approved
+            self._plan,
+            self._freeze,
+            lint_passed=lint_passed,
+            budget_approved=budget_approved,
+            judge_facts=judge_facts,
         )
         return self._machine.move(BatchState.FROZEN, freeze_guards=guards)
 

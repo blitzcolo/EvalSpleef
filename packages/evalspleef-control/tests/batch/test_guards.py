@@ -7,12 +7,12 @@ from typing import Any
 
 import pytest
 
-from evalspleef.control.batch import ProviderEndpointStates
+from evalspleef.control.batch import JudgeGuardFacts, ProviderEndpointStates
 from evalspleef.control.scheduling import CapacitySpec
 from evalspleef.core.batch import BatchGuardFailed, BatchState
 from evalspleef.spi.caps import Isolation
 from evalspleef.spi.isolation import InvariantEntry
-from evalspleef.spi.model import DeploymentSpec, EndpointHandle, HFSource, ModelSpec
+from evalspleef.spi.model import DeploymentSpec, EndpointHandle, EndpointState, HFSource, ModelSpec
 from evalspleef.spi.sandbox import TemplateRef
 from evalspleef.testing.clock import FakeClock
 from evalspleef.testing.mock_endpoint import MockApiProvider
@@ -82,6 +82,69 @@ async def test_freeze_succeeds_when_everything_is_pinned(build) -> None:
     h = await build(n_models=2, n_tasks=2)
 
     payload = h.driver.freeze(lint_passed=True, budget_approved=True)
+
+    assert payload["transition"] == "draft->frozen"
+    assert h.driver.state is BatchState.FROZEN
+
+
+def judge_fact(slug: str = "judge-a", **changes: Any) -> JudgeGuardFacts:
+    base = JudgeGuardFacts(
+        slug=slug,
+        endpoint_id=f"ep_{slug}_00000000",
+        state=EndpointState.READY,
+        report_id=f"pr_{slug}",
+        failed_probes=(),
+    )
+    return replace(base, **changes)
+
+
+async def test_freeze_is_refused_when_a_judge_required_probe_failed(build) -> None:
+    h = await build()
+    facts = {
+        "gemini-judge": judge_fact(
+            "gemini-judge", state=EndpointState.PROBE_FAILED, failed_probes=("P-14",)
+        )
+    }
+
+    with pytest.raises(BatchGuardFailed) as refused:
+        h.driver.freeze(lint_passed=True, budget_approved=True, judge_facts=facts)
+
+    assert refused.value.failed_conditions == ("judges_admitted",)
+    reason = refused.value.failures[0].reason
+    assert "gemini-judge" in reason
+    assert "probe_failed" in reason
+    assert "P-14" in reason
+    assert h.driver.state is BatchState.DRAFT
+    assert h.executor.calls == []
+
+
+async def test_freeze_is_refused_when_a_judge_is_not_registered(build) -> None:
+    h = await build()
+    facts = {"judge-a": judge_fact("judge-a", endpoint_id=None, state=None, report_id=None)}
+
+    with pytest.raises(BatchGuardFailed) as refused:
+        h.driver.freeze(lint_passed=True, budget_approved=True, judge_facts=facts)
+
+    assert refused.value.failed_conditions == ("judges_admitted",)
+    assert "judge judge-a is not registered" in refused.value.failures[0].reason
+
+
+async def test_freeze_is_refused_when_a_judge_has_no_probe_report(build) -> None:
+    h = await build()
+    facts = {"judge-a": judge_fact("judge-a", report_id=None)}
+
+    with pytest.raises(BatchGuardFailed) as refused:
+        h.driver.freeze(lint_passed=True, budget_approved=True, judge_facts=facts)
+
+    assert refused.value.failed_conditions == ("judges_admitted",)
+    assert "has no probe report" in refused.value.failures[0].reason
+
+
+async def test_freeze_succeeds_when_the_judge_panel_is_admitted(build) -> None:
+    h = await build()
+    facts = {"judge-a": judge_fact(), "judge-b": judge_fact("judge-b", state=EndpointState.WARM)}
+
+    payload = h.driver.freeze(lint_passed=True, budget_approved=True, judge_facts=facts)
 
     assert payload["transition"] == "draft->frozen"
     assert h.driver.state is BatchState.FROZEN

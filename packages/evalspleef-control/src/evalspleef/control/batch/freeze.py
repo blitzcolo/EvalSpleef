@@ -65,7 +65,7 @@ def profile_summary(profile: IsolationProfile) -> dict[str, Any]:
 class FreezeRecord:
     batch_id: str
     probe_report_ids: Mapping[str, str]
-    """Endpoint id -> probe report id."""
+    """Endpoint id -> probe report id, for the target models and the judge panel."""
     model_revisions: Mapping[str, str | None]
     """Model slug -> frozen weights revision; ``None`` for hosted API models."""
     model_spec_versions: Mapping[str, int]
@@ -124,13 +124,16 @@ def build_freeze_record(
     template_digests: Mapping[str, Mapping[str, str]],
     isolation_profiles: Mapping[str, IsolationProfile],
     judges: Mapping[str, Mapping[str, Any]] | None = None,
+    judge_probe_reports: Mapping[str, str] | None = None,
     frozen_at: str = "",
     provider_environments: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> FreezeRecord:
     """Freeze the inputs of the runnable cells of ``plan``.
 
     Only models, tasks, templates and provider instances that a runnable cell uses are part of
-    the record, so unrelated changes do not force a new batch.
+    the record, so unrelated changes do not force a new batch. ``judge_probe_reports`` (judge
+    endpoint id -> probe report id) extends the version matrix to the judge panel; on the rare
+    overlap of a judge and a target endpoint the target's frozen report id wins.
     """
     cells = plan.runnable_cells
     models = {cell.model.slug: cell.model for cell in cells}
@@ -144,9 +147,12 @@ def build_freeze_record(
     return FreezeRecord(
         batch_id=plan.batch_id,
         probe_report_ids={
-            cell.model.endpoint_id: cell.model.probe_report_id
-            for cell in cells
-            if cell.model.probe_report_id is not None
+            **(judge_probe_reports or {}),
+            **{
+                cell.model.endpoint_id: cell.model.probe_report_id
+                for cell in cells
+                if cell.model.probe_report_id is not None
+            },
         },
         model_revisions={slug: model.revision for slug, model in models.items()},
         model_spec_versions={slug: model.spec_version for slug, model in models.items()},
