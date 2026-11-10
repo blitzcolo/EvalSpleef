@@ -9,8 +9,9 @@ sandbox user; a second fresh sandbox must not see them.
 C-FILE-06: a ``role="verifier"`` sandbox receives the hidden tests and the exported
 workspace under the verify root and runs them from there, so that root must accept a
 directory upload, execute a script from it and let the script write next to it. The
-root is ``/verify`` unless ``SPLEEF_VERIFY_ROOT`` overrides it, exactly as the control
-plane resolves it.
+root is the carrier's declared ``capabilities().verify_root`` unless the operator sets
+``SPLEEF_VERIFY_ROOT``, and it is declared as a writable path on carriers that mount
+them, as the control plane's lease manager does; no adapter may key on the role.
 
 Every check goes through ``exec`` rather than ``download``: a carrier whose transfer
 path writes underneath a mount point would pass a download round trip while the
@@ -26,16 +27,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from evalspleef.conformance.case import Case
-from evalspleef.conformance.cases_sandbox_env import _build_spec, _open_spec, _posix_gate
+from evalspleef.conformance.cases_sandbox_env import (
+    _build_spec,
+    _capabilities,
+    _open_spec,
+    _posix_gate,
+)
 from evalspleef.spi.errors import TransferError
-from evalspleef.spi.sandbox import ExecResult, Sandbox
+from evalspleef.spi.sandbox import ExecResult, Sandbox, SandboxCapabilities, WritablePath
 
 if TYPE_CHECKING:
     from evalspleef.conformance.target import ConformanceTarget
 
 WORKSPACE = "/workspace"
 VERIFY_ROOT_ENV = "SPLEEF_VERIFY_ROOT"
-VERIFY_ROOT_DEFAULT = "/verify"
+_VERIFY_ROOT_SIZE_MB = 64
 
 _TREE_NAME = "spleef-mount-tree"
 """Local name of the uploaded directory; only its entries belong in the workspace."""
@@ -46,9 +52,19 @@ _TOOL_OUTPUT = b"nested-tool"
 _PLACED = ("data.bin", "run.sh", "sub/nested.txt", "sub/tool.sh")
 
 
-def verify_root() -> str:
-    """The verify root the control plane uses (``SPLEEF_VERIFY_ROOT``, default /verify)."""
-    return os.environ.get(VERIFY_ROOT_ENV) or VERIFY_ROOT_DEFAULT
+def verify_root(caps: SandboxCapabilities) -> str:
+    """The verify root the control plane uses: the operator's ``SPLEEF_VERIFY_ROOT``, else
+    the carrier's declared ``verify_root``."""
+    return os.environ.get(VERIFY_ROOT_ENV) or caps.verify_root
+
+
+def _verifier_paths(root: str, caps: SandboxCapabilities) -> tuple[WritablePath, ...]:
+    """The lease manager's rule: declare the root unless it lies in the workspace or the
+    carrier cannot mount paths (then its declared root must already be writable)."""
+    inside_workspace = root == WORKSPACE or root.startswith(f"{WORKSPACE}/")
+    if caps.writable_paths and not inside_workspace:
+        return (WritablePath(root, _VERIFY_ROOT_SIZE_MB),)
+    return ()
 
 
 def _text(result: ExecResult) -> str:
@@ -195,8 +211,13 @@ def _write_verify_trees(root: Path) -> tuple[Path, Path]:
 
 
 async def _run_file06(target: ConformanceTarget) -> None:
-    root = verify_root()
-    spec = replace(_build_spec(target, "conf-file-06"), role="verifier")
+    caps = _capabilities(target)
+    root = verify_root(caps)
+    spec = replace(
+        _build_spec(target, "conf-file-06"),
+        role="verifier",
+        writable_paths=_verifier_paths(root, caps),
+    )
     async with _open_spec(target, spec) as sandbox:
         with tempfile.TemporaryDirectory(prefix="spleef-conf-file-06-") as tmp:
             hidden, workspace = _write_verify_trees(Path(tmp))

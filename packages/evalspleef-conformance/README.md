@@ -66,8 +66,20 @@ its sandbox exists, so a network the carrier creates on demand is listed. Target
 hook keep working and are probed on the primary and LAN addresses only.
 
 C-FILE-06 uploads to and runs from the verify root of a `role="verifier"` sandbox. The root is
-`/verify` unless `SPLEEF_VERIFY_ROOT` is set, the same variable the control plane reads, so run
-the kit with the value your deployment uses for that carrier.
+the provider's `capabilities().verify_root` (default `/verify`; a carrier that cannot mount
+arbitrary paths names one inside its writable area, such as `/workspace/verify`) unless
+`SPLEEF_VERIFY_ROOT` is set, the operator override the control plane also reads. Like the lease
+manager, the case declares the root in `SandboxSpec.writable_paths` on carriers with the
+`writable_paths` capability; no adapter may mount it because of the role.
+
+Declared paths and upload semantics (module `cases_sandbox_paths`):
+
+| Case | Applies when | Checks |
+| --- | --- | --- |
+| C-PATH-01 | `writable_paths` declared | two declared paths are empty, writable and executable by `run_as_user`, and a second fresh sandbox sees nothing in them |
+| C-PATH-02 | `read_only_upload` declared | after `upload(..., read_only=True)` the tree reads and executes, but overwrite, append, create, delete, rename and chmod all fail as `run_as_user`, and the downloaded tree is byte-identical |
+| C-PATH-03 | either capability missing | declared paths raise `PolicyNotEnforceable` at create; `upload(read_only=True)` raises `CapabilityNotSupported` and writes nothing |
+| C-FILE-07 | POSIX guest | a directory uploaded onto an existing one merges: a sibling file stays, the same path is replaced |
 
 ## 2. Injectors
 
@@ -137,8 +149,13 @@ asserts that the matching case fails while an unbroken control passes: exec that
 destroy (C-LIFE-02), a mislabelled exit code (C-EXEC-01), a provider that ignores network
 `off` (C-NET-01), one that blocks the primary observer but leaves the host reachable on a second
 address (C-NET-01), an upload that nests a directory under `/workspace` instead of filling it
-(C-FILE-05) and a read-only root without a writable verify root (C-FILE-06). It also asserts
-that the builtin targets fail no case. Run it with
+(C-FILE-05), a read-only root that ignores the declared verify root (C-FILE-06), a provider
+that drops declared paths (C-PATH-01), a read-only upload left writable (C-PATH-02), a carrier
+without the capability that accepts declared paths silently (C-PATH-03) and an upload that
+replaces a directory instead of merging (C-FILE-07). It also asserts that the builtin targets
+fail no case. The mock enforces read-only uploads with the user-immutable file flag, so on
+hosts without file flags (Linux) it does not declare `read_only_upload` and the C-PATH-02
+proof is skipped with that reason. Run it with
 `uv run pytest packages/evalspleef-conformance`.
 
 Everything in this package was verified against the `evalspleef-testing` doubles only; none of it has
