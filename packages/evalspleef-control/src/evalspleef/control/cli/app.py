@@ -47,13 +47,21 @@ from evalspleef.control.config import ConfigError
 from evalspleef.control.endpoints import EngineLogStore, make_endpoint_id, probe_failures
 from evalspleef.control.events import verify_projection
 from evalspleef.control.ledger import CostLedger
+from evalspleef.control.providers import ProviderNotFoundError
 from evalspleef.control.store.rows import GradeRow
 from evalspleef.control.taskpack import lint_task_pack_dir
 from evalspleef.core.batch import BatchGuardFailed
 from evalspleef.core.models import CellStatus
 from evalspleef.core.report import BatchReport, TrialResult, cell_id_for
 from evalspleef.spi.errors import SpleefError
-from evalspleef.spi.model import EndpointState, HFSource, ModelSpec, TeardownMode, VendorSource
+from evalspleef.spi.model import (
+    EndpointState,
+    HFSource,
+    ModelEndpointProvider,
+    ModelSpec,
+    TeardownMode,
+    VendorSource,
+)
 
 from .context import (
     AppContext,
@@ -1772,34 +1780,43 @@ def _pending_cells_error(report: BatchReport) -> str | None:
 _RELEASE_OPT = typer.Option(
     None, "--release", help="also write the release package (drill-down, manifests) here"
 )
-_NOVITA_BILL_OPT = typer.Option(
-    None, "--novita-bill", help="Novita billing JSON to import before reconciling"
+_BILL_OPT = typer.Option(None, "--bill", help="billing export file to import before reconciling")
+_ACCOUNT_OPT = typer.Option(
+    None, "--account", help="model account that produced the bill (providers.yaml model_accounts)"
 )
 
 
 @batch_app.command("costs")
 def batch_costs(
     batch_id: str = typer.Option(..., "--batch-id"),
-    novita_bill: Path | None = _NOVITA_BILL_OPT,
+    bill: Path | None = _BILL_OPT,
+    account: str | None = _ACCOUNT_OPT,
     period: str = typer.Option("", "--period", help="billing period of that bill, e.g. 2026-11"),
     tolerance: float = typer.Option(0.05, "--tolerance"),
+    providers: Path = _PROVIDERS_OPT,
     store_url: str | None = _STORE_OPT,
     events_url: str | None = _EVENTS_OPT,
     state_dir: Path | None = _STATE_OPT,
     as_json: bool = _JSON_OPT,
 ) -> None:
     """Show the batch cost ledger by kind and reconcile it with the vendor bill (FR-OPS-04)."""
-    bill_text = None if novita_bill is None else novita_bill.read_text(encoding="utf-8")
+    bill_text = None if bill is None else bill.read_text(encoding="utf-8")
 
     async def run() -> int:
-        async with AppContext(_store_settings(store_url, events_url, state_dir)) as ctx:
+        if (bill_text is None) != (account is None):
+            raise UsageError(
+                "--bill and --account go together: the account's model provider parses the bill"
+            )
+        async with AppContext(_store_settings(store_url, events_url, state_dir, providers)) as ctx:
             ledger = CostLedger(ctx.db)
-            if bill_text is not None:
+            if bill_text is not None and account is not None:
+                provider = _billing_provider(ctx, account)
                 try:
-                    imported = await ledger.import_novita_billing(
-                        bill_text,
+                    imported = await ledger.import_bill(
+                        provider.parse_bill(bill_text),
                         batch_id=batch_id,
                         period=period or batch_id[:7],
+                        account=account,
                     )
                 except ValueError as exc:
                     raise DomainError(f"bill import failed: {exc}") from exc
@@ -1828,6 +1845,24 @@ def batch_costs(
             return EXIT_SUCCESS if report.ok else EXIT_DOMAIN
 
     _run(run())
+
+
+def _billing_provider(ctx: AppContext, account: str) -> ModelEndpointProvider:
+    """The account's model provider, checked for the billing-parse capability first.
+
+    Resolution failures and a missing capability are usage errors (exit 2) raised
+    before anything is imported, so a refused import never leaves partial entries.
+    """
+    try:
+        provider = ctx.provider_registry().model_provider(account)
+    except ProviderNotFoundError as exc:
+        raise UsageError(str(exc)) from exc
+    if not provider.supports_billing:
+        raise UsageError(
+            f"model account {account!r} (adapter {provider.name}) does not support "
+            "billing import: the provider declares no parse_bill capability"
+        )
+    return provider
 
 
 @batch_app.command("report")
@@ -1978,11 +2013,14 @@ def gateway_serve(ctx: typer.Context) -> None:
 
 
 def _store_settings(
-    store_url: str | None, events_url: str | None, state_dir: Path | None
+    store_url: str | None,
+    events_url: str | None,
+    state_dir: Path | None,
+    providers: Path | None = None,
 ) -> Settings:
     return _settings(
         Path("config/models.yaml"),
-        None,
+        providers,
         None,
         Path("tasks"),
         None,

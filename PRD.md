@@ -6,7 +6,7 @@
 | 文档版本 | v3.0-draft |
 | 日期 | 2026-11-07 |
 | 状态 | 待评审 → 评审通过后冻结为开工基线 |
-| 变更说明 | 2026-11-09：Novita 相关需求已停用（discontinued）——`novita-dedicated`、`novita-serverless-gpu`、`novita-sandbox`，含 FR-SBX-04、M0 中的 Novita 项、AC-01 与 AC-03 中指名 Novita 的部分，不再排期、不再验证、不计入验收；代码保留，仍以 fake 跑测试。详见 `PLAN.md`「Discontinued: Novita」 |
+| 变更说明 | 2026-11-09：Novita 相关需求已停用（discontinued）——`novita-dedicated`、`novita-serverless-gpu`、`novita-sandbox`，含 FR-SBX-04、M0 中的 Novita 项、AC-01 与 AC-03 中指名 Novita 的部分，不再排期、不再验证、不计入验收；代码保留，仍以 fake 跑测试。详见 `PLAN.md`「Discontinued: Novita」<br>2026-11-10：账单导入改为供应商中立机制——`spleef batch costs --bill FILE --account NAME`，账单文本由该账号模型供应商的 `parse_bill` 解析为中立的账单行（FR-OPS-04、AC-10 措辞同步更新）；网关客户端 flavor `"anthropic"` 更名为 `"anthropic_messages"`（FR-MOD-07，仅内部命名，无持久化字段变更） |
 | 配套文档 | `TECH-DESIGN.md`（技术与实现方案，与本文同目录） |
 | 读者 | 评测负责人、平台工程师、模型接入/运维工程师、出题与标定人员 |
 | 自包含说明 | 本文不依赖仓库内其他文档。v2 中继承下来的契约（枚举、状态机、档位算法、隔离不变量、题包契约等）以**原文照录**的方式放在附录 A–E；正文只写 v3 新增与变更的需求，并以「见附录 X」指向照录原文 |
@@ -563,7 +563,7 @@ runtime:
 | FR-OPS-01 | 统一的 CLI：`spleef models register/probe/warm/retire`、`spleef providers list/check/conformance`、`spleef hosts list/drain`、`spleef batch plan/freeze/run/report` |
 | FR-OPS-02 | 成本仪表：按批次显示 token 费用（实时）、GPU 端点运行时长（自部署）、沙箱 vCPU·s/GiB·s（Novita）、本地主机占用；预计 vs 实际 |
 | FR-OPS-03 | 告警：端点空转、端点不可用、冷启动频发、孤儿沙箱、宿主心跳丢失、配额将尽、HF 令牌临期 |
-| FR-OPS-04 | 所有供应商账单数据可导入并与事件日志对账（Novita 账单 API 支持按 `productCategory` 过滤，见 §8.1） |
+| FR-OPS-04 | 所有供应商账单数据可导入并与事件日志对账：账单导出由对应模型供应商的 `parse_bill` 解析为供应商中立的账单行，经 `spleef batch costs --bill FILE --account NAME` 导入（Novita 账单 API 支持按 `productCategory` 过滤，见 §8.1） |
 
 ---
 
@@ -656,7 +656,7 @@ runtime:
 | AC-07 | 新增供应商演练 | 由未参与核心开发的工程师在 ≤ 5 人日接入一个新沙箱供应商（如 E2B 托管或 Daytona），核心零改动 |
 | AC-08 | Harbor 桥接 | 用 `harbor run -e evalspleef.harbor_bridge:Env --ek provider=novita-sandbox` 跑通一个 Harbor 任务 |
 | AC-09 | 继承 v2 闸门 | v2 的 P0/P1/P2 闸门（档位重判一致率 ≥95%、裁判标定 κ≥0.70 等，见附录 C.5）照旧 |
-| AC-10 | 成本对账 | 一次完整批次的 token 费用、Novita GPU 账单、Novita 沙箱账单与事件日志对账误差 < 5% |
+| AC-10 | 成本对账 | 一次完整批次的 token 费用、GPU 账单、沙箱账单与事件日志对账误差 < 5%（账单经 `spleef batch costs --bill FILE --account NAME` 导入后对账） |
 
 ---
 

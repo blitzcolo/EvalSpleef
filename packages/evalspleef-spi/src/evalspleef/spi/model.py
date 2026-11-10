@@ -7,7 +7,7 @@ manages where an endpoint comes from and hands the gateway its upstream route.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
@@ -158,6 +158,29 @@ class UpstreamRoute:
 
 
 @dataclass(frozen=True)
+class BillLine:
+    """One line of a provider's billing export, parsed for cost reconciliation (FR-OPS-04).
+
+    The provider's :meth:`ModelEndpointProvider.parse_bill` turns the vendor's own
+    export format into these vendor-free lines; the control-plane ledger stores them
+    and reconciles them against platform-recorded costs. Kinds outside the platform
+    vocabulary are skipped by the provider on parse, never misclassified.
+    """
+
+    kind: str
+    """Platform cost-kind vocabulary: ``"tokens"``, ``"gpu"``, ``"sandbox"`` or ``"infra"``."""
+    amount_usd: float
+    quantity: float = 0.0
+    unit: str = ""
+    period: str = ""
+    """Billing period of the line, when the export names one; the importer fills it otherwise."""
+    external_id: str = ""
+    """Provider-side deployment or instance the line bills, when the export names one."""
+    ref: str = ""
+    """Raw reference (for example a transaction id) the ledger derives stable entry ids from."""
+
+
+@dataclass(frozen=True)
 class EngineLog:
     """The engine or container log of an endpoint, as text."""
 
@@ -171,6 +194,12 @@ class EngineLog:
 class ModelEndpointProvider(ABC):
     name: str
     management_mode: ManagementMode
+    supports_billing: bool = False
+    """Whether the provider implements :meth:`parse_bill` for its billing export.
+
+    Callers check this flag before calling :meth:`parse_bill`; like every optional
+    operation, an absent implementation raises :class:`CapabilityNotSupported`.
+    """
 
     def __init__(self, account: str, config: Mapping[str, Any], secrets: SecretResolver) -> None:
         self.account = account
@@ -210,6 +239,15 @@ class ModelEndpointProvider(ABC):
         The endpoint manager calls it right before ``teardown`` so a paid run keeps its log.
         """
         raise CapabilityNotSupported("engine_log")
+
+    def parse_bill(self, text: str) -> Sequence[BillLine]:
+        """Optional: parse the account's billing export (JSON or CSV text) into bill lines.
+
+        Only called when :data:`supports_billing` is True. The mapping from the
+        vendor's own product categories onto the platform cost-kind vocabulary is
+        the provider's business; unknown categories are skipped, never misclassified.
+        """
+        raise CapabilityNotSupported("parse_bill")
 
     @abstractmethod
     async def teardown(self, handle: EndpointHandle, mode: TeardownMode) -> None:

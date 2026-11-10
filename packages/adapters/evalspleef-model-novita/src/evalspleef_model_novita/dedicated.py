@@ -11,8 +11,9 @@ Everything here is *not verified against a real Novita account*.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -22,6 +23,7 @@ from evalspleef.spi.errors import EndpointMismatch, EndpointUnavailable
 from evalspleef.spi.hf import HFAccessChecker
 from evalspleef.spi.model import (
     DEPLOYMENT_ID_KEY,
+    BillLine,
     DeploymentPlan,
     EndpointHandle,
     EndpointState,
@@ -69,6 +71,30 @@ _SHA = re.compile(r"^[0-9a-f]{40}$")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _REQUIRED_SHAPE_PARAMS = ("num_hidden_layers", "num_key_value_heads", "head_dim")
 
+#: Novita billing ``product_category`` -> platform cost kind. Categories outside this
+#: table (future product lines) are skipped on parse, never misclassified.
+#: See PRD §8.1 for the confirmed categories.
+_PRODUCT_CATEGORY_KINDS: Mapping[str, str] = {
+    "llm_dedicated_endpoint": "gpu",
+    "llm": "tokens",
+    "sandbox": "sandbox",
+    "storage": "infra",
+    "network": "infra",
+}
+
+
+def _billing_items(payload: object) -> list[Mapping[str, Any]]:
+    """Normalize the decoded billing payload to a list of line mappings."""
+    if isinstance(payload, Mapping):
+        for key in ("items", "charges", "transactions", "data"):
+            value = payload.get(key)
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+                return [item for item in value if isinstance(item, Mapping)]
+        raise ValueError("billing payload has no items/charges/transactions list")
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        return [item for item in payload if isinstance(item, Mapping)]
+    raise TypeError(f"unsupported billing payload type: {type(payload).__name__}")
+
 
 def _endpoint_id(spec: ModelSpec) -> str:
     digest = hashlib.sha256(f"{spec.slug}:{spec.spec_version}".encode()).hexdigest()[:8]
@@ -80,6 +106,7 @@ class NovitaDedicatedProvider(ModelEndpointProvider):
 
     name = "novita-dedicated"
     management_mode = ManagementMode.ASSISTED
+    supports_billing = True
     hf_checker: HFAccessChecker | None = None
     """Assigned by the control plane after construction; ``validate`` fails without it."""
 
@@ -576,6 +603,35 @@ class NovitaDedicatedProvider(ModelEndpointProvider):
         ticket["closed_at"] = self._clock.now()
         handle.observed.pop("pending_ticket", None)
         return handle.state
+
+    # -- billing -------------------------------------------------------------------------------
+
+    def parse_bill(self, text: str) -> Sequence[BillLine]:
+        """Parse the billing API JSON export (PRD FR-OPS-04, §8.1) into vendor-free bill lines.
+
+        ``text`` is the decoded billing API response: either an object with an
+        ``items``/``charges``/``transactions``/``data`` list, or the list itself.
+        Every line carries a ``product_category`` (also accepted as
+        ``productCategory``) and a USD ``amount``; known categories map onto the
+        platform cost-kind vocabulary, unknown categories are skipped.
+        """
+        lines: list[BillLine] = []
+        for index, item in enumerate(_billing_items(json.loads(text))):
+            category = str(item.get("product_category", item.get("productCategory", ""))).lower()
+            kind = _PRODUCT_CATEGORY_KINDS.get(category)
+            if kind is None:
+                continue
+            lines.append(
+                BillLine(
+                    kind=kind,
+                    amount_usd=float(item.get("amount", 0.0)),
+                    quantity=float(item.get("quantity", 0.0)),
+                    unit=str(item.get("unit") or ""),
+                    external_id=str(item.get("deployment_id") or item.get("instance_id") or ""),
+                    ref=str(item.get("transaction_id") or item.get("id") or f"line-{index}"),
+                )
+            )
+        return lines
 
     # -- upstream ------------------------------------------------------------------------------
 

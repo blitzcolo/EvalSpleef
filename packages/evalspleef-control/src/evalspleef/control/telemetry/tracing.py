@@ -14,7 +14,7 @@ Usage::
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, overload
@@ -24,6 +24,7 @@ from opentelemetry.trace import Tracer
 
 from evalspleef.spi.environment import ExecutionEnvironment
 from evalspleef.spi.model import (
+    BillLine,
     DeploymentPlan,
     EndpointHandle,
     EndpointState,
@@ -277,6 +278,7 @@ class TracedEndpointProvider(_SpanMixin, ModelEndpointProvider):
         self._provider_instance = _provider_instance(inner)
         self.name = inner.name
         self.management_mode = inner.management_mode
+        self.supports_billing = inner.supports_billing
 
     async def validate(self, spec: ModelSpec) -> ValidationReport:
         with self._start_span("validate", self._inner):
@@ -317,6 +319,10 @@ class TracedEndpointProvider(_SpanMixin, ModelEndpointProvider):
     async def teardown(self, handle: EndpointHandle, mode: TeardownMode) -> None:
         with self._start_span("teardown", self._inner):
             await self._inner.teardown(handle, mode)
+
+    def parse_bill(self, text: str) -> Sequence[BillLine]:
+        with self._start_span("parse_bill", self._inner):
+            return self._inner.parse_bill(text)
 
     def upstream(self, handle: EndpointHandle) -> UpstreamRoute:
         with self._start_span("upstream", self._inner):

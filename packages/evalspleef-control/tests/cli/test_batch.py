@@ -154,8 +154,30 @@ def test_batch_run_and_report(
         json.dumps({"items": [{"id": "tx-1", "product_category": "llm", "amount": 10.0}]}),
         encoding="utf-8",
     )
+    # The bill is parsed by the account's model provider, so the config gains one
+    # whose adapter implements parse_bill.
+    providers = env / "providers.yaml"
+    providers.write_text(
+        providers.read_text(encoding="utf-8").replace(
+            "sandbox_instances:",
+            "  novita:\n    adapter: novita-dedicated\n\nsandbox_instances:",
+        ),
+        encoding="utf-8",
+    )
     mismatch = cli_runner.invoke(
-        app, ["batch", "costs", "--batch-id", "2026-11-b1", "--novita-bill", str(bill)]
+        app,
+        [
+            "batch",
+            "costs",
+            "--batch-id",
+            "2026-11-b1",
+            "--bill",
+            str(bill),
+            "--account",
+            "novita",
+            "--providers",
+            str(providers),
+        ],
     )
     assert mismatch.exit_code == 1
     assert "tokens" in mismatch.output and "MISMATCH" in mismatch.output

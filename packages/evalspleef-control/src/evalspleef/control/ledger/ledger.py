@@ -2,47 +2,35 @@
 
 The ledger holds two sides of every batch's cost. Platform-recorded entries
 (``source`` naming the component that metered them: gateway, endpoint manager,
-sandbox provider, host) accumulate while the batch runs. Vendor billing is
-imported with :meth:`CostLedger.import_novita_billing`, which maps the billing
-API's ``product_category`` values onto :class:`CostKind` and stores the lines
-with :data:`NOVITA_SOURCE`. :meth:`CostLedger.reconcile` then compares both
-sides per kind: ``|Σ ledger − Σ bill| / Σ bill`` must stay within the
+sandbox provider, host) accumulate while the batch runs. Vendor billing arrives
+as vendor-free :class:`~evalspleef.spi.model.BillLine` values parsed by the model
+provider's own ``parse_bill`` and is stored with :meth:`CostLedger.import_bill`
+under a ``bill:<account>`` source. :meth:`CostLedger.reconcile` then compares
+both sides per kind: ``|Σ ledger − Σ bill| / Σ bill`` must stay within the
 tolerance (5 % by default).
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
 
 from evalspleef.core.cost import allocate_gpu_cost as _allocate_gpu_cost
+from evalspleef.spi.model import BillLine
 
 from ..store.db import INTEGRITY_ERRORS, Database
 from .entries import CostEntry, CostKind
 
 __all__ = [
-    "NOVITA_SOURCE",
+    "BILL_SOURCE_PREFIX",
     "CostLedger",
     "KindReconciliation",
     "ReconcileReport",
 ]
 
-#: Source tag of entries imported from Novita billing; reconciliation compares
-#: every other source against this side.
-NOVITA_SOURCE = "novita"
-
-#: Novita billing ``product_category`` -> cost kind. Categories outside this
-#: table (future product lines) are skipped on import, never misclassified.
-#: See PRD §8.1 for the confirmed categories.
-_PRODUCT_CATEGORY_KINDS: Mapping[str, CostKind] = {
-    "llm_dedicated_endpoint": CostKind.GPU,
-    "llm": CostKind.TOKENS,
-    "sandbox": CostKind.SANDBOX,
-    "storage": CostKind.INFRA,
-    "network": CostKind.INFRA,
-}
+#: Prefix of the ``source`` tag of entries imported from a provider billing export
+#: (``bill:<account>``); reconciliation compares every other source against these.
+BILL_SOURCE_PREFIX = "bill:"
 
 
 @dataclass(frozen=True)
@@ -98,7 +86,7 @@ class CostLedger:
     ) -> list[CostEntry]:
         """Return a batch's entries, optionally filtered."""
         sql = "SELECT * FROM cost_ledger WHERE batch_id = %s"
-        params: list[Any] = [batch_id]
+        params: list[str] = [batch_id]
         if kind is not None:
             sql += " AND kind = %s"
             params.append(str(kind))
@@ -137,69 +125,42 @@ class CostLedger:
             total += len(rows)
         return total
 
-    async def import_novita_billing(
+    async def import_bill(
         self,
-        payload: str | Mapping[str, Any] | Sequence[Mapping[str, Any]],
+        lines: Sequence[BillLine],
         *,
         batch_id: str,
         period: str,
-        id_prefix: str = "novita",
+        account: str,
     ) -> list[CostEntry]:
-        """Import Novita billing lines for ``batch_id`` and return the stored entries.
+        """Import parsed billing lines for ``batch_id`` and return the stored entries.
 
-        ``payload`` is the billing API JSON (PRD FR-OPS-04, §8.1): either the
-        decoded response with an ``items``/``charges``/``transactions`` list,
-        or the list itself. Every line carries a ``product_category`` (also
-        accepted as ``productCategory``), an USD ``amount``, and an optional
-        ``quantity``/``unit``. Known categories map onto :class:`CostKind`;
-        unknown categories are skipped rather than misclassified.
-
-        Lines are stored as entries with source :data:`NOVITA_SOURCE`; ids are
-        derived from the line's own transaction id so re-importing a bill does
-        not create duplicates (and raises instead, keeping the import visible).
+        ``lines`` come from the account's ``ModelEndpointProvider.parse_bill`` and
+        carry the platform cost-kind vocabulary; kinds outside it are skipped,
+        never misclassified. Lines are stored with source ``bill:<account>``; ids
+        are derived from the line's own reference so re-importing a bill does not
+        create duplicates (and raises instead, keeping the import visible).
         """
-        items = self._billing_items(payload)
         imported: list[CostEntry] = []
-        for index, item in enumerate(items):
-            category = str(item.get("product_category", item.get("productCategory", ""))).lower()
-            kind = _PRODUCT_CATEGORY_KINDS.get(category)
-            if kind is None:
+        for index, line in enumerate(lines):
+            try:
+                kind = CostKind.parse(line.kind)
+            except ValueError:
                 continue
-            transaction_id = str(item.get("transaction_id") or item.get("id") or f"line-{index}")
-            amount = float(item.get("amount", 0.0))
-            quantity = float(item.get("quantity", 0.0))
-            unit = str(item.get("unit") or "")
             entry = CostEntry(
-                entry_id=f"{id_prefix}:{transaction_id}",
+                entry_id=f"{account}:{line.ref or f'line-{index}'}",
                 batch_id=batch_id,
                 kind=kind,
-                source=NOVITA_SOURCE,
-                amount_usd=amount,
-                quantity=quantity,
-                unit=unit,
-                period=period,
+                source=f"{BILL_SOURCE_PREFIX}{account}",
+                amount_usd=line.amount_usd,
+                quantity=line.quantity,
+                unit=line.unit,
+                period=line.period or period,
                 reconciled=False,
             )
             await self.record(entry)
             imported.append(entry)
         return imported
-
-    @staticmethod
-    def _billing_items(
-        payload: str | Mapping[str, Any] | Sequence[Mapping[str, Any]],
-    ) -> list[Mapping[str, Any]]:
-        """Normalize the billing payload to a list of line mappings."""
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-        if isinstance(payload, Mapping):
-            for key in ("items", "charges", "transactions", "data"):
-                value = payload.get(key)
-                if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-                    return [item for item in value if isinstance(item, Mapping)]
-            raise ValueError("billing payload has no items/charges/transactions list")
-        if isinstance(payload, Sequence):
-            return [item for item in payload if isinstance(item, Mapping)]
-        raise TypeError(f"unsupported billing payload type: {type(payload).__name__}")
 
     async def total_usd(self, batch_id: str, *, kind: CostKind | None = None) -> float:
         """Sum of a batch's recorded amounts, optionally per kind (all sources)."""
@@ -207,7 +168,7 @@ class CostLedger:
         return sum(entry.amount_usd for entry in entries)
 
     async def reconcile(self, batch_id: str, *, tolerance: float = 0.05) -> ReconcileReport:
-        """Compare platform-recorded costs against the imported Novita bill.
+        """Compare platform-recorded costs against the imported billing export.
 
         For every :class:`CostKind` present on either side, ``ok`` means
         ``|ledger − bill| / bill <= tolerance``; a zero bill must match a zero
@@ -222,12 +183,12 @@ class CostLedger:
             ledger_usd = sum(
                 entry.amount_usd
                 for entry in all_entries
-                if entry.kind is kind and entry.source != NOVITA_SOURCE
+                if entry.kind is kind and not entry.source.startswith(BILL_SOURCE_PREFIX)
             )
             bill_usd = sum(
                 entry.amount_usd
                 for entry in all_entries
-                if entry.kind is kind and entry.source == NOVITA_SOURCE
+                if entry.kind is kind and entry.source.startswith(BILL_SOURCE_PREFIX)
             )
             difference = ledger_usd - bill_usd
             if bill_usd > 0:

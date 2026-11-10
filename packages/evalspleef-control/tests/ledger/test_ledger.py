@@ -1,21 +1,21 @@
-"""Cost ledger tests: recording, Novita billing import, reconciliation, GPU allocation."""
+"""Cost ledger tests: recording, billing import, reconciliation, GPU allocation."""
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
 
 from evalspleef.control.ledger import (
-    NOVITA_SOURCE,
+    BILL_SOURCE_PREFIX,
     CostEntry,
     CostKind,
     CostLedger,
 )
 from evalspleef.control.store import connect, migrate
 from evalspleef.control.store.db import Database
+from evalspleef.spi.model import BillLine
 
 BATCH = "2026-11-b1"
 PERIOD = "2026-11"
@@ -85,70 +85,67 @@ async def test_mark_reconciled(ledger: CostLedger) -> None:
     assert all(e.reconciled for e in await ledger.entries(BATCH))
 
 
-async def test_import_novita_billing_maps_product_categories(ledger: CostLedger) -> None:
-    payload = {
-        "items": [
-            {
-                "transaction_id": "t-1",
-                "product_category": "llm_dedicated_endpoint",
-                "amount": 40.0,
-                "quantity": 20.0,
-                "unit": "gpu·h",
-            },
-            {
-                "transaction_id": "t-2",
-                "product_category": "llm",
-                "amount": 1.0,
-                "quantity": 1.0,
-                "unit": "mtok",
-            },
-            {
-                "transaction_id": "t-3",
-                "product_category": "sandbox",
-                "amount": 0.12,
-                "quantity": 7200.0,
-                "unit": "vcpu·s",
-            },
-            {"transaction_id": "t-4", "product_category": "storage", "amount": 0.05},
-            {"transaction_id": "t-5", "product_category": "some_future_product", "amount": 99.0},
-        ]
-    }
-    imported = await ledger.import_novita_billing(payload, batch_id=BATCH, period=PERIOD)
-    # The unknown future category is skipped, not misclassified.
+def bill_line(
+    ref: str,
+    kind: str,
+    amount_usd: float,
+    *,
+    quantity: float = 0.0,
+    unit: str = "",
+    period: str = "",
+) -> BillLine:
+    return BillLine(
+        kind=kind,
+        amount_usd=amount_usd,
+        quantity=quantity,
+        unit=unit,
+        period=period,
+        ref=ref,
+    )
+
+
+async def test_import_bill_maps_kinds_to_entries(ledger: CostLedger) -> None:
+    lines = [
+        bill_line("t-1", "gpu", 40.0, quantity=20.0, unit="gpu·h"),
+        bill_line("t-2", "tokens", 1.0, quantity=1.0, unit="mtok"),
+        bill_line("t-3", "sandbox", 0.12, quantity=7200.0, unit="vcpu·s"),
+        bill_line("t-4", "infra", 0.05),
+        bill_line("t-5", "some_future_product", 99.0),
+    ]
+    imported = await ledger.import_bill(lines, batch_id=BATCH, period=PERIOD, account="acme")
+    # The unknown future kind is skipped, not misclassified.
     assert sorted(e.kind for e in imported) == [
         CostKind.GPU,
         CostKind.INFRA,
         CostKind.SANDBOX,
         CostKind.TOKENS,
     ]
-    assert all(e.source == NOVITA_SOURCE for e in imported)
-    stored = await ledger.entries(BATCH, source=NOVITA_SOURCE)
+    assert all(e.source == f"{BILL_SOURCE_PREFIX}acme" for e in imported)
+    stored = await ledger.entries(BATCH, source=f"{BILL_SOURCE_PREFIX}acme")
     assert {e.entry_id for e in stored} == {
-        "novita:t-1",
-        "novita:t-2",
-        "novita:t-3",
-        "novita:t-4",
+        "acme:t-1",
+        "acme:t-2",
+        "acme:t-3",
+        "acme:t-4",
     }
+    assert all(e.period == PERIOD for e in stored)
     # Re-importing the same bill does not create duplicates.
     with pytest.raises(ValueError, match="already exists"):
-        await ledger.import_novita_billing(payload, batch_id=BATCH, period=PERIOD)
+        await ledger.import_bill(lines, batch_id=BATCH, period=PERIOD, account="acme")
 
 
-async def test_import_accepts_list_and_string_payloads(ledger: CostLedger) -> None:
-    lines = [
-        {"transaction_id": "x-1", "productCategory": "llm", "amount": 3.0},
-    ]
-    from_list = await ledger.import_novita_billing(
-        lines, batch_id=BATCH, period=PERIOD, id_prefix="a"
+async def test_import_bill_keeps_the_lines_own_period(ledger: CostLedger) -> None:
+    imported = await ledger.import_bill(
+        [bill_line("p-1", "tokens", 3.0, period="2026-10")],
+        batch_id=BATCH,
+        period="2026-11",
+        account="acme",
     )
-    assert len(from_list) == 1
-    # camelCase productCategory is accepted too.
-    from_str = await ledger.import_novita_billing(
-        json.dumps({"transactions": lines}), batch_id=BATCH, period=PERIOD, id_prefix="b"
+    assert imported[0].period == "2026-10"
+    fallback = await ledger.import_bill(
+        [bill_line("p-2", "tokens", 3.0)], batch_id=BATCH, period="2026-11", account="acme"
     )
-    assert len(from_str) == 1
-    with pytest.raises(ValueError, match="no items"):
-        await ledger.import_novita_billing({"nope": []}, batch_id=BATCH, period=PERIOD)
+    assert fallback[0].period == "2026-11"
 
 
 async def test_reconcile_within_and_beyond_tolerance(ledger: CostLedger) -> None:
@@ -157,19 +154,14 @@ async def test_reconcile_within_and_beyond_tolerance(ledger: CostLedger) -> None
     await ledger.record(entry("g-2", CostKind.GPU, 38.0, source="endpoint-manager"))
     await ledger.record(entry("g-3", CostKind.SANDBOX, 0.12, source="sandbox-provider"))
     # Vendor bill: tokens exact, GPU 5% high, sandbox missing on the bill.
-    await ledger.import_novita_billing(
-        {
-            "items": [
-                {"transaction_id": "b-1", "product_category": "llm", "amount": 1.00},
-                {
-                    "transaction_id": "b-2",
-                    "product_category": "llm_dedicated_endpoint",
-                    "amount": 40.0,
-                },
-            ]
-        },
+    await ledger.import_bill(
+        [
+            bill_line("b-1", "tokens", 1.00),
+            bill_line("b-2", "gpu", 40.0),
+        ],
         batch_id=BATCH,
         period=PERIOD,
+        account="acme",
     )
 
     report = await ledger.reconcile(BATCH, tolerance=0.05)

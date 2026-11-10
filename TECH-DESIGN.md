@@ -6,7 +6,7 @@
 | 文档版本 | v3.0-draft |
 | 日期 | 2026-11-07 |
 | 状态 | 待评审 |
-| 变更说明 | 2026-11-09：Novita 相关设计（Dedicated Endpoint、Serverless GPU、Agent Sandbox）已停用（discontinued），代码保留、不再验证；详见 `PLAN.md`「Discontinued: Novita」 |
+| 变更说明 | 2026-11-09：Novita 相关设计（Dedicated Endpoint、Serverless GPU、Agent Sandbox）已停用（discontinued），代码保留、不再验证；详见 `PLAN.md`「Discontinued: Novita」<br>2026-11-10：账单导入移到模型供应商 SPI——`ModelEndpointProvider` 新增可选 `parse_bill`（默认抛 `CapabilityNotSupported`，`supports_billing` 声明能力），CLI 为 `spleef batch costs --bill FILE --account NAME`；网关客户端 flavor `"anthropic"` 更名 `"anthropic_messages"`（内部命名，无持久化/线上协议变更） |
 | 配套文档 | `PRD.md`（需求规格，同目录）。本文中的「PRD §x / 附录 X」均指该文件 |
 | 自包含说明 | 不依赖仓库内其他文档；需要的契约原文已照录在 PRD 附录 A–E |
 | 标注约定 | 【已核实】= 已对照官方文档/源码（URL 见 §19）；【推断】= 工程推断，需 PoC 验证；【待核实】= 文档未说明或矛盾，需问供应商或实测 |
@@ -357,6 +357,8 @@ class DeploymentPlan:
 class ModelEndpointProvider(ABC):
     name: str
     management_mode: ManagementMode
+    supports_billing: bool = False
+    """是否实现账单导出解析（parse_bill）；调用方先查此标志再调用。"""
 
     @abstractmethod
     async def validate(self, spec: ModelSpec) -> ValidationReport:
@@ -388,6 +390,10 @@ class ModelEndpointProvider(ABC):
     @abstractmethod
     async def teardown(self, handle: EndpointHandle, mode: Literal["sleep", "terminate"]) -> None:
         """api：执行；assisted：生成操作工单并等待确认；external：仅标记 RETIRED。"""
+
+    def parse_bill(self, text: str) -> Sequence[BillLine]:
+        """可选：把该账号的账单导出（JSON/CSV 文本）解析为供应商中立的账单行。"""
+        raise CapabilityNotSupported("parse_bill")
 
     @abstractmethod
     def upstream(self, handle: EndpointHandle) -> dict[str, Any]:
@@ -513,6 +519,7 @@ REGISTERED ───────────▶ (plan) ───▶ AWAITING_OPE
 | `wake` | 循环发健康请求，直到成功或超时（默认 10 分钟） |
 | `scale` / `teardown` | 生成工单，内容为"在控制台把 Min Replicas 调到 X"或"Terminate 部署 Y"；操作员确认后，系统用一次健康请求复核（teardown 后应 404 或 401） |
 | `upstream` | `{"model_name": "ep_<id>", "litellm_params": {"model": "openai/<upstream_model>", "api_base": <base_url>, "api_key": "os.environ/NOVITA_API_KEY_<account>"}}` |
+| `parse_bill` | 解析账单 API 导出的 JSON（`product_category` → 平台成本种类 tokens/gpu/sandbox/infra；未知类别跳过，不错分） |
 
 **操作员指引模板**（由 `plan` 生成，示例）：
 
@@ -569,7 +576,7 @@ trial.cost.agent      = Σ 请求 (in × p_in + out × p_out + cached × p_cache
 batch.gpu_cost        = Σ 端点 (RUNNING 时长 × GPU 数 × 单价)                  # api 模式取供应商状态；assisted 取工单时间戳 + 账单 API
 batch.sandbox_cost    = Σ 实例 (vCPU·s × p_cpu + GiB·s × p_mem)                # Novita Sandbox 计价
 trial.gpu_alloc       = batch.gpu_cost × trial_tokens / batch_tokens(同端点)     # 辅口径
-对账：|Σ ledger − 供应商账单| / 账单 < 5%                                       # Novita 账单 API 可按 productCategory 过滤【已核实】
+对账：|Σ ledger − 供应商账单| / 账单 < 5%                                       # 账单导出经 `spleef batch costs --bill FILE --account NAME` 导入（供应商 parse_bill 解析；Novita 可按 productCategory 过滤【已核实】）
 ```
 
 ---
@@ -1429,7 +1436,7 @@ Mac mini（Apple Silicon, ≥ 32 GB 内存, ≥ 1 TB SSD）
 | | | W13 in-sandbox 原生外壳（claude-code / codex-cli / opencode 模板）+ 网关公网入口 | E1 | 6 | P-13 探测通过的组合可跑 |
 | | | W14 Egress Proxy + 网络矩阵（docker / tart / novita 方案 A） | E2 | 5 | C-NET-* 通过 |
 | | | W15 HF 冻结镜像流程 + Gated/Private 预检 + versions 扩展 | E3 | 5 | AC-01 全部 |
-| | | W16 Cost Ledger + Novita 账单导入 + 空转告警 | E3 | 5 | 对账误差报告 |
+| | | W16 Cost Ledger + 供应商账单导入 + 空转告警 | E3 | 5 | 对账误差报告 |
 | | | W17 隔离画像（docker / novita / tart）+ 体检报告按载体分节 | E3 | 4 | **闸门：AC-02、AC-04、AC-06** |
 | **M2 扩展载体** | 9–11 | W18 `hyperv` 适配器 + Windows 金镜像 + Windows 探针 + 1 个 Windows 题包 | E2 | 9 | AC-05 |
 | | | W19 `e2b-selfhost`（VPC 部署 E2B infra + 子类适配器） | E1 | 8 | conformance 通过 |

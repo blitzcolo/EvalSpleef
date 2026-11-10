@@ -104,10 +104,13 @@ class GatewayStandIn:
         if route is None:
             return self._error(404, "model_not_found", f"no route for {raw.get('model')!r}")
 
-        flavor = {"/v1/messages": "anthropic", "/v1/responses": "responses"}.get(path, "chat")
+        flavor = {
+            "/v1/messages": "anthropic_messages",
+            "/v1/responses": "responses",
+        }.get(path, "chat")
         body = (
             anthropic_request_to_chat(raw)
-            if flavor == "anthropic"
+            if flavor == "anthropic_messages"
             else responses_request_to_chat(raw)
             if flavor == "responses"
             else dict(raw)
@@ -136,7 +139,7 @@ class GatewayStandIn:
             payload: dict[str, Any] = upstream.json()
             if upstream.status_code != 200:
                 return JSONResponse(payload, status_code=upstream.status_code)
-            if flavor == "anthropic":
+            if flavor == "anthropic_messages":
                 payload = chat_response_to_anthropic(payload, model=str(raw.get("model")))
             elif flavor == "responses":
                 payload = chat_response_to_responses(payload, model=str(raw.get("model")))

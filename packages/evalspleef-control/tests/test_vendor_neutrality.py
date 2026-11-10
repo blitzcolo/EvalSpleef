@@ -20,14 +20,9 @@ NEUTRAL_SOURCES = (
 VENDOR_NAMES = frozenset({"novita", "e2b", "anthropic", "deepseek", "beam"})
 
 #: (source path under packages/, name) pairs that stay until their contract changes.
-EXEMPT = {
-    # The client-protocol flavor of the Anthropic Messages wire protocol the gateway
-    # serves and converts (WireProtocol "anthropic_messages", FR-MOD-07); not an adapter.
-    ("evalspleef-gateway/src/evalspleef/gateway/data_app.py", "anthropic"),
-    # Source tag of the Novita bill import that PRD FR-OPS-04 / AC-10 specify in the
-    # ledger; moving it behind a provider billing interface is an open contract question.
-    ("evalspleef-control/src/evalspleef/control/ledger/ledger.py", "novita"),
-}
+#: Empty since the billing import moved behind the provider SPI and the gateway
+#: client flavour was renamed: no vendor name is left in the neutral sources.
+EXEMPT: set[tuple[str, str]] = set()
 
 
 def _docstrings(tree: ast.AST) -> set[int]:

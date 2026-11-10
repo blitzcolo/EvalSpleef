@@ -63,7 +63,7 @@ from .state import (
     utc_now_iso,
 )
 
-Flavor = Literal["openai", "anthropic"]
+Flavor = Literal["openai", "anthropic_messages"]
 
 
 def create_data_app(state: GatewayState) -> FastAPI:
@@ -82,7 +82,7 @@ def create_data_app(state: GatewayState) -> FastAPI:
 
     @app.get("/v1/models")
     async def models(request: Request) -> Response:
-        key = await _authenticate(state, request, flavor="openai", anthropic=False)
+        key = await _authenticate(state, request, flavor="openai", anthropic_client=False)
         if isinstance(key, Response):
             return key
         name = state.public_name_for_endpoint(key.endpoint_id)
@@ -103,7 +103,7 @@ def create_data_app(state: GatewayState) -> FastAPI:
 
     @app.post("/v1/messages")
     async def messages(request: Request) -> Response:
-        return await _handle(state, request, flavor="anthropic")
+        return await _handle(state, request, flavor="anthropic_messages")
 
     return app
 
@@ -120,25 +120,25 @@ def _error_response(
 ) -> JSONResponse:
     body = (
         anthropic_error_envelope(status, code, message)
-        if flavor == "anthropic"
+        if flavor == "anthropic_messages"
         else openai_error_envelope(status, code, message)
     )
     return JSONResponse(body, status_code=status, headers=headers)
 
 
-def _extract_secret(request: Request, *, anthropic: bool) -> str | None:
+def _extract_secret(request: Request, *, anthropic_client: bool) -> str | None:
     authorization = request.headers.get("authorization")
     if authorization is not None and authorization.startswith("Bearer "):
         return authorization[len("Bearer ") :]
-    if anthropic:
+    if anthropic_client:
         return request.headers.get("x-api-key")
     return None
 
 
 async def _authenticate(
-    state: GatewayState, request: Request, *, flavor: Flavor, anthropic: bool
+    state: GatewayState, request: Request, *, flavor: Flavor, anthropic_client: bool
 ) -> StoredKey | Response:
-    secret = _extract_secret(request, anthropic=anthropic)
+    secret = _extract_secret(request, anthropic_client=anthropic_client)
     if secret is None:
         return _error_response(flavor, 401, "authentication_error", "missing trial key")
     key = await state.authenticate(secret)
@@ -201,7 +201,7 @@ async def _admit(
     violation = await state.check_budget(key, projection)
     if violation is None:
         return projection
-    headers = {STOP_REASON_HEADER: violation} if flavor == "anthropic" else None
+    headers = {STOP_REASON_HEADER: violation} if flavor == "anthropic_messages" else None
     await state.emit(
         EVENT_BUDGET_REJECTED,
         trial_id=key.trial_id,
@@ -358,8 +358,8 @@ async def _handle(
     state: GatewayState, request: Request, *, flavor: Flavor, responses: bool = False
 ) -> Response:
     timer = RequestTimer(state.perf_now)
-    anthropic = flavor == "anthropic"
-    key = await _authenticate(state, request, flavor=flavor, anthropic=anthropic)
+    anthropic_client = flavor == "anthropic_messages"
+    key = await _authenticate(state, request, flavor=flavor, anthropic_client=anthropic_client)
     if isinstance(key, Response):
         return key
     try:
@@ -373,7 +373,7 @@ async def _handle(
             body = responses_request_to_chat(raw_body)
         except ValueError as exc:
             return _error_response(flavor, 400, "invalid_request", str(exc))
-    elif anthropic:
+    elif anthropic_client:
         try:
             body = anthropic_request_to_chat(raw_body)
         except ValueError as exc:
@@ -587,7 +587,7 @@ async def _forward(
     )
     if responses:
         result: dict[str, Any] = chat_response_to_responses(chat_payload, model=model)
-    elif flavor == "anthropic":
+    elif flavor == "anthropic_messages":
         result = chat_response_to_anthropic(chat_payload, model=model)
     else:
         result = chat_payload
@@ -707,7 +707,7 @@ async def _forward_stream(
             extra_headers=extra_headers,
             timer=timer,
         )
-    if flavor == "anthropic":
+    if flavor == "anthropic_messages":
         return _converted_stream(
             state,
             key,
@@ -760,7 +760,7 @@ async def _finish_stream(
 
 
 def _mid_stream_error(
-    kind: Literal["chat", "anthropic", "responses"], exc: httpx.TransportError
+    kind: Literal["chat", "anthropic_messages", "responses"], exc: httpx.TransportError
 ) -> tuple[int, str]:
     """The status to record and the SSE error event to send when the upstream fails mid-stream.
 
@@ -775,10 +775,10 @@ def _mid_stream_error(
 
 
 def _stream_error_event(
-    kind: Literal["chat", "anthropic", "responses"], code: str, message: str
+    kind: Literal["chat", "anthropic_messages", "responses"], code: str, message: str
 ) -> str:
     """The SSE error event in the stream's own protocol."""
-    if kind == "anthropic":
+    if kind == "anthropic_messages":
         body = {"type": "error", "error": {"type": "api_error", "message": message}}
         return "event: error\ndata: " + json.dumps(body) + "\n\n"
     if kind == "responses":
@@ -871,14 +871,14 @@ def _anthropic_upstream_stream(
     """Anthropic Messages SSE upstream -> chat chunks -> the client's own streaming protocol."""
     # The Anthropic and Responses converters read the usage chunk, so they always get it.
     upstream = AnthropicToChatStream(
-        include_usage=include_usage or flavor == "anthropic" or responses
+        include_usage=include_usage or flavor == "anthropic_messages" or responses
     )
     client_converter: ChatToAnthropicStream | ChatToResponsesStream | None
-    kind: Literal["chat", "anthropic", "responses"]
+    kind: Literal["chat", "anthropic_messages", "responses"]
     if responses:
         client_converter, kind = ChatToResponsesStream(model=model), "responses"
-    elif flavor == "anthropic":
-        client_converter, kind = ChatToAnthropicStream(model=model), "anthropic"
+    elif flavor == "anthropic_messages":
+        client_converter, kind = ChatToAnthropicStream(model=model), "anthropic_messages"
     else:
         client_converter, kind = None, "chat"
 
@@ -986,8 +986,8 @@ def _converted_stream(
             for event in converter.finish():
                 yield event
         except httpx.TransportError as exc:
-            kind: Literal["anthropic", "responses"] = (
-                "anthropic" if converter_type is ChatToAnthropicStream else "responses"
+            kind: Literal["anthropic_messages", "responses"] = (
+                "anthropic_messages" if converter_type is ChatToAnthropicStream else "responses"
             )
             usage_holder["status"], event = _mid_stream_error(kind, exc)
             yield event

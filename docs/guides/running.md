@@ -145,6 +145,11 @@ uv run spleef batch report $C --batch config/batch.yaml --json --release out/rel
 uv run spleef batch costs  $C --batch config/batch.yaml
 ```
 
+`batch costs` reconciles the ledger against a vendor bill: the bill file is parsed by
+the account's model provider and imported before the per-kind comparison, e.g.
+`uv run spleef batch costs $C --batch-id 2026-11-b1 --bill novita-bill.json --account novita`
+(an account whose provider does not implement billing import exits 2 and imports nothing).
+
 `batch run` checks the batch budget before each trial starts, retries infrastructure failures as new trial records, and leaves endpoints as `endpoint_policy.retire_after` says. Retire self-hosted endpoints explicitly with `spleef models retire` when a run is interrupted, so GPUs do not keep billing. Before it tears an endpoint down, `retire` asks the provider for the engine log and keeps it as `<state_dir>/endpoint-logs/<endpoint_id>/<utc>.log` with every configured secret value replaced by `***`; the retire event carries `engine_log` with the path, `sha256`, byte count and a `truncated` flag, or `unsupported` / the fetch error. A failed fetch never delays the teardown. The Beam adapter supports it: its log API was checked read-only (filter, paging, row limit), but not a pod's log fetched during its own teardown.
 
 A model with `mirror: true` needs a Hugging Face token that can create repositories; registration rejects it with a clear message otherwise. `mirror` defaults to `false` on every path (`spleef models register` and direct registration alike).

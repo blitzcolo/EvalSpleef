@@ -38,6 +38,7 @@ from .isolation import InvariantEntry, IsolationProfile
 from .matching import admit_model, match_requirements
 from .model import (
     DEPLOYMENT_ID_KEY,
+    BillLine,
     DeploymentPlan,
     DeploymentSpec,
     EndpointHandle,
@@ -77,6 +78,7 @@ __all__ = [
     "AgentRunner",
     "AllowKind",
     "Arch",
+    "BillLine",
     "CapabilityNotSupported",
     "DeploymentPlan",
     "DeploymentSpec",
