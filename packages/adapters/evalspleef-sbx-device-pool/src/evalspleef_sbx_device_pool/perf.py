@@ -46,6 +46,7 @@ from evalspleef.spi.sandbox import (
     SandboxCapabilities,
     SandboxProvider,
     SandboxSpec,
+    unenforceable_paths,
 )
 from evalspleef.spi.secrets import SecretResolver
 
@@ -295,7 +296,9 @@ class PerfHostSandbox(Sandbox):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(local, target)
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
+        if read_only:
+            raise CapabilityNotSupported("read_only_upload")
         if self._destroyed:
             raise SandboxLost(f"sandbox {self.id} destroyed")
         target = self._map_remote_path(remote)
@@ -419,6 +422,11 @@ class PerfHostProvider(SandboxProvider):
             raise self._fail_create_error_cls("simulated create failure")
 
         caps = self.capabilities()
+        missing = unenforceable_paths(spec, caps)
+        if missing:
+            raise PolicyNotEnforceable(
+                f"{self.name} cannot mount declared writable paths: {missing}"
+            )
         if spec.os not in caps.os_families:
             raise CapabilityNotSupported(f"os {spec.os} not supported by perf-host")
         if spec.arch not in caps.arches:

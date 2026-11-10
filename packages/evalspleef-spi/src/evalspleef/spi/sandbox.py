@@ -55,6 +55,19 @@ SandboxRole = Literal["agent", "verifier", "judge"]
 
 
 @dataclass(frozen=True)
+class WritablePath:
+    """An absolute path the sandbox needs writable beside ``/workspace``.
+
+    The carrier mounts it memory-backed (counted against the memory limit), empty at creation,
+    writable and executable by ``run_as_user``, and gone with the sandbox. Only carriers that
+    declare ``SandboxCapabilities.writable_paths`` honour it.
+    """
+
+    path: str
+    size_mb: int
+
+
+@dataclass(frozen=True)
 class SandboxSpec:
     trial_id: str
     lease_id: str
@@ -70,6 +83,9 @@ class SandboxSpec:
     """Must carry batch / trial / lease / provider so orphans can be found and reaped."""
     max_lifetime_s: int = 3600
     gui: bool = False
+    writable_paths: tuple[WritablePath, ...] = ()
+    """Declared writable paths; ``create`` raises ``PolicyNotEnforceable`` when the carrier
+    does not declare ``writable_paths``."""
 
 
 SnapshotSupport = Literal["none", "fs", "memory"]
@@ -104,6 +120,23 @@ class SandboxCapabilities:
     """Template kinds ``create`` boots. A carrier that boots its own built templates instead
     of OCI images declares that kind, and the control plane hands it the template built for
     it from the plan's OCI image (TECH-DESIGN 7.6)."""
+    writable_paths: bool = False
+    """``SandboxSpec.writable_paths`` is honoured."""
+    read_only_upload: bool = False
+    """``Sandbox.upload(..., read_only=True)`` is honoured."""
+    verify_root: str = "/verify"
+    """Where a verifier sandbox receives and runs hidden tests. A carrier that declares
+    ``writable_paths`` gets it declared by the control plane; one that cannot mount arbitrary
+    paths names a location inside an area that is already writable, such as
+    ``/workspace/verify``."""
+
+
+def unenforceable_paths(spec: SandboxSpec, caps: SandboxCapabilities) -> list[str]:
+    """The declared writable paths ``caps`` cannot honour; ``create`` raises
+    ``PolicyNotEnforceable`` for a non-empty result."""
+    if caps.writable_paths:
+        return []
+    return [declared.path for declared in spec.writable_paths]
 
 
 @dataclass
@@ -149,8 +182,17 @@ class Sandbox(ABC):
         """
 
     @abstractmethod
-    async def upload(self, local: Path, remote: str) -> None:
-        """Upload a file or directory (directories travel as tar or zip), keeping permission bits."""
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
+        """Upload a file or directory (directories travel as tar or zip), keeping permission bits.
+
+        A directory merges into an existing ``remote`` like a tar extraction: entries at the
+        same path are overwritten, every other entry already there is kept.
+
+        ``read_only=True`` leaves the uploaded tree readable (and, where its bits say so,
+        executable) but not writable, deletable, renamable or chmod-able by ``run_as_user``;
+        entries in the tree's parent directory keep that directory's own rules. A carrier
+        without ``SandboxCapabilities.read_only_upload`` raises ``CapabilityNotSupported``.
+        """
 
     @abstractmethod
     async def download(self, remote: str, local: Path, *, max_bytes: int | None = None) -> None:

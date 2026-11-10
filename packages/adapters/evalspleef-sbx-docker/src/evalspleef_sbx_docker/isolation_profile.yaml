@@ -18,7 +18,7 @@ invariants:
     probe: 'downloading a symlink pointing at /etc/passwd raises TransferError'
     waived: false
   I12:
-    how: 'hidden tests never enter agent-side images; hash locks live in the task pack, which the provider does not touch'
+    how: 'hidden tests never enter agent-side images; hash locks live in the task pack, which the provider does not touch; upload(read_only=True) unpacks a tree as root without group/other write bits'
     probe: 'tests.sha256 manifest matches the verifier-side files'
     waived: false
   I13:
@@ -38,11 +38,11 @@ invariants:
     probe: "the egress proxy's url.jsonl has one line per request; direct egress bypass is not offered"
     waived: false
   I2:
-    how: 'containers are created with a read-only root filesystem; the only writable paths are tmpfs mounts (/tmp, the agent home, /workspace)'
+    how: 'containers are created with a read-only root filesystem; the only writable paths are tmpfs mounts (/tmp, the agent home, /workspace and the paths the spec declares in writable_paths)'
     probe: "$ ! touch /.spleef-probe 2>/dev/null"
     waived: false
   I3:
-    how: '/tmp, the agent home and /workspace are per-trial tmpfs mounts; no host directory is ever bind-mounted into the container'
+    how: '/tmp, the agent home, /workspace and declared writable paths are per-trial tmpfs mounts; no host directory is ever bind-mounted into the container'
     probe: "$ awk '$2 == \"/tmp\" { t = $3 } END { exit t != \"tmpfs\" }' /proc/mounts"
     waived: false
   I4:

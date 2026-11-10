@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from evalspleef.spi.errors import SandboxLost, TransferError
+from evalspleef.spi.errors import CapabilityNotSupported, SandboxLost, TransferError
 from evalspleef.spi.sandbox import ExecResult, OutputCallback, Sandbox, SandboxSpec
 
 from .kube import (
@@ -85,7 +85,9 @@ class K8sAgentSandbox(Sandbox):
             )
         )
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
+        if read_only:
+            raise CapabilityNotSupported("read_only_upload")
         self._check_live()
         _require_absolute(remote)
         await self._api.copy_to_pod(

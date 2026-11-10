@@ -160,3 +160,12 @@ C-SNAP-01/02, C-GUI-01 and C-PORT-01 (snapshot/GUI/port-expose not declared).
 - Anonymous-volume `/workspace` would give stricter tmpfs-style ownership, but
   tmpfs keeps the C-ISO-04 mount-table guarantee portable across dockerd
   storage backends.
+
+## Declared paths and read-only uploads
+
+The provider declares `writable_paths` and `read_only_upload`. Each `SandboxSpec.writable_paths`
+entry becomes a tmpfs mount (`rw,exec,nosuid,nodev,mode=1777,size=<size_mb>m`); the role mounts
+nothing by itself, so a verifier's `/verify` arrives as a path the lease manager declares.
+`upload(..., read_only=True)` rewrites the archive to root ownership without group/other write
+bits and unpacks it as uid 0 (`tar --no-same-owner`; root has no capabilities, so it owns what it
+creates but cannot chown or override modes). Verified live by C-PATH-01, C-PATH-02 and C-FILE-06.

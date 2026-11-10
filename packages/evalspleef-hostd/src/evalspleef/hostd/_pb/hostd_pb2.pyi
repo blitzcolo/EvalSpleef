@@ -44,7 +44,7 @@ class TemplateRef(_message.Message):
     def __init__(self, kind: _Optional[str] = ..., ref: _Optional[str] = ..., digest: _Optional[str] = ...) -> None: ...
 
 class SandboxSpec(_message.Message):
-    __slots__ = ("trial_id", "lease_id", "role", "os", "arch", "template", "resources", "network", "run_as_user", "env", "labels", "max_lifetime_s", "gui")
+    __slots__ = ("trial_id", "lease_id", "role", "os", "arch", "template", "resources", "network", "run_as_user", "env", "labels", "max_lifetime_s", "gui", "writable_paths")
     class EnvEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -72,6 +72,7 @@ class SandboxSpec(_message.Message):
     LABELS_FIELD_NUMBER: _ClassVar[int]
     MAX_LIFETIME_S_FIELD_NUMBER: _ClassVar[int]
     GUI_FIELD_NUMBER: _ClassVar[int]
+    WRITABLE_PATHS_FIELD_NUMBER: _ClassVar[int]
     trial_id: str
     lease_id: str
     role: str
@@ -85,10 +86,19 @@ class SandboxSpec(_message.Message):
     labels: _containers.ScalarMap[str, str]
     max_lifetime_s: int
     gui: bool
-    def __init__(self, trial_id: _Optional[str] = ..., lease_id: _Optional[str] = ..., role: _Optional[str] = ..., os: _Optional[str] = ..., arch: _Optional[str] = ..., template: _Optional[_Union[TemplateRef, _Mapping]] = ..., resources: _Optional[_Union[Resources, _Mapping]] = ..., network: _Optional[_Union[NetworkPolicy, _Mapping]] = ..., run_as_user: _Optional[str] = ..., env: _Optional[_Mapping[str, str]] = ..., labels: _Optional[_Mapping[str, str]] = ..., max_lifetime_s: _Optional[int] = ..., gui: _Optional[bool] = ...) -> None: ...
+    writable_paths: _containers.RepeatedCompositeFieldContainer[WritablePath]
+    def __init__(self, trial_id: _Optional[str] = ..., lease_id: _Optional[str] = ..., role: _Optional[str] = ..., os: _Optional[str] = ..., arch: _Optional[str] = ..., template: _Optional[_Union[TemplateRef, _Mapping]] = ..., resources: _Optional[_Union[Resources, _Mapping]] = ..., network: _Optional[_Union[NetworkPolicy, _Mapping]] = ..., run_as_user: _Optional[str] = ..., env: _Optional[_Mapping[str, str]] = ..., labels: _Optional[_Mapping[str, str]] = ..., max_lifetime_s: _Optional[int] = ..., gui: _Optional[bool] = ..., writable_paths: _Optional[_Iterable[_Union[WritablePath, _Mapping]]] = ...) -> None: ...
+
+class WritablePath(_message.Message):
+    __slots__ = ("path", "size_mb")
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    SIZE_MB_FIELD_NUMBER: _ClassVar[int]
+    path: str
+    size_mb: int
+    def __init__(self, path: _Optional[str] = ..., size_mb: _Optional[int] = ...) -> None: ...
 
 class SandboxCapabilities(_message.Message):
-    __slots__ = ("os_families", "arches", "isolation", "net_modes", "allowlist_kinds", "dynamic_network_policy", "streaming", "stdin", "snapshot", "snapshot_fanout", "pause_resume", "gui", "gpu", "port_expose", "host_mounts", "enforces_limits", "max_concurrency", "max_lifetime_s", "max_resources", "typical_start_s", "reset_cost_s")
+    __slots__ = ("os_families", "arches", "isolation", "net_modes", "allowlist_kinds", "dynamic_network_policy", "streaming", "stdin", "snapshot", "snapshot_fanout", "pause_resume", "gui", "gpu", "port_expose", "host_mounts", "enforces_limits", "max_concurrency", "max_lifetime_s", "max_resources", "typical_start_s", "reset_cost_s", "writable_paths", "read_only_upload", "verify_root")
     OS_FAMILIES_FIELD_NUMBER: _ClassVar[int]
     ARCHES_FIELD_NUMBER: _ClassVar[int]
     ISOLATION_FIELD_NUMBER: _ClassVar[int]
@@ -110,6 +120,9 @@ class SandboxCapabilities(_message.Message):
     MAX_RESOURCES_FIELD_NUMBER: _ClassVar[int]
     TYPICAL_START_S_FIELD_NUMBER: _ClassVar[int]
     RESET_COST_S_FIELD_NUMBER: _ClassVar[int]
+    WRITABLE_PATHS_FIELD_NUMBER: _ClassVar[int]
+    READ_ONLY_UPLOAD_FIELD_NUMBER: _ClassVar[int]
+    VERIFY_ROOT_FIELD_NUMBER: _ClassVar[int]
     os_families: _containers.RepeatedScalarFieldContainer[str]
     arches: _containers.RepeatedScalarFieldContainer[str]
     isolation: int
@@ -131,7 +144,10 @@ class SandboxCapabilities(_message.Message):
     max_resources: Resources
     typical_start_s: float
     reset_cost_s: float
-    def __init__(self, os_families: _Optional[_Iterable[str]] = ..., arches: _Optional[_Iterable[str]] = ..., isolation: _Optional[int] = ..., net_modes: _Optional[_Iterable[str]] = ..., allowlist_kinds: _Optional[_Iterable[str]] = ..., dynamic_network_policy: _Optional[bool] = ..., streaming: _Optional[bool] = ..., stdin: _Optional[bool] = ..., snapshot: _Optional[str] = ..., snapshot_fanout: _Optional[bool] = ..., pause_resume: _Optional[bool] = ..., gui: _Optional[str] = ..., gpu: _Optional[bool] = ..., port_expose: _Optional[bool] = ..., host_mounts: _Optional[bool] = ..., enforces_limits: _Optional[_Iterable[str]] = ..., max_concurrency: _Optional[int] = ..., max_lifetime_s: _Optional[int] = ..., max_resources: _Optional[_Union[Resources, _Mapping]] = ..., typical_start_s: _Optional[float] = ..., reset_cost_s: _Optional[float] = ...) -> None: ...
+    writable_paths: bool
+    read_only_upload: bool
+    verify_root: str
+    def __init__(self, os_families: _Optional[_Iterable[str]] = ..., arches: _Optional[_Iterable[str]] = ..., isolation: _Optional[int] = ..., net_modes: _Optional[_Iterable[str]] = ..., allowlist_kinds: _Optional[_Iterable[str]] = ..., dynamic_network_policy: _Optional[bool] = ..., streaming: _Optional[bool] = ..., stdin: _Optional[bool] = ..., snapshot: _Optional[str] = ..., snapshot_fanout: _Optional[bool] = ..., pause_resume: _Optional[bool] = ..., gui: _Optional[str] = ..., gpu: _Optional[bool] = ..., port_expose: _Optional[bool] = ..., host_mounts: _Optional[bool] = ..., enforces_limits: _Optional[_Iterable[str]] = ..., max_concurrency: _Optional[int] = ..., max_lifetime_s: _Optional[int] = ..., max_resources: _Optional[_Union[Resources, _Mapping]] = ..., typical_start_s: _Optional[float] = ..., reset_cost_s: _Optional[float] = ..., writable_paths: _Optional[bool] = ..., read_only_upload: _Optional[bool] = ..., verify_root: _Optional[str] = ...) -> None: ...
 
 class InvariantEntry(_message.Message):
     __slots__ = ("how", "probe", "waived", "reason", "compensating", "approved_by", "expires")
@@ -274,14 +290,16 @@ class ExecEvent(_message.Message):
     def __init__(self, live: _Optional[_Union[OutputChunk, _Mapping]] = ..., final_chunk: _Optional[_Union[OutputChunk, _Mapping]] = ..., summary: _Optional[_Union[ExecSummary, _Mapping]] = ...) -> None: ...
 
 class TransferHeader(_message.Message):
-    __slots__ = ("provider", "sandbox_id", "remote")
+    __slots__ = ("provider", "sandbox_id", "remote", "read_only")
     PROVIDER_FIELD_NUMBER: _ClassVar[int]
     SANDBOX_ID_FIELD_NUMBER: _ClassVar[int]
     REMOTE_FIELD_NUMBER: _ClassVar[int]
+    READ_ONLY_FIELD_NUMBER: _ClassVar[int]
     provider: str
     sandbox_id: str
     remote: str
-    def __init__(self, provider: _Optional[str] = ..., sandbox_id: _Optional[str] = ..., remote: _Optional[str] = ...) -> None: ...
+    read_only: bool
+    def __init__(self, provider: _Optional[str] = ..., sandbox_id: _Optional[str] = ..., remote: _Optional[str] = ..., read_only: _Optional[bool] = ...) -> None: ...
 
 class TransferChunk(_message.Message):
     __slots__ = ("index", "data", "sha256")

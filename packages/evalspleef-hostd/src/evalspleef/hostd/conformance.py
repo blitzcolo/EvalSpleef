@@ -81,7 +81,10 @@ def _remote_mock_target() -> ConformanceTarget:
         mock.fail_next_creates(count, SandboxCreateError)
 
     async def expire_lifetime() -> None:
+        # Past any lifetime a case asks for, then the double's own TTL on the daemon's loop,
+        # as a vendor timeout would reclaim it; moving the clock alone reclaims nothing.
         clock.advance(10_000)
+        await asyncio.to_thread(harness.run, mock.sweep_expired())
 
     async def cleanup() -> None:
         await remote.aclose()

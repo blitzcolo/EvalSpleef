@@ -6,7 +6,7 @@ import pytest
 from evalspleef_sbx_docker.provider import DockerProvider
 
 from evalspleef.spi.errors import CapabilityNotSupported
-from evalspleef.spi.sandbox import Resources
+from evalspleef.spi.sandbox import Resources, WritablePath
 
 from .conftest import EmptySecrets, build_spec
 
@@ -46,10 +46,13 @@ def test_the_workspace_is_sized_to_the_requested_disk() -> None:
     assert "disk" in _provider().capabilities().enforces_limits
 
 
-def test_only_verifier_sandboxes_get_a_writable_verify_root() -> None:
+def test_only_declared_writable_paths_become_sized_tmpfs_mounts() -> None:
     provider = _provider()
-    agent = provider._container_config(build_spec("t1", DIGEST), "img", {})
     verifier_spec = replace(build_spec("t1", DIGEST), role="verifier")
-    verifier = provider._container_config(verifier_spec, "img", {})
-    assert "/verify" not in agent["HostConfig"]["Tmpfs"]
-    assert "/verify" in verifier["HostConfig"]["Tmpfs"]
+    undeclared = provider._container_config(verifier_spec, "img", {})
+    declared_spec = replace(verifier_spec, writable_paths=(WritablePath("/verify", 64),))
+    declared = provider._container_config(declared_spec, "img", {})
+    # The role alone mounts nothing: the verify root arrives as a declared path.
+    assert "/verify" not in undeclared["HostConfig"]["Tmpfs"]
+    assert "size=64m" in declared["HostConfig"]["Tmpfs"]["/verify"]
+    assert "mode=1777" in declared["HostConfig"]["Tmpfs"]["/verify"]

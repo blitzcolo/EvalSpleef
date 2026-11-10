@@ -8,6 +8,9 @@ destroys the sandbox in a ``finally`` path and records ``teardown.started`` and
 every ten minutes and records ``sandbox.orphan.reaped``.
 
 Invariant I10: a verifier runs in its own sandbox with ``network=off``, never in the agent's.
+A judge sandbox gets the same network rule. A verifier's verify root is declared as a writable
+path on carriers that mount them (:func:`verifier_writable_paths`); declared paths a carrier
+cannot honour are refused with ``PolicyNotEnforceable`` before anything is created.
 
 Right after ``create`` every sandbox is measured through the Sandbox SPI (kernel, OS release,
 CPUs, memory as the guest sees them, :func:`~evalspleef.control.environment.measure_guest`);
@@ -32,9 +35,12 @@ from evalspleef.spi.sandbox import (
     NetworkPolicy,
     Resources,
     Sandbox,
+    SandboxCapabilities,
     SandboxProvider,
     SandboxSpec,
     TemplateRef,
+    WritablePath,
+    unenforceable_paths,
 )
 
 from ..environment import measure_guest
@@ -51,12 +57,15 @@ __all__ = [
     "LeasedSandbox",
     "OrphanSandbox",
     "SandboxProviders",
+    "verifier_writable_paths",
 ]
 
 #: Orphan scan period (TECH-DESIGN section 10, "cleanup").
 REAP_INTERVAL_S = 600.0
 
-LeaseRole = Literal["agent", "verifier"]
+LeaseRole = Literal["agent", "verifier", "judge"]
+
+_WORKSPACE = "/workspace"
 
 _ACTOR = "lease-manager"
 
@@ -92,6 +101,9 @@ class LeaseRequest:
     run_as_user: str = "agent"
     ttl_s: int | None = None
     """Defaults to the task's ``max_lifetime_s``."""
+    writable_paths: tuple[WritablePath, ...] = ()
+    """Paths the sandbox needs writable beside ``/workspace`` (a judge's scratch area, for
+    example). A verifier's verify root is added by the manager."""
 
 
 @dataclass(eq=False)
@@ -144,6 +156,29 @@ def _entry_id(entry: Mapping[str, Any]) -> str | None:
     return str(value) if value is not None else None
 
 
+def verifier_writable_paths(
+    verify_root: str, caps: SandboxCapabilities, size_mb: int
+) -> tuple[WritablePath, ...]:
+    """What a verifier sandbox must declare so ``verify_root`` is writable on this carrier.
+
+    Nothing when the root lies in the workspace or is the carrier's own declared verify root
+    (a location inside an area it already makes writable); a declared path when the carrier
+    mounts writable paths. Any other combination cannot be honoured and raises
+    ``PolicyNotEnforceable``, so a planner can refuse the route instead of a verifier failing.
+    """
+    root = verify_root.rstrip("/") or "/"
+    if root == _WORKSPACE or root.startswith(f"{_WORKSPACE}/"):
+        return ()
+    if caps.writable_paths:
+        return (WritablePath(root, size_mb),)
+    if root == caps.verify_root.rstrip("/"):
+        return ()
+    raise PolicyNotEnforceable(
+        f"the carrier cannot host the verify root {root!r}: it mounts no declared paths and "
+        f"its own verify root is {caps.verify_root!r}"
+    )
+
+
 class LeaseManager:
     """Creates and destroys the sandboxes of a batch and records every step."""
 
@@ -160,10 +195,14 @@ class LeaseManager:
         default_ttl_s: int = 3600,
         orphan_grace_s: int = 600,
         templates: Callable[[TemplateRef, str], TemplateRef] | None = None,
+        verify_root: str | None = None,
     ) -> None:
         """``templates`` maps a plan's OCI template to the one a provider instance boots
-        (TECH-DESIGN 7.6); without it every instance gets the plan's template."""
+        (TECH-DESIGN 7.6); without it every instance gets the plan's template.
+        ``verify_root`` is the root the evaluator uploads hidden tests to; ``None`` takes each
+        carrier's declared ``verify_root``."""
         self._providers = providers
+        self._verify_root = verify_root
         self._templates = templates
         self._leases = leases
         self._events = events
@@ -276,22 +315,29 @@ class LeaseManager:
         self, request: LeaseRequest, lease_id: str, provider: SandboxProvider
     ) -> SandboxSpec:
         requirements = request.requirements
-        arches = sorted(requirements.arch & provider.capabilities().arches)
+        caps = provider.capabilities()
+        arches = sorted(requirements.arch & caps.arches)
         if not arches:
             raise CapabilityNotSupported(
                 f"{request.instance} supports none of the required architectures"
             )
+        writable_paths = request.writable_paths
         if request.role == "verifier":
+            verify_root = self._verify_root or caps.verify_root
+            writable_paths += verifier_writable_paths(verify_root, caps, requirements.disk_mb)
+        if request.role in ("verifier", "judge"):
+            # A judge may start the product and call loopback, nothing else (I10 for verifiers).
             if request.network is not None and request.network.mode != NetMode.OFF:
                 raise LeaseInvariantError(
-                    f"verifier sandboxes run with network=off, requested {request.network.mode}"
+                    f"{request.role} sandboxes run with network=off, "
+                    f"requested {request.network.mode}"
                 )
             network = NetworkPolicy(mode=NetMode.OFF)
         else:
             network = request.network or NetworkPolicy(
                 mode=requirements.network, allow_hosts=requirements.allow_hosts
             )
-        return SandboxSpec(
+        spec = SandboxSpec(
             trial_id=request.trial_id,
             lease_id=lease_id,
             role=request.role,
@@ -319,7 +365,14 @@ class LeaseManager:
             },
             max_lifetime_s=request.ttl_s or requirements.max_lifetime_s,
             gui=requirements.gui,
+            writable_paths=writable_paths,
         )
+        missing = unenforceable_paths(spec, caps)
+        if missing:
+            raise PolicyNotEnforceable(
+                f"{request.instance} cannot mount the declared writable paths {missing}"
+            )
+        return spec
 
     def _assert_verifier_isolated(self, leased: LeasedSandbox) -> None:
         """I10: the verifier is a different lease on a different sandbox than any live agent."""

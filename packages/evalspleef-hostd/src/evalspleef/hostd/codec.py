@@ -21,6 +21,7 @@ from evalspleef.spi.sandbox import (
     SnapshotSupport,
     TemplateKind,
     TemplateRef,
+    WritablePath,
 )
 
 from ._pb import hostd_pb2 as pb
@@ -108,6 +109,10 @@ def spec_to_pb(spec: SandboxSpec) -> pb.SandboxSpec:
         labels=dict(spec.labels),
         max_lifetime_s=spec.max_lifetime_s,
         gui=spec.gui,
+        writable_paths=[
+            pb.WritablePath(path=declared.path, size_mb=declared.size_mb)
+            for declared in spec.writable_paths
+        ],
     )
 
 
@@ -130,6 +135,10 @@ def spec_from_pb(message: pb.SandboxSpec) -> SandboxSpec:
         labels=dict(message.labels),
         max_lifetime_s=message.max_lifetime_s,
         gui=message.gui,
+        writable_paths=tuple(
+            WritablePath(path=declared.path, size_mb=declared.size_mb)
+            for declared in message.writable_paths
+        ),
     )
 
 
@@ -156,6 +165,9 @@ def capabilities_to_pb(caps: SandboxCapabilities) -> pb.SandboxCapabilities:
         enforces_limits=sorted(caps.enforces_limits),
         typical_start_s=caps.typical_start_s,
         reset_cost_s=caps.reset_cost_s,
+        writable_paths=caps.writable_paths,
+        read_only_upload=caps.read_only_upload,
+        verify_root=caps.verify_root,
     )
     if caps.max_concurrency is not None:
         message.max_concurrency = caps.max_concurrency
@@ -167,7 +179,7 @@ def capabilities_to_pb(caps: SandboxCapabilities) -> pb.SandboxCapabilities:
 
 
 def capabilities_from_pb(message: pb.SandboxCapabilities) -> SandboxCapabilities:
-    return SandboxCapabilities(
+    caps = SandboxCapabilities(
         os_families=frozenset(OSFamily(item) for item in message.os_families),
         arches=frozenset(Arch(item) for item in message.arches),
         isolation=Isolation(message.isolation),
@@ -191,7 +203,12 @@ def capabilities_from_pb(message: pb.SandboxCapabilities) -> SandboxCapabilities
         ),
         typical_start_s=message.typical_start_s,
         reset_cost_s=message.reset_cost_s,
+        writable_paths=message.writable_paths,
+        read_only_upload=message.read_only_upload,
     )
+    if message.HasField("verify_root"):
+        return dataclasses.replace(caps, verify_root=message.verify_root)
+    return caps
 
 
 def _optional(message: Any, name: str) -> str | None:

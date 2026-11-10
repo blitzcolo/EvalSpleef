@@ -39,14 +39,14 @@ def _entries() -> dict[str, InvariantEntry]:
         "I2": InvariantEntry(
             how="containers start with --read-only (the root is a read-only ext4 block "
             "device); the only writable paths are the tmpfs mounts /tmp, /workspace and "
-            "/home/<run_as_user>, plus /verify in verifier-role sandboxes. Files move as tar streams over exec as the sandbox user; "
+            "/home/<run_as_user>, plus the paths a spec declares in writable_paths. Files move as tar streams over exec as the sandbox user; "
             "the host-side 'container cp' writes beneath --read-only and under the tmpfs "
             "mounts, so the provider never uses it",
             probe="$ ! touch /.spleef-probe 2>/dev/null",
         ),
         "I3": InvariantEntry(
-            how="the VM root is per-trial and /workspace, /tmp, the agent home (and /verify "
-            "for the verifier role) are tmpfs in guest memory; no host directory is shared into the VM (no --volume, "
+            how="the VM root is per-trial and /workspace, /tmp, the agent home (and declared "
+            "writable paths) are tmpfs in guest memory; no host directory is shared into the VM (no --volume, "
             "--mount or virtiofs share)",
             probe='$ awk \'$2 == "/workspace" { t = $3 } END { exit t != "tmpfs" }\' /proc/mounts',
         ),
@@ -112,7 +112,8 @@ def _entries() -> dict[str, InvariantEntry]:
         ),
         "I12": InvariantEntry(
             how="hidden tests never enter agent-side images; hash locks live in the task pack, "
-            "which the provider does not touch",
+            "which the provider does not touch; upload(read_only=True) unpacks a tree as "
+            "root without group/other write bits",
             probe="tests.sha256 manifest matches the verifier-side files",
         ),
         "I13": InvariantEntry(

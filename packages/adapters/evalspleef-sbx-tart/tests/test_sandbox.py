@@ -123,6 +123,23 @@ async def test_upload_download_file_and_directory(sandbox: Sandbox, tmp_path: Pa
     assert stat.S_IMODE((back / "sub" / "nested.bin").stat().st_mode) == 0o755
 
 
+async def test_a_directory_uploaded_onto_the_workspace_fills_it(
+    sandbox: Sandbox, tmp_path: Path
+) -> None:
+    # /workspace is an existing directory on a read-only root: tar must unpack into it
+    # instead of recreating it from the uploaded directory's own entry.
+    tree = tmp_path / "staged"
+    (tree / "src").mkdir(parents=True)
+    (tree / "README.md").write_bytes(b"top\n")
+    (tree / "src" / "run.sh").write_bytes(b"#!/bin/sh\n")
+    (tree / "src" / "run.sh").chmod(0o755)
+    await sandbox.upload(tree, "/workspace")
+    listed = await sandbox.exec(["cat", "/workspace/README.md", "/workspace/src/run.sh"])
+    assert listed.exit_code == 0, listed.stderr
+    assert listed.stdout == b"top\n#!/bin/sh\n"
+    assert (await sandbox.exec(["test", "-x", "/workspace/src/run.sh"])).exit_code == 0
+
+
 async def test_download_rejects_an_escaping_symlink(sandbox: Sandbox, tmp_path: Path) -> None:
     created = await sandbox.exec(["ln", "-sfn", "/etc/passwd", "escape-link"])
     assert created.exit_code == 0, created.stderr

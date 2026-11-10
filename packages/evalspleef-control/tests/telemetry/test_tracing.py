@@ -62,7 +62,7 @@ class FakeSandbox(Sandbox):
             exit_code=0, stdout=b"hello ", stderr=b"world", timed_out=False, duration_s=0.1
         )
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
         return None
 
     async def download(self, remote: str, local: Path, **kwargs) -> None:  # type: ignore[no-untyped-def]

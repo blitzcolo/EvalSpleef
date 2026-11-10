@@ -50,6 +50,12 @@ message SandboxSpec {
   map<string, string> labels = 11;
   int64 max_lifetime_s = 12;
   bool gui = 13;
+  repeated WritablePath writable_paths = 14;
+}
+
+message WritablePath {
+  string path = 1;
+  int64 size_mb = 2;
 }
 
 message SandboxCapabilities {
@@ -74,6 +80,10 @@ message SandboxCapabilities {
   optional Resources max_resources = 19;
   double typical_start_s = 20;
   double reset_cost_s = 21;
+  bool writable_paths = 22;
+  bool read_only_upload = 23;
+  // Unset by daemons older than the field: the SPI default /verify applies.
+  optional string verify_root = 24;
 }
 
 message InvariantEntry {
@@ -168,6 +178,8 @@ message TransferHeader {
   string provider = 1;
   string sandbox_id = 2;
   string remote = 3;
+  // Upload only: unpack the tree read-only for the sandbox user.
+  bool read_only = 4;
 }
 
 message TransferChunk {

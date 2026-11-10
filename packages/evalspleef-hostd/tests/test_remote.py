@@ -20,7 +20,7 @@ from evalspleef.spi.errors import (
     SandboxLost,
     TransferError,
 )
-from evalspleef.spi.sandbox import NetworkPolicy
+from evalspleef.spi.sandbox import NetworkPolicy, WritablePath
 
 if TYPE_CHECKING:
     from conftest import SpecMaker, Stacks
@@ -148,6 +148,31 @@ async def test_download_corrupted_in_flight_is_detected(
     with pytest.raises(TransferError, match="sha256"):
         await sandbox.download("/workspace/f.bin", destination)
     assert not destination.exists()
+    await sandbox.destroy()
+
+
+async def test_declared_paths_and_read_only_uploads_cross_the_wire(
+    stacks: Stacks, spec: SpecMaker, tmp_path: Path
+) -> None:
+    from dataclasses import replace
+
+    stack, _ = await stacks.start()
+    remote = stack.remote("mock")
+    await remote.preflight()  # fills the capability cache without blocking this loop
+    caps = remote.capabilities()
+    declared = replace(spec(), writable_paths=(WritablePath("/scratch", 8),))
+    sandbox = await remote.create(declared)
+    used = await sandbox.exec("printf ok > f && cat f", cwd="/scratch")
+    assert used.stdout == b"ok"
+    source = tmp_path / "f.bin"
+    source.write_bytes(b"payload")
+    if caps.read_only_upload:
+        await sandbox.upload(source, "/workspace/f.bin", read_only=True)
+        appended = await sandbox.exec("printf x >> f.bin", cwd="/workspace")
+        assert appended.exit_code != 0, "the read-only flag was lost on the wire"
+    else:
+        with pytest.raises(CapabilityNotSupported):
+            await sandbox.upload(source, "/workspace/f.bin", read_only=True)
     await sandbox.destroy()
 
 

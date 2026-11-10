@@ -52,6 +52,7 @@ from evalspleef.spi.sandbox import (
     SandboxCapabilities,
     SandboxProvider,
     SandboxSpec,
+    unenforceable_paths,
 )
 from evalspleef.spi.secrets import SecretResolver
 
@@ -139,6 +140,8 @@ class WindowsSandboxProvider(SandboxProvider):
             max_resources=None,
             typical_start_s=20.0,
             reset_cost_s=30.0,
+            # Only the mapped /workspace folder is reachable, so the verifier works there.
+            verify_root="/workspace/verify",
         )
 
     def isolation_profile(self) -> IsolationProfile:
@@ -418,6 +421,11 @@ class WindowsSandboxProvider(SandboxProvider):
 
     def _validate_spec(self, spec: SandboxSpec) -> None:
         capabilities = self.capabilities()
+        missing = unenforceable_paths(spec, capabilities)
+        if missing:
+            raise PolicyNotEnforceable(
+                f"{self.name} cannot mount declared writable paths: {missing}"
+            )
         if spec.os not in capabilities.os_families:
             raise CapabilityNotSupported(
                 f"windows-sandbox guest os is {self._guest_os.value!r}, got {spec.os!r}"

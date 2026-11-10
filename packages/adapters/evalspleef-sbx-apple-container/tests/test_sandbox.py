@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from evalspleef.spi.errors import SandboxLost, TransferError
-from evalspleef.spi.sandbox import TIMEOUT_EXIT_CODE
+from evalspleef.spi.sandbox import TIMEOUT_EXIT_CODE, WritablePath
 
 
 async def test_exit_codes(sandbox) -> None:
@@ -160,11 +160,18 @@ async def test_upload_directory_as_the_workspace_mount_point(sandbox) -> None:
     assert runnable.exit_code == 0
 
 
-async def test_only_verifier_sandboxes_get_a_writable_verify_root(provider, spec_factory) -> None:
+async def test_only_declared_writable_paths_exist_beside_the_read_only_root(
+    provider, spec_factory
+) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp, "test_hidden.sh")
         await asyncio.to_thread(source.write_bytes, b"echo hidden\n")
-        verifier = await provider.create(replace(spec_factory("unit-verifier"), role="verifier"))
+        declared = replace(
+            spec_factory("unit-verifier"),
+            role="verifier",
+            writable_paths=(WritablePath("/verify", 32),),
+        )
+        verifier = await provider.create(declared)
         try:
             await verifier.upload(source, "/verify/hidden-tests/test_hidden.sh")
             read_back = await verifier.exec(["cat", "/verify/hidden-tests/test_hidden.sh"])
@@ -172,9 +179,9 @@ async def test_only_verifier_sandboxes_get_a_writable_verify_root(provider, spec
             assert read_back.stdout == b"echo hidden\n"
         finally:
             await verifier.destroy()
-        agent = await provider.create(spec_factory("unit-agent-no-verify"))
+        agent = await provider.create(replace(spec_factory("unit-no-verify"), role="verifier"))
         try:
-            # The agent's root stays read-only: /verify exists only for the verifier role.
+            # Without the declaration the root stays read-only, whatever the role.
             with pytest.raises(TransferError, match="Read-only file system"):
                 await agent.upload(source, "/verify/hidden-tests/test_hidden.sh")
         finally:

@@ -204,10 +204,15 @@ async def test_the_workspace_holds_no_more_than_the_requested_disk(provider, spe
         await sandbox.destroy()
 
 
-async def test_a_verifier_sandbox_can_write_its_verify_root(provider, spec_factory) -> None:
+async def test_a_declared_writable_path_is_writable_by_the_sandbox_user(
+    provider, spec_factory
+) -> None:
     from dataclasses import replace
 
-    sandbox = await provider.create(replace(spec_factory("verify-root"), role="verifier"))
+    from evalspleef.spi.sandbox import WritablePath
+
+    spec = replace(spec_factory("verify-root"), writable_paths=(WritablePath("/verify", 32),))
+    sandbox = await provider.create(spec)
     try:
         result = await sandbox.exec(
             "mkdir -p /verify/hidden-tests && echo ok > /verify/hidden-tests/x"

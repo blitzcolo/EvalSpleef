@@ -176,3 +176,9 @@ snapshots), C-PORT-01 (no port expose).
   quotas.
 - The guest-agent fallback is non-streaming and limited to the default working
   directory/environment.
+
+Declared writable paths and read-only uploads are not supported (`PolicyNotEnforceable` and
+`CapabilityNotSupported`). `capabilities().verify_root` is `/workspace/verify`: a guest's root
+directory belongs to root and no template creates `/verify`. The fake guest now resolves every
+top-level guest directory for exec as SFTP (chrooted to the guest root) does. Not verified on a
+real host.

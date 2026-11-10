@@ -39,6 +39,7 @@ from evalspleef.spi.sandbox import (
     SandboxCapabilities,
     SandboxProvider,
     SandboxSpec,
+    unenforceable_paths,
 )
 from evalspleef.spi.secrets import SecretResolver
 
@@ -473,6 +474,11 @@ class K8sAgentSandboxProvider(SandboxProvider):
 
     def _validate_spec(self, spec: SandboxSpec) -> None:
         caps = self.capabilities()
+        missing = unenforceable_paths(spec, caps)
+        if missing:
+            raise PolicyNotEnforceable(
+                f"{self.name} cannot mount declared writable paths: {missing}"
+            )
         if spec.os not in caps.os_families:
             raise CapabilityNotSupported(f"k8s agent-sandbox supports linux only, got {spec.os!r}")
         if spec.arch not in caps.arches:

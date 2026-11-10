@@ -183,6 +183,8 @@ class DockerProvider(SandboxProvider):
             max_resources=self._max_resources,
             typical_start_s=1.0,
             reset_cost_s=1.0,
+            writable_paths=True,
+            read_only_upload=True,
         )
 
     def isolation_profile(self) -> IsolationProfile:
@@ -418,6 +420,13 @@ class DockerProvider(SandboxProvider):
                     f"resources over this instance's ceiling: {', '.join(over)}",
                     detail={"over": over},
                 )
+        builtin = {"/tmp", "/workspace", f"/home/{spec.run_as_user}"}
+        for declared in spec.writable_paths:
+            if not declared.path.startswith("/") or declared.path.rstrip("/") in builtin:
+                raise PolicyNotEnforceable(
+                    f"declared writable path {declared.path!r} must be absolute and not one "
+                    f"of the built-in mounts {sorted(builtin)}"
+                )
         policy = spec.network
         if policy.mode in (NetMode.DOCS_WHITELIST, NetMode.PACKAGE_MIRROR):
             if not self._egress_network or not policy.via_proxy:
@@ -487,9 +496,10 @@ class DockerProvider(SandboxProvider):
             "/workspace": f"rw,exec,nosuid,nodev,mode=0777,size={spec.resources.disk_mb}m",
             home_tmpfs: "rw,exec,nosuid,nodev,mode=0777",
         }
-        if spec.role == "verifier":
-            # Hidden tests are uploaded to and run from /verify (the evaluator's default root).
-            tmpfs["/verify"] = "rw,exec,nosuid,nodev,mode=0777"
+        for declared in spec.writable_paths:
+            # Sticky like /tmp: the sandbox user owns what it writes, and a read-only upload
+            # placed here by root cannot be deleted or renamed by it.
+            tmpfs[declared.path] = f"rw,exec,nosuid,nodev,mode=1777,size={declared.size_mb}m"
         return {
             "Image": image,
             "Cmd": ["sleep", "infinity"],

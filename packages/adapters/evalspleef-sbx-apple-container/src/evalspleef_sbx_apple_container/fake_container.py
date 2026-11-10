@@ -22,6 +22,10 @@ Where behaviour matters to the adapter it mirrors what ``container`` 1.6.1 does
   ``tar -x`` elsewhere fail with "Read-only file system"), and a tmpfs mount
   point belongs to root: ``tar -x`` of an archive whose entry is the mount point
   itself fails like GNU tar as the sandbox user ("Cannot utime", exit 2);
+- ``exec --user root`` runs as root without capabilities: what it unpacks is root's, so
+  the sandbox user cannot write, delete, rename or chmod it. The fake cannot create
+  root-owned files, so it sets the user-immutable flag (macOS) on what a root
+  ``tar -x`` unpacked; on hosts without file flags it refuses;
 - JSON shapes of ``system version``, ``system status``, ``system property
   list``, ``list`` and ``inspect``, the ``--version`` line and the error text of
   a missing container or a taken name follow the real CLI; the app root holds a
@@ -35,6 +39,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -43,6 +48,7 @@ from pathlib import Path
 from typing import cast
 
 ROOT_ENV = "SPLEEF_FAKE_CONTAINER_ROOT"
+EXEC_USER_ENV = "SPLEEF_FAKE_CONTAINER_EXEC_USER"
 DEV_PROXY = "http://127.0.0.1:9"
 _MAPPED_PREFIXES = ("/sys", "/workspace", "/home", "/tmp", "/proc/net")
 _ARGV_PREFIXES = ("/workspace", "/home", "/tmp")
@@ -361,7 +367,10 @@ def cmd_exec(args: list[str]) -> int:
         elif arg in ("-w", "--workdir", "--cwd"):
             workdir = args[index + 1]
             index += 2
-        elif arg in ("-u", "--user", "--uid", "--gid"):
+        elif arg in ("-u", "--user", "--uid"):
+            exec_env[EXEC_USER_ENV] = args[index + 1]
+            index += 2
+        elif arg == "--gid":
             index += 2
         elif arg in ("-i", "--interactive", "-t", "--tty", "-d", "--detach"):
             interactive = interactive or arg in ("-i", "--interactive")
@@ -493,8 +502,27 @@ def cmd_rm(args: list[str]) -> int:
                 print(f"container {name!r} not found", file=sys.stderr)
                 status = 1
             continue
-        shutil.rmtree(containers_root() / name, ignore_errors=True)
+        remove_tree(containers_root() / name)
     return status
+
+
+def remove_tree(root: Path) -> None:
+    """Delete a container tree, clearing what a root unpack froze."""
+    if hasattr(os, "chflags") and root.exists():
+        for dirpath, dirnames, filenames in os.walk(root):
+            for entry in (os.path.join(dirpath, n) for n in [*dirnames, *filenames]):
+                if not os.path.islink(entry):
+                    os.chflags(entry, 0)
+                    os.chmod(entry, os.lstat(entry).st_mode & 0o7777 | 0o200)
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def freeze(path: str) -> None:
+    """Stand-in for root ownership: the user-immutable flag keeps the unpacked modes (root
+    keeps its own write bit) while the sandbox user, here the file's owner, cannot change it."""
+    if os.path.islink(path) or not os.path.lexists(path):
+        return
+    os.chflags(path, stat.UF_IMMUTABLE)
 
 
 def cmd_list(args: list[str]) -> int:
@@ -746,26 +774,37 @@ def wrap_tar(fs: Path, meta: dict[str, object], args: list[str]) -> int:
         return subprocess.run([host_tool("tar"), *args], check=False).returncode
     payload = sys.stdin.buffer.read()
     mounts = {os.path.normpath(fs / mount.lstrip("/")): mount for mount in tmpfs_mounts(meta)}
+    as_root = os.environ.get(EXEC_USER_ENV) in ("root", "0")
+    if as_root and not hasattr(os, "chflags"):
+        print("tar: the fake cannot model root-owned files on this host", file=sys.stderr)
+        return 2
     errors: list[str] = []
+    destinations: list[str] = []
     with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
         for member in archive.getmembers():
             destination = os.path.normpath(os.path.join(target, member.name))
+            destinations.append(destination)
             name = member.name.rstrip("/")
-            if member.isdir() and destination in mounts:
+            if member.isdir() and destination in mounts and not as_root:
                 # The mount point is root's: the sandbox user cannot set its times or mode.
                 errors.append(f"tar: {name}: Cannot utime: Operation not permitted")
                 errors.append(
                     f"tar: {name}: Cannot change mode to rwxrwxrwt: Operation not permitted"
                 )
             elif meta.get("read_only") and not any(
-                destination.startswith(mount_path + "/") for mount_path in mounts
+                destination == mount_path or destination.startswith(mount_path + "/")
+                for mount_path in mounts
             ):
                 errors.append(f"tar: {name}: Cannot open: Read-only file system")
     if errors:
         print("\n".join(errors), file=sys.stderr)
         print("tar: Exiting with failure status due to previous errors", file=sys.stderr)
         return 2
-    return subprocess.run([host_tool("tar"), *args], input=payload, check=False).returncode
+    status = subprocess.run([host_tool("tar"), *args], input=payload, check=False).returncode
+    if status == 0 and as_root:
+        for destination in sorted(set(destinations), key=len, reverse=True):
+            freeze(destination)
+    return status
 
 
 def wrap_findmnt(args: list[str]) -> int:

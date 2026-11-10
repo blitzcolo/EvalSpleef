@@ -152,7 +152,7 @@ class RemoteSandbox(Sandbox):
 
         return await self._provider.call(stream, fallback=SandboxLost, bound=True)
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
         source = Path(local)
         if not await asyncio.to_thread(os.path.lexists, source):
             raise TransferError(f"local path does not exist: {source}")
@@ -166,7 +166,10 @@ class RemoteSandbox(Sandbox):
                 async def messages() -> Any:
                     yield pb.UploadMessage(
                         header=pb.TransferHeader(
-                            provider=self._provider.target, sandbox_id=self.id, remote=remote
+                            provider=self._provider.target,
+                            sandbox_id=self.id,
+                            remote=remote,
+                            read_only=read_only,
                         )
                     )
                     for chunk in reader:

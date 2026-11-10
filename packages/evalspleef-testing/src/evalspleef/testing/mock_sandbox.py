@@ -5,6 +5,12 @@ sandbox maps to ``<tmp>/workspace``. Commands run for real through ``/bin/sh -c`
 direct argv (list), so exit codes, signals and process trees behave exactly like production.
 What is simulated is the *vendor*: lifetime is enforced with the injected clock, quota and
 failure injection are programmable, and network policies are validated but not enforced.
+
+Declared writable paths are directories under the root (their size is not enforced).
+Directory uploads merge like a tar extraction. A read-only upload drops every write bit and
+sets the user-immutable file flag, because commands run as the same host user who could
+otherwise chmod the tree back; hosts without file flags (Linux) cannot enforce that, so there
+the double does not declare ``read_only_upload``.
 """
 
 from __future__ import annotations
@@ -14,6 +20,8 @@ import contextlib
 import os
 import shutil
 import signal
+import stat
+import sys
 import tempfile
 import time
 import uuid
@@ -42,6 +50,7 @@ from evalspleef.spi.sandbox import (
     SandboxCapabilities,
     SandboxProvider,
     SandboxSpec,
+    unenforceable_paths,
 )
 from evalspleef.spi.secrets import SecretResolver
 
@@ -83,6 +92,42 @@ MOCK_ENVIRONMENT = ExecutionEnvironment(
 # producers while staying far above any realistic test assertion.
 _ACCUMULATION_LIMIT = 64 << 20
 
+if sys.platform == "darwin":
+    _IMMUTABLE_FLAG: int | None = stat.UF_IMMUTABLE
+
+    def _set_flags(path: str | Path, flags: int) -> None:
+        os.chflags(path, flags, follow_symlinks=False)
+
+else:
+    # Linux has no unprivileged immutable flag, so a read-only upload cannot be enforced.
+    _IMMUTABLE_FLAG = None
+
+    def _set_flags(path: str | Path, flags: int) -> None:
+        raise CapabilityNotSupported("read_only_upload")
+
+
+def _freeze(path: Path, flag: int) -> None:
+    """Make ``path`` and everything under it unwritable and immutable, children first."""
+    if path.is_dir() and not path.is_symlink():
+        for child in path.iterdir():
+            _freeze(child, flag)
+    if path.is_symlink():
+        return
+    os.chmod(path, stat.S_IMODE(path.stat().st_mode) & ~0o222)
+    _set_flags(path, flag)
+
+
+def _remove_root(root: Path) -> None:
+    """Delete a sandbox root, clearing the flags and modes read-only uploads left behind."""
+    if _IMMUTABLE_FLAG is not None and root.exists():
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in [*dirnames, *filenames]:
+                entry = os.path.join(dirpath, name)
+                if not os.path.islink(entry):
+                    _set_flags(entry, 0)
+                    os.chmod(entry, stat.S_IMODE(os.lstat(entry).st_mode) | stat.S_IWUSR)
+    shutil.rmtree(root, ignore_errors=True)
+
 
 def default_capabilities() -> SandboxCapabilities:
     """The capability set the mock declares unless overridden in the constructor."""
@@ -110,6 +155,8 @@ def default_capabilities() -> SandboxCapabilities:
         max_resources=None,
         typical_start_s=0.1,
         reset_cost_s=0.1,
+        writable_paths=True,
+        read_only_upload=_IMMUTABLE_FLAG is not None,
     )
 
 
@@ -123,8 +170,11 @@ class MockSandbox(Sandbox):
         clock: Clock,
         created_at: float,
         expires_at: float,
+        *,
+        read_only_upload: bool = False,
     ) -> None:
         self.id = sandbox_id
+        self._read_only_upload = read_only_upload and _IMMUTABLE_FLAG is not None
         self.spec = spec
         self.created_at = created_at
         self.expires_at = expires_at
@@ -132,10 +182,12 @@ class MockSandbox(Sandbox):
         self._root = Path(tempfile.mkdtemp(prefix=f"evalspleef-mock-{sandbox_id}-"))
         # A sandbox that is dropped without destroy() must not strand its root in the temp
         # directory; the finalizer also runs at interpreter exit.
-        weakref.finalize(self, shutil.rmtree, self._root, ignore_errors=True)
+        weakref.finalize(self, _remove_root, self._root)
         self._root_resolved = Path(os.path.realpath(self._root))
         self._workspace = self._root / "workspace"
         self._workspace.mkdir()
+        for declared in spec.writable_paths:
+            self._map(declared.path).mkdir(parents=True, exist_ok=True)
         self._destroyed = False
         self._lost = False
 
@@ -178,7 +230,7 @@ class MockSandbox(Sandbox):
         if self._destroyed:
             return
         self._destroyed = True
-        shutil.rmtree(self._root, ignore_errors=True)
+        _remove_root(self._root)
 
     async def describe(self) -> dict[str, Any]:
         return {
@@ -328,8 +380,10 @@ class MockSandbox(Sandbox):
 
     # -- upload / download ----------------------------------------------------
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
         self._ensure_usable()
+        if read_only and not self._read_only_upload:
+            raise CapabilityNotSupported("read_only_upload")
         local = Path(local)
         if not local.exists() and not local.is_symlink():
             raise TransferError(f"local path does not exist: {local}")
@@ -353,11 +407,14 @@ class MockSandbox(Sandbox):
             return
         dest.parent.mkdir(parents=True, exist_ok=True)
         if local.is_dir():
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.copytree(local, dest, symlinks=True, copy_function=shutil.copy2)
+            # Merge like tar: same-path entries are overwritten, the others stay.
+            shutil.copytree(
+                local, dest, symlinks=True, copy_function=shutil.copy2, dirs_exist_ok=True
+            )
         else:
             shutil.copy2(local, dest)
+        if read_only and _IMMUTABLE_FLAG is not None:
+            _freeze(dest, _IMMUTABLE_FLAG)
 
     async def download(self, remote: str, local: Path, *, max_bytes: int | None = None) -> None:
         self._ensure_usable()
@@ -382,7 +439,7 @@ class MockSandbox(Sandbox):
             if max_bytes is not None and src.stat().st_size > max_bytes:
                 raise TransferError(f"download exceeds max_bytes: {src.stat().st_size}")
             local.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, local)
+            _copy_out(src, local)
 
 
 def _head_tail(data: bytes, budget: int) -> bytes:
@@ -403,10 +460,17 @@ def _tree_size(root: Path) -> int:
     return total
 
 
+def _copy_out(src: Path, dest: Path) -> None:
+    """Copy one file out of the sandbox: content, mode and times, never host file flags."""
+    shutil.copyfile(src, dest)
+    info = src.stat()
+    os.chmod(dest, stat.S_IMODE(info.st_mode))
+    os.utime(dest, ns=(info.st_atime_ns, info.st_mtime_ns))
+
+
 def _copy_tree_sanitized(src: Path, dest: Path) -> None:
     """Copy a directory, refusing symlinks that point outside ``src`` (artifact sanitizing)."""
     dest.mkdir(parents=True, exist_ok=True)
-    shutil.copystat(src, dest, follow_symlinks=False)
     for entry in src.iterdir():
         target = dest / entry.name
         if entry.is_symlink():
@@ -417,7 +481,9 @@ def _copy_tree_sanitized(src: Path, dest: Path) -> None:
         elif entry.is_dir():
             _copy_tree_sanitized(entry, target)
         else:
-            shutil.copy2(entry, target)
+            _copy_out(entry, target)
+    # The directory's own mode last: a read-only tree has no write bit to copy children into.
+    os.chmod(dest, stat.S_IMODE(src.stat().st_mode))
 
 
 class MockSandboxProvider(SandboxProvider):
@@ -442,6 +508,13 @@ class MockSandboxProvider(SandboxProvider):
             self._capabilities = replace(
                 self._capabilities, template_kinds=frozenset(config["template_kinds"])
             )
+        # ... and a carrier without declared paths that names its own verify root.
+        if "writable_paths" in config:
+            self._capabilities = replace(
+                self._capabilities, writable_paths=bool(config["writable_paths"])
+            )
+        if config.get("verify_root"):
+            self._capabilities = replace(self._capabilities, verify_root=str(config["verify_root"]))
         self._sandboxes: dict[str, MockSandbox] = {}
         self._fail_next: list[type[SpleefError] | SpleefError] = []
         self._quota: int | None = None
@@ -531,6 +604,9 @@ class MockSandboxProvider(SandboxProvider):
             failure = self._fail_next.pop(0)
             raise failure
         cap = self._capabilities
+        missing = unenforceable_paths(spec, cap)
+        if missing:
+            raise PolicyNotEnforceable(f"declared writable paths not supported: {missing}")
         if spec.os not in cap.os_families:
             raise CapabilityNotSupported(f"os not supported: {spec.os}")
         if spec.arch not in cap.arches:
@@ -567,7 +643,12 @@ class MockSandboxProvider(SandboxProvider):
         sandbox_id = f"sb-{uuid.uuid4().hex[:12]}"
         created_at = self._clock.now()
         sandbox = MockSandbox(
-            sandbox_id, spec, self._clock, created_at, created_at + spec.max_lifetime_s
+            sandbox_id,
+            spec,
+            self._clock,
+            created_at,
+            created_at + spec.max_lifetime_s,
+            read_only_upload=cap.read_only_upload,
         )
         self._sandboxes[sandbox_id] = sandbox
         return sandbox

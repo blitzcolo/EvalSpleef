@@ -51,6 +51,26 @@ def build_upload_tar(local: Path, *, arcname: str, contents_only: bool = False) 
     return buffer.getvalue()
 
 
+def make_read_only(archive: bytes) -> bytes:
+    """Rewrite an upload archive so its members are root's and not group/other writable.
+
+    Unpacked by root in the guest, the tree is readable and executable by the sandbox user
+    but not writable, deletable or chmod-able by it.
+    """
+    output = io.BytesIO()
+    with (
+        tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source,
+        tarfile.open(fileobj=output, mode="w", format=tarfile.PAX_FORMAT) as target,
+    ):
+        for member in source.getmembers():
+            member.uid = member.gid = 0
+            member.uname = member.gname = "root"
+            if not member.issym():
+                member.mode &= ~0o022
+            target.addfile(member, source.extractfile(member) if member.isreg() else None)
+    return output.getvalue()
+
+
 def extract_download_tar(stream: IO[bytes], local: Path, *, max_bytes: int | None) -> None:
     """Unpack a guest ``tar -cf - -C <parent> ./<name>`` stream so ``local`` is ``<name>``."""
     local.parent.mkdir(parents=True, exist_ok=True)

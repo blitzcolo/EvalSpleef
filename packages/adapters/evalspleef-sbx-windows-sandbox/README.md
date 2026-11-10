@@ -132,3 +132,7 @@ Not verified / not exercised:
   what actually boots.
 - The provider does not create the `wsb connect` login session needed by
   `-r ExistingLogin`; a real host needs that session established out of band.
+
+Declared writable paths and read-only uploads are not supported (`PolicyNotEnforceable` and
+`CapabilityNotSupported`). `capabilities().verify_root` is `/workspace/verify` because only the
+mapped `/workspace` folder is reachable. Not verified on a real host.

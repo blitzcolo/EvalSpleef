@@ -31,7 +31,7 @@ from evalspleef.spi.sandbox import (
     SandboxSpec,
 )
 
-from ._tar import build_upload_tar, extract_download_tar
+from ._tar import build_upload_tar, extract_download_tar, make_read_only
 
 # Downloaded tar streams are spooled to a temp file through this callback
 # buffer ceiling; member sizes are additionally bounded in _tar.
@@ -276,17 +276,22 @@ class DockerSandbox(Sandbox):
 
     # -- file transfer over exec tar streams -----------------------------------
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
         self._check_live()
         remote_path = PurePosixPath(remote)
         if not remote_path.is_absolute():
             raise TransferError(f"remote path must be absolute, got {remote!r}")
         # A directory is unpacked into the remote path itself, never over it: tar would
         # otherwise try to change the owner, mode and times of an existing mount point.
-        into_dir = await asyncio.to_thread(lambda: local.is_dir() and not local.is_symlink())
+        # A read-only tree is the exception: root unpacks it with its own entry, so the
+        # top directory is root's too (root owns the mount points it may land on).
+        is_dir = await asyncio.to_thread(lambda: local.is_dir() and not local.is_symlink())
+        into_dir = is_dir and not read_only
         dest_dir = str(remote_path) if into_dir else posixpath.dirname(str(remote_path)) or "/"
         try:
             tar_bytes = build_upload_tar(local, arcname=remote_path.name, contents_only=into_dir)
+            if read_only:
+                tar_bytes = make_read_only(tar_bytes)
         except TransferError:
             raise
         except Exception as exc:
@@ -295,11 +300,14 @@ class DockerSandbox(Sandbox):
             made = await self.exec(["mkdir", "-p", dest_dir])
             if made.exit_code != 0:
                 raise TransferError(f"cannot create remote directory {dest_dir!r}: {made.stderr!r}")
+        # Root without capabilities can create files it owns but cannot chown, hence
+        # --no-same-owner; the sandbox user unpacks everything else.
+        unpack = ["tar", "--no-same-owner", "-xf", "-"] if read_only else ["tar", "-xf", "-"]
         result = await self._exec_raw(
-            ["tar", "-xf", "-", "-C", dest_dir],
+            [*unpack, "-C", dest_dir],
             cwd=None,
             env=None,
-            user=None,
+            user="0:0" if read_only else None,
             stdin=tar_bytes,
             on_output=None,
             max_output_bytes=1024,

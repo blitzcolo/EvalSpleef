@@ -240,3 +240,12 @@ fake.
 - <https://github.com/apple/container> and `container <subcommand> --help` of 1.6.1
 - <https://raw.githubusercontent.com/apple/container/main/docs/command-reference.md>
 - <https://raw.githubusercontent.com/apple/container/main/docs/networking.md>
+
+## Declared paths and read-only uploads
+
+The provider declares `writable_paths` and `read_only_upload`. Each declared path becomes
+`--tmpfs <path>:size=<size_mb>m,mode=1777` (root-owned, sticky, charged to the VM memory); the
+role mounts nothing by itself. A read-only upload is unpacked with `container exec --user root`,
+which works with `--cap-drop ALL` on container 1.6.1: root owns what it unpacks, the sandbox user
+cannot write, delete, rename or chmod it (checked on the real CLI on 2026-11-10). The fake CLI
+models root ownership with the user-immutable file flag (macOS).

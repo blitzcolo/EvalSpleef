@@ -130,6 +130,8 @@ class AppleContainerProvider(SandboxProvider):
             max_resources=None,
             typical_start_s=2.0,
             reset_cost_s=1.0,
+            writable_paths=True,
+            read_only_upload=True,
         )
 
     def isolation_profile(self) -> IsolationProfile:
@@ -391,6 +393,14 @@ class AppleContainerProvider(SandboxProvider):
             raise CapabilityNotSupported("apple-container provider does not support GPUs")
         if spec.resources.cpus <= 0 or spec.resources.memory_mb <= 0:
             raise CapabilityNotSupported("cpu and memory requests must be positive")
+        builtin = {"/tmp", "/workspace", f"/home/{spec.run_as_user}"}
+        for declared in spec.writable_paths:
+            path = declared.path
+            if not path.startswith("/") or path.rstrip("/") in builtin or ":" in path:
+                raise PolicyNotEnforceable(
+                    f"declared writable path {path!r} must be absolute, free of ':' and not "
+                    f"one of the built-in mounts {sorted(builtin)}"
+                )
         policy = spec.network
         if policy.allow_cidrs:
             raise PolicyNotEnforceable(
@@ -470,10 +480,9 @@ class AppleContainerProvider(SandboxProvider):
             "--tmpfs",
             f"/home/{user}",
         ]
-        if spec.role == "verifier":
-            # Hidden tests are uploaded to and run from /verify (the evaluator's default
-            # root); the root filesystem is read-only, so it needs its own tmpfs.
-            args += ["--tmpfs", "/verify"]
+        for declared in spec.writable_paths:
+            # Root-owned and sticky like /tmp (mode 1777), charged to the VM's memory.
+            args += ["--tmpfs", f"{declared.path}:size={declared.size_mb}m,mode=1777"]
         args += [
             "--cap-drop",
             "ALL",

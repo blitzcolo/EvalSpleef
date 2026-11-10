@@ -175,9 +175,9 @@ class TracedSandbox(_SpanMixin, Sandbox):
             self._record_result(span, result)
             return result
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
         with self._start_span("upload", self._inner) as span:
-            await self._inner.upload(local, remote)
+            await self._inner.upload(local, remote, read_only=read_only)
             self._record_result(span, None, extra={"bytes": _upload_bytes(local)})
 
     async def download(self, remote: str, local: Path, *, max_bytes: int | None = None) -> None:

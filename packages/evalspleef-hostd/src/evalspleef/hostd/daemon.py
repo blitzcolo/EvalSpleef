@@ -659,7 +659,7 @@ class _HostdService:
                 transfer.unpack, archive, scratch / "unpacked", strict=False
             )
             sandbox = self.daemon._tracked(header.provider, header.sandbox_id).sandbox
-            await sandbox.upload(payload, header.remote)
+            await sandbox.upload(payload, header.remote, read_only=header.read_only)
             return pb.UploadAck(total_bytes=total)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)

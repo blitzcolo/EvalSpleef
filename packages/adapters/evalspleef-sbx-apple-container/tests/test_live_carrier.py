@@ -23,6 +23,7 @@ from evalspleef_sbx_apple_container.provider import AppleContainerProvider
 
 from evalspleef.conformance.target import ConformanceTarget
 from evalspleef.spi.caps import NetMode
+from evalspleef.spi.sandbox import WritablePath
 
 pytestmark = pytest.mark.skipif(
     not (os.environ.get(conformance.LIVE_IMAGE_ENV) and shutil.which("container")),
@@ -97,12 +98,13 @@ async def test_a_directory_uploads_as_the_workspace_mount_point(
     assert owner.stdout.decode().strip() == sandbox.spec.run_as_user
 
 
-async def test_a_verifier_sandbox_can_write_under_verify(live_target: ConformanceTarget) -> None:
+async def test_a_declared_verify_root_is_writable(live_target: ConformanceTarget) -> None:
     provider = live_target.provider
     assert isinstance(provider, AppleContainerProvider)
     assert live_target.spec_factory is not None
     spec = live_target.spec_factory("live-verifier", network=NetMode.OFF, max_lifetime_s=600)
-    verifier = await provider.create(replace(spec, role="verifier"))
+    declared = (WritablePath("/verify", 32),)
+    verifier = await provider.create(replace(spec, role="verifier", writable_paths=declared))
     try:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp, "test_hidden.sh")

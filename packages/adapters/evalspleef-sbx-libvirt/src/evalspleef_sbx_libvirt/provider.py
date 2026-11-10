@@ -49,6 +49,7 @@ from evalspleef.spi.sandbox import (
     SandboxCapabilities,
     SandboxProvider,
     SandboxSpec,
+    unenforceable_paths,
 )
 from evalspleef.spi.secrets import SecretResolver
 
@@ -174,6 +175,9 @@ class LibvirtProvider(SandboxProvider):
             max_resources=None,
             typical_start_s=60.0,
             reset_cost_s=5.0,
+            # A guest's root directory belongs to root and no template creates /verify,
+            # so the verifier works inside the sandbox user's workspace.
+            verify_root="/workspace/verify",
         )
 
     def isolation_profile(self) -> IsolationProfile:
@@ -402,6 +406,11 @@ class LibvirtProvider(SandboxProvider):
 
     def _validate_spec(self, spec: SandboxSpec) -> None:
         caps = self.capabilities()
+        missing = unenforceable_paths(spec, caps)
+        if missing:
+            raise PolicyNotEnforceable(
+                f"{self.name} cannot mount declared writable paths: {missing}"
+            )
         if spec.os not in caps.os_families:
             raise CapabilityNotSupported(
                 f"libvirt guest OS {spec.os.value!r} is not configured; supported: "

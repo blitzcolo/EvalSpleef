@@ -6,7 +6,9 @@ small ``sh`` wrapper that records its pid; the guest process is a session and
 process-group leader, and a timeout kills that group inside the VM before the
 result (exit code 124) is returned.
 
-Files travel as tar streams over ``exec`` stdin/stdout, run as the sandbox user.
+Files travel as tar streams over ``exec`` stdin/stdout, run as the sandbox user; a
+read-only upload is unpacked by root (``exec --user root`` works with ``--cap-drop ALL``:
+root then owns what it creates but cannot chown or override permissions).
 ``container cp`` is not used: it reads and writes the VM's root filesystem
 underneath the tmpfs mounts (and past ``--read-only``), so it neither sees
 ``/workspace`` nor respects the sandbox's own view of its files.
@@ -36,7 +38,7 @@ from evalspleef.spi.sandbox import (
 )
 
 from ._cli import ContainerCLI, kill_process_group
-from ._transfer import build_upload_tar, extract_download_tar
+from ._transfer import build_upload_tar, extract_download_tar, make_read_only
 
 if TYPE_CHECKING:
     from .provider import AppleContainerProvider
@@ -53,6 +55,7 @@ _PID_WRAPPER = '{ echo "$$" > "$0"; } 2>/dev/null; "$@"; status=$?; rm -f "$0"; 
 # No "--" before the negative pid: dash's kill builtin rejects it ("Illegal number: -").
 _KILL_GROUP = 'pid="$(cat "$1" 2>/dev/null)"; [ -n "$pid" ] && kill -KILL "-$pid"; rm -f "$1"'
 _UNPACK = 'mkdir -p "$1" && umask 000 && exec tar -xf - -C "$1"'
+_UNPACK_AS_ROOT = 'exec tar --no-same-owner -xf - -C "$1"'
 
 
 class _CappedBuffer:
@@ -247,7 +250,7 @@ class AppleContainerSandbox(Sandbox):
 
     # -- file transfer ----------------------------------------------------------
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
         self._check_live()
         remote_path = PurePosixPath(remote)
         if not remote_path.is_absolute():
@@ -257,14 +260,23 @@ class AppleContainerSandbox(Sandbox):
         # A directory unpacks INTO the remote path, never over it: tar would otherwise
         # set the mode and times of an existing root-owned mount point such as
         # /workspace, which the sandbox user may not do (GNU tar exits 2).
-        into_dir = await asyncio.to_thread(lambda: local.is_dir() and not local.is_symlink())
+        # A read-only tree keeps its own top entry so root creates (and owns) it.
+        is_dir = await asyncio.to_thread(lambda: local.is_dir() and not local.is_symlink())
+        into_dir = is_dir and not read_only
         target = str(remote_path) if into_dir else posixpath.dirname(str(remote_path)) or "/"
         archive = await asyncio.to_thread(
             build_upload_tar, local, arcname=remote_path.name, contents_only=into_dir
         )
+        if read_only:
+            archive = await asyncio.to_thread(make_read_only, archive)
+            # Parents are the sandbox user's, created like any other upload's.
+            made = await self.exec(["mkdir", "-p", target], timeout_s=60.0)
+            if made.exit_code != 0:
+                raise TransferError(f"cannot create {target!r} for {remote!r}: {made.stderr!r}")
         result = await self.exec(
-            ["sh", "-c", _UNPACK, "sh", target],
+            ["sh", "-c", _UNPACK_AS_ROOT if read_only else _UNPACK, "sh", target],
             stdin=archive,
+            user="root" if read_only else None,
             timeout_s=self._provider.transfer_timeout_s,
             max_output_bytes=1 << 20,
         )

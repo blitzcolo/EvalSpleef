@@ -11,9 +11,19 @@ import pytest
 from evalspleef.control.leases import LeaseInvariantError
 from evalspleef.core.events import EventType
 from evalspleef.spi.caps import NetMode, OSFamily
-from evalspleef.spi.errors import CapabilityNotSupported
-from evalspleef.spi.sandbox import NetworkPolicy, Sandbox, SandboxSpec, TemplateRef
-from evalspleef.testing.mock_sandbox import MockSandbox, MockSandboxProvider
+from evalspleef.spi.errors import CapabilityNotSupported, PolicyNotEnforceable
+from evalspleef.spi.sandbox import (
+    NetworkPolicy,
+    Sandbox,
+    SandboxSpec,
+    TemplateRef,
+    WritablePath,
+)
+from evalspleef.testing.mock_sandbox import (
+    MockSandbox,
+    MockSandboxProvider,
+    default_capabilities,
+)
 
 BATCH = "2026-11-b1"
 TRIAL = "web-001.alpha.terminus.e1.t01"
@@ -211,6 +221,63 @@ async def test_verifier_cannot_ask_for_network(env, request_for) -> None:
         await env.manager.provision(request)
 
     assert env.provider.created_sandboxes() == []
+
+
+def _pathless_provider(env, verify_root: str) -> MockSandboxProvider:
+    """A carrier that mounts no declared paths and names its own verify root."""
+    caps = replace(default_capabilities(), writable_paths=False, verify_root=verify_root)
+    return MockSandboxProvider(
+        "docker-a", {}, env.provider.secrets, clock=env.clock, capabilities=caps
+    )
+
+
+async def test_the_verify_root_is_declared_for_verifiers_only(env, request_for) -> None:
+    async with (
+        env.manager.lease(request_for()) as agent,
+        env.manager.lease(request_for(role="verifier")) as verifier,
+    ):
+        declared = mock_sandbox(verifier.sandbox).spec.writable_paths
+        assert mock_sandbox(agent.sandbox).spec.writable_paths == ()
+    disk_mb = request_for().requirements.disk_mb
+    assert declared == (WritablePath("/verify", disk_mb),)
+
+
+async def test_a_carrier_without_declared_paths_uses_its_own_verify_root(env, request_for) -> None:
+    manager = env.make_manager({"docker-a": _pathless_provider(env, "/workspace/verify")})
+    async with manager.lease(request_for(role="verifier")) as verifier:
+        assert mock_sandbox(verifier.sandbox).spec.writable_paths == ()
+
+
+async def test_a_verify_root_the_carrier_cannot_host_is_refused_before_create(
+    env, request_for
+) -> None:
+    provider = _pathless_provider(env, "/workspace/verify")
+    manager = env.make_manager({"docker-a": provider}, verify_root="/verify")
+
+    with pytest.raises(PolicyNotEnforceable, match="/verify"):
+        await manager.provision(request_for(role="verifier"))
+
+    assert provider.created_sandboxes() == []
+    rejected = (await env.events_of(EventType.PROVIDER_CAPABILITY_REJECT))[0]
+    assert rejected.payload["error"] == "PolicyNotEnforceable"
+
+
+async def test_a_judge_runs_network_off_with_its_own_declared_paths(env, request_for) -> None:
+    scratch = (WritablePath("/work", 64),)
+    with pytest.raises(LeaseInvariantError):
+        await env.manager.provision(
+            request_for(role="judge", network=NetworkPolicy(mode=NetMode.FULL))
+        )
+    async with env.manager.lease(request_for(role="judge", writable_paths=scratch)) as judge:
+        spec = mock_sandbox(judge.sandbox).spec
+    assert spec.network.mode == NetMode.OFF
+    assert spec.writable_paths == scratch
+
+    pathless = _pathless_provider(env, "/workspace/verify")
+    manager = env.make_manager({"docker-a": pathless})
+    with pytest.raises(PolicyNotEnforceable, match="/work"):
+        await manager.provision(request_for(role="judge", writable_paths=scratch))
+    assert pathless.created_sandboxes() == []
 
 
 class SharingProvider(MockSandboxProvider):

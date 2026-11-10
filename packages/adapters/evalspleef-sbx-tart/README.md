@@ -148,3 +148,8 @@ C-CONC-01 (the kit skips concurrency limits for doubles), C-SNAP-01/02 (snapshot
 - The guest has no read-only root disk; see the I2 waiver.
 - Golden images are ~25 GB on first pull; the host needs at least twice that plus
   copy-on-write increments.
+
+Declared writable paths and read-only uploads are not supported (`PolicyNotEnforceable` and
+`CapabilityNotSupported`). `capabilities().verify_root` is `/workspace/verify` because the macOS
+system volume is read-only. A directory uploaded onto an existing directory (such as
+`/workspace`) is unpacked into it instead of over it. Not verified on a real host.

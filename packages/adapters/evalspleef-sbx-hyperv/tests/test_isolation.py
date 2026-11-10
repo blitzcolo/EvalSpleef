@@ -46,7 +46,7 @@ class RecordingSandbox(Sandbox):
             exit_code=0, stdout=b"RESULT pass\n", stderr=b"", timed_out=False, duration_s=0.0
         )
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
         raise NotImplementedError
 
     async def download(self, remote: str, local: Path, *, max_bytes: int | None = None) -> None:

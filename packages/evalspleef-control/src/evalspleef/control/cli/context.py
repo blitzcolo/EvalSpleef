@@ -698,8 +698,32 @@ class AppContext:
 
     def lease_manager(self) -> LeaseManager:
         return LeaseManager(
-            self.providers, self.lease_rows, self.events, templates=self.carrier_template
+            self.providers,
+            self.lease_rows,
+            self.events,
+            templates=self.carrier_template,
+            verify_root=self.verify_root(),
         )
+
+    def verify_root(self) -> str:
+        """Where verifiers receive hidden tests: ``SPLEEF_VERIFY_ROOT`` when the operator sets
+        it, else the verify root the configured carriers declare.
+
+        Carriers that mount declared paths can host any root, so only the others decide; two
+        of them naming different roots is refused rather than guessed.
+        """
+        override = self._environ.get("SPLEEF_VERIFY_ROOT")
+        if override:
+            return override
+        caps = [self.providers.capabilities(name) for name in self.providers.sandbox_instances()]
+        fixed = sorted({item.verify_root for item in caps if not item.writable_paths})
+        if len(fixed) > 1:
+            raise UsageError(
+                f"the configured sandbox carriers need different verify roots {fixed}; set "
+                "SPLEEF_VERIFY_ROOT to a path every carrier can host or split the batch"
+            )
+        declared = fixed or sorted({item.verify_root for item in caps})
+        return declared[0] if declared else "/verify"
 
     def planner(self) -> BatchPlanner:
         return BatchPlanner(StaticMatcher(self.providers))
@@ -839,13 +863,12 @@ class AppContext:
         allow_single_judge_vendor: bool = False,
     ) -> TrialRunner:
         """The real TrialExecutor: packs from the task directory, runners from entry points."""
-        # SPLEEF_VERIFY_ROOT overrides the verify root for carriers that cannot host
-        # /verify; the docker adapter mounts a /verify tmpfs in verifier sandboxes.
+        # The lease manager declares the same root as a writable path where needed.
         evaluator = Evaluator(
             judges=judges,
             target_family=target_family,
             allow_single_judge=allow_single_judge_vendor,
-            verify_root=self._environ.get("SPLEEF_VERIFY_ROOT", "/verify"),
+            verify_root=self.verify_root(),
         )
         # Agent runners speak the OpenAI protocol: the gateway data-plane URL they
         # get must carry the /v1 suffix (probes take the bare origin instead).

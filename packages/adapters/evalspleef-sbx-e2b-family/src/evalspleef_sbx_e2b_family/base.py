@@ -72,6 +72,7 @@ from evalspleef.spi.sandbox import (
     SandboxCapabilities,
     SandboxProvider,
     SandboxSpec,
+    unenforceable_paths,
 )
 
 if TYPE_CHECKING:
@@ -285,6 +286,8 @@ class E2BFamilyProvider(SandboxProvider):
             typical_start_s=caps.typical_start_s,
             reset_cost_s=caps.reset_cost_s,
             template_kinds=caps.template_kinds,
+            # Transfers only reach paths under /workspace, so the verifier works there too.
+            verify_root=f"{WORKSPACE}/verify",
         )
 
     def isolation_profile(self) -> IsolationProfile:
@@ -360,6 +363,11 @@ class E2BFamilyProvider(SandboxProvider):
 
     def _validate_spec(self, spec: SandboxSpec) -> SandboxCapabilities:
         caps = self.capabilities()
+        missing = unenforceable_paths(spec, caps)
+        if missing:
+            raise PolicyNotEnforceable(
+                f"{self.name} cannot mount declared writable paths: {missing}"
+            )
         if spec.os not in caps.os_families:
             raise CapabilityNotSupported(f"os {spec.os.value!r} not supported by {self.name}")
         if spec.arch not in caps.arches:
@@ -662,7 +670,9 @@ class E2BFamilySandbox(Sandbox):
 
     # -- file transfer --------------------------------------------------------------
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
+        if read_only:
+            raise CapabilityNotSupported("read_only_upload")
         self._ensure_usable()
         remote_path = self._workspace_path(remote, what="upload")
         local = Path(local)

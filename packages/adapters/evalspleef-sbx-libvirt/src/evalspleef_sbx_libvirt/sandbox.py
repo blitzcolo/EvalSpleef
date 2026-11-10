@@ -616,7 +616,9 @@ class LibvirtSandbox(Sandbox):
 
     # -- file transfer ----------------------------------------------------------
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
+        if read_only:
+            raise CapabilityNotSupported("read_only_upload")
         self._check_live()
         if not remote.startswith("/"):
             raise TransferError(f"remote path must be absolute, got {remote!r}")

@@ -241,7 +241,9 @@ class WindowsSandbox(Sandbox):
 
     # -- file transfer -----------------------------------------------------------
 
-    async def upload(self, local: Path, remote: str) -> None:
+    async def upload(self, local: Path, remote: str, *, read_only: bool = False) -> None:
+        if read_only:
+            raise CapabilityNotSupported("read_only_upload")
         self._check_live()
         target = self._provider.host_path(remote, self._workspace)
         try:

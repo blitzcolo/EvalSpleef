@@ -9,6 +9,7 @@ from .manager import (
     LeaseRole,
     OrphanSandbox,
     SandboxProviders,
+    verifier_writable_paths,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "LeasedSandbox",
     "OrphanSandbox",
     "SandboxProviders",
+    "verifier_writable_paths",
 ]

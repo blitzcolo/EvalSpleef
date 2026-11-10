@@ -44,6 +44,26 @@ def build_upload_tar(local: Path, *, arcname: str, contents_only: bool = False) 
     return buffer.getvalue()
 
 
+def make_read_only(archive: bytes) -> bytes:
+    """Rewrite an upload archive so its members are root's and not group/other writable.
+
+    Extracted by root, the tree is then readable and executable by the sandbox user but not
+    writable, deletable or chmod-able by it.
+    """
+    output = io.BytesIO()
+    with (
+        tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source,
+        tarfile.open(fileobj=output, mode="w") as target,
+    ):
+        for member in source.getmembers():
+            member.uid = member.gid = 0
+            member.uname = member.gname = "root"
+            if not member.issym():
+                member.mode &= ~0o022
+            target.addfile(member, source.extractfile(member) if member.isreg() else None)
+    return output.getvalue()
+
+
 def _check_arcname(arcname: str) -> None:
     if not arcname or arcname.startswith("/") or ".." in Path(arcname).parts:
         raise TransferError(f"unsafe archive member name: {arcname!r}")

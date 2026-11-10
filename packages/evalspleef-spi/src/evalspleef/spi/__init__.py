@@ -63,6 +63,8 @@ from .sandbox import (
     SandboxProvider,
     SandboxSpec,
     TemplateRef,
+    WritablePath,
+    unenforceable_paths,
 )
 from .secrets import SecretRef, SecretResolver
 
@@ -131,7 +133,9 @@ __all__ = [
     "UsageRecord",
     "ValidationReport",
     "VendorSource",
+    "WritablePath",
     "admit_model",
     "local_host_facts",
     "match_requirements",
+    "unenforceable_paths",
 ]

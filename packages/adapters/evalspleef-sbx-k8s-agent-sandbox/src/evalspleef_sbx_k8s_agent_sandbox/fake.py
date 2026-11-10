@@ -459,9 +459,10 @@ def _copy_into(local: Path, remote: Path) -> None:
             raise TransferError(f"refusing symlink that escapes the uploaded tree: {local}")
     remote.parent.mkdir(parents=True, exist_ok=True)
     if local.is_dir():
-        if remote.exists():
-            shutil.rmtree(remote)
-        shutil.copytree(local, remote, symlinks=True, copy_function=shutil.copy2)
+        # Pod copies are tar extractions: they merge into an existing directory.
+        shutil.copytree(
+            local, remote, symlinks=True, copy_function=shutil.copy2, dirs_exist_ok=True
+        )
     else:
         shutil.copy2(local, remote)
 

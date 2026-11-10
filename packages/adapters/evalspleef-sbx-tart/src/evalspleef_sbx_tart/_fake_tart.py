@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -269,9 +270,11 @@ def cmd_exec(args: list[str]) -> int:
         return _fail("empty command")
     workspace = _vm_dir(name) / "workspace"
     home = _vm_dir(name) / "home" / "agent"
+    # Only a path that starts with /workspace is the guest workspace; a later component
+    # named "workspace" (such as /workspace/verify/workspace) is a plain directory.
+    replacement = str(workspace).replace("\\", "\\\\")
     translated = [
-        token.replace("/workspace", str(workspace)) if "/workspace" in token else token
-        for token in command
+        re.sub(r"(?<![\w./-])/workspace(?=/|[^\w.-]|$)", replacement, token) for token in command
     ]
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),

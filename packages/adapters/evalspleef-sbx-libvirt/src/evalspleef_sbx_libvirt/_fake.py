@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import shutil
 import sys
 import tempfile
@@ -404,11 +405,22 @@ class FakeLibvirtHost:
         process.exit(code)
 
     def _translate(self, command: str) -> str:
-        """Map guest paths the way a real guest would see them."""
+        """Map guest paths the way a real guest would see them.
+
+        SFTP is chrooted to the guest root, so every top-level guest directory (the
+        workspace, a verify root, the home) must resolve there for exec too; system
+        paths such as /bin or /etc stay the host's.
+        """
         translated = command.replace(
             "/sys/fs/cgroup", str(self.guest_root / "sys" / "fs" / "cgroup")
         )
-        translated = translated.replace("/workspace", str(self.guest_root / "workspace"))
+        names = {"workspace"} | {
+            entry.name for entry in self.guest_root.iterdir() if entry.name != "sys"
+        }
+        for name in sorted(names, key=len, reverse=True):
+            pattern = rf"(?<![\w./-])/{re.escape(name)}(?=/|[^\w.-]|$)"
+            replacement = str(self.guest_root / name).replace("\\", "\\\\")
+            translated = re.sub(pattern, replacement, translated)
         return translated
 
     # -- provider and specs ----------------------------------------------------

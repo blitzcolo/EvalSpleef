@@ -29,11 +29,13 @@ def _entries() -> dict[str, InvariantEntry]:
         ),
         "I2": InvariantEntry(
             how="containers are created with a read-only root filesystem; the only "
-            "writable paths are tmpfs mounts (/tmp, the agent home, /workspace)",
+            "writable paths are tmpfs mounts (/tmp, the agent home, /workspace and the "
+            "paths the spec declares in writable_paths)",
             probe="$ ! touch /.spleef-probe 2>/dev/null",
         ),
         "I3": InvariantEntry(
-            how="/tmp, the agent home and /workspace are per-trial tmpfs mounts; no "
+            how="/tmp, the agent home, /workspace and declared writable paths are per-trial "
+            "tmpfs mounts; no "
             "host directory is ever bind-mounted into the container",
             probe='$ awk \'$2 == "/tmp" { t = $3 } END { exit t != "tmpfs" }\' /proc/mounts',
         ),
@@ -82,7 +84,8 @@ def _entries() -> dict[str, InvariantEntry]:
         ),
         "I12": InvariantEntry(
             how="hidden tests never enter agent-side images; hash locks live in the "
-            "task pack, which the provider does not touch",
+            "task pack, which the provider does not touch; upload(read_only=True) "
+            "unpacks a tree as root without group/other write bits",
             probe="tests.sha256 manifest matches the verifier-side files",
         ),
         "I13": InvariantEntry(

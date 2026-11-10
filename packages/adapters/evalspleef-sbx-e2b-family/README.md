@@ -158,3 +158,7 @@ owner to confirm.
   `conformance.py` import it unconditionally, so the extra is effectively required.
 * Snapshots are declared `memory` with fan-out, taken from the vendor docs; the restore path
   has only been exercised against the fake.
+
+Declared writable paths and read-only uploads are not supported (`PolicyNotEnforceable` and
+`CapabilityNotSupported`). `capabilities().verify_root` is `/workspace/verify` because transfers
+only reach paths under `/workspace`. Not verified on a real host.
