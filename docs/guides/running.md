@@ -85,6 +85,8 @@ At load time the preset is expanded into the parameters; the preset id and its d
 
 Models (slugs), the agent shell, task patterns, `epochs` (two or more to rank a cell), `budget.max_total_usd`, the endpoint policy (warm before, sleep or terminate after), the judge panel, and the pricing table version. See `config/examples/batch.yaml`.
 
+The chat-judge panel (`llm_judge` rubric items) draws its k samples per item for every judge vendor concurrently; `judge_max_parallel_per_vendor` (default 5) bounds how many calls to one vendor may be in flight at once, so a rate-limited vendor is not flooded. Votes and verdicts are recorded in the same order as a serial run. The `agent_judge` samples each boot one judge sandbox and stay sequential.
+
 ### Agent judges for `agent_judge` rubric items
 
 Rubric items of kind `agent_judge` (for example backend-001 R11, which needs the service started and three error cases triggered) are decided by judge agents when `batch.yaml` has an `agent_judge` section; without it they stay `inconclusive` with an explicit reason and go to the manual queue. A judge agent is the batch's judge model driven through the gateway with the judge key: each turn it answers one JSON action (`run`, `read_file`, `list_dir`, `write_file`, `submit_verdict`); only the first action of a reply runs, and a `submit_verdict` counts only as the sole action of its reply, so any judge route that serves plain chat completions works, and the route's `prompt_caching` setting (on by default for `anthropic_messages`) caches the growing conversation.

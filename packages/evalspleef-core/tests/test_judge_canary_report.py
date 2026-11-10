@@ -82,9 +82,14 @@ class JudgeTest(unittest.TestCase):
             parse_judge_output("我不知道")
 
     def test_retry_recovers_from_invalid_output(self):
-        client = MockJudge(
-            verdicts=["不是 JSON", '{"verdict": "pass"}'], name="judge-a", family="family-a"
-        )
+        # 并发采样下调用到达顺序不再等于样本序号，因此应答按“是否已带纠正提示”
+        # 决定：首轮输出非法，带“上一次输出无法解析”的重试输出合法 pass。
+        def responder(prompt: str) -> str:
+            if "上一次输出无法解析" in prompt:
+                return '{"verdict": "pass"}'
+            return "不是 JSON"
+
+        client = MockJudge(responder=responder, name="judge-a", family="family-a")
         panel = JudgePanel(
             {"a": client, "b": MockJudge((True,), name="judge-b", family="family-b")},
             target_model="target",
@@ -93,8 +98,8 @@ class JudgeTest(unittest.TestCase):
         )
         result = panel.evaluate_item(make_item())
         self.assertTrue(result.passed)
-        self.assertGreaterEqual(len(client.calls), 2)
-        self.assertIn("上一次输出无法解析", client.calls[1])
+        self.assertEqual(len(client.calls), 4)
+        self.assertTrue(any("上一次输出无法解析" in call for call in client.calls))
 
     def test_same_family_rejected(self):
         with self.assertRaises(JudgeConfigError):

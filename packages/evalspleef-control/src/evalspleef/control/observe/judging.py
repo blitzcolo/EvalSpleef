@@ -270,6 +270,7 @@ class JudgeStep:
         target_model: str = "",
         k: int = 5,
         max_retries: int = 2,
+        max_parallel_per_vendor: int = 5,
         prices: Mapping[str, PriceSpec] | None = None,
         allow_single_vendor: bool = False,
     ) -> None:
@@ -280,6 +281,7 @@ class JudgeStep:
         self._target_model = target_model
         self._k = k
         self._max_retries = max_retries
+        self._max_parallel_per_vendor = max_parallel_per_vendor
         self._prices = dict(prices or {})
         self._allow_single_vendor = allow_single_vendor
 
@@ -304,6 +306,7 @@ class JudgeStep:
             target_family=self._target_family,
             k=self._k,
             max_retries=self._max_retries,
+            max_parallel_per_vendor=self._max_parallel_per_vendor,
             allow_single_vendor=self._allow_single_vendor,
         )
         result = panel.evaluate_items(items, evidence_digest=digest)

@@ -111,6 +111,9 @@ class BatchFileConfig(BaseModel):
     #: Appendix C.5 wants judges from at least two vendors; a single-vendor panel is an
     #: explicit, recorded exception (for example a local run against one fake judge).
     allow_single_judge_vendor: bool = False
+    #: In-flight chat-judge calls per vendor at most, so a rate-limited vendor is not
+    #: flooded by the panel's concurrent k samples per item.
+    judge_max_parallel_per_vendor: int = Field(default=5, ge=1)
     agent_judge: AgentJudgeConfig | None = None
     pricing_table: str
 

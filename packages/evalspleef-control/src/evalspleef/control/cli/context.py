@@ -942,6 +942,7 @@ class AppContext:
         target_family: str = "",
         versions_by_endpoint: Mapping[str, Mapping[str, Any]] | None = None,
         allow_single_judge_vendor: bool = False,
+        judge_max_parallel_per_vendor: int = 5,
         agent_judge: AgentJudgeStep | None = None,
     ) -> TrialRunner:
         """The real TrialExecutor: packs from the task directory, runners from entry points."""
@@ -950,6 +951,7 @@ class AppContext:
             judges=judges,
             target_family=target_family,
             allow_single_judge=allow_single_judge_vendor,
+            judge_max_parallel_per_vendor=judge_max_parallel_per_vendor,
             verify_root=self.verify_root(),
             agent_judge=agent_judge,
         )

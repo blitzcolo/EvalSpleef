@@ -1663,6 +1663,7 @@ async def _batch_run(
             target_family=(await ctx.model_registry.resolve(batch_config.models[0])).family,
             versions_by_endpoint=await ctx.trial_version_seeds(plan, freeze),
             allow_single_judge_vendor=batch_config.allow_single_judge_vendor,
+            judge_max_parallel_per_vendor=batch_config.judge_max_parallel_per_vendor,
             agent_judge=await ctx.build_agent_judge(batch_config, plan, gateway_url),
         )
         judges_note = ", ".join(sorted(batch_config.judges))

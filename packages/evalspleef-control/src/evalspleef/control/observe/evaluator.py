@@ -116,6 +116,7 @@ class Evaluator:
         target_family: str = "",
         judge_k: int = 5,
         judge_max_retries: int = 2,
+        judge_max_parallel_per_vendor: int = 5,
         judge_prices: Mapping[str, PriceSpec] | None = None,
         allow_single_judge: bool = False,
         verify_root: str = "/verify",
@@ -127,6 +128,7 @@ class Evaluator:
         self._target_family = target_family
         self._judge_k = judge_k
         self._judge_max_retries = judge_max_retries
+        self._judge_max_parallel_per_vendor = judge_max_parallel_per_vendor
         self._judge_prices = dict(judge_prices or {})
         self._allow_single_judge = allow_single_judge
         self._verify_root = verify_root
@@ -234,6 +236,7 @@ class Evaluator:
             target_model=ctx.endpoint.model_alias,
             k=self._judge_k,
             max_retries=self._judge_max_retries,
+            max_parallel_per_vendor=self._judge_max_parallel_per_vendor,
             prices=self._judge_prices,
             allow_single_vendor=self._allow_single_judge,
         )

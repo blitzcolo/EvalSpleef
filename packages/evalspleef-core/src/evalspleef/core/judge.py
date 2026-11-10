@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -183,7 +185,8 @@ class MockJudge:
     """离线可复现的裁判客户端。
 
     verdicts 元素可以是 bool、JSON 字符串或任意字符串（用于注入非法输出），
-    按顺序循环消费；也可传 responder 回调完全自定义输出。
+    按顺序循环消费（消费顺序即调用到达顺序，并发采样下不保证等于样本序号）；
+    也可传 responder 回调完全自定义输出。
     """
 
     verdicts: Sequence[bool | str] = (True,)
@@ -197,14 +200,16 @@ class MockJudge:
         if not self.verdicts and self.responder is None:
             raise ValueError("MockJudge 至少需要一个 verdict 或 responder")
         self._index = 0
+        self._lock = threading.Lock()
 
     def complete(self, prompt: str) -> str:
-        """返回预设输出并记录 prompt（用于断言 guard/重试）。"""
+        """返回预设输出并记录 prompt（用于断言 guard/重试）。线程安全。"""
         self.calls.append(prompt)
         if self.responder is not None:
             return self.responder(prompt)
-        verdict = self.verdicts[self._index % len(self.verdicts)]
-        self._index += 1
+        with self._lock:
+            verdict = self.verdicts[self._index % len(self.verdicts)]
+            self._index += 1
         if isinstance(verdict, bool):
             return json.dumps({"verdict": verdict})
         return str(verdict)
@@ -283,10 +288,15 @@ class JudgePanel:
         max_retries: int = 2,
         min_vendors: int = 2,
         allow_single_vendor: bool = False,
+        max_parallel_per_vendor: int = 5,
         roles: Mapping[str, str] | None = None,
     ) -> None:
         if k < 1 or k > 9:
             raise JudgeConfigError(f"k 必须在 1..9，收到: {k}")
+        if max_parallel_per_vendor < 1:
+            raise JudgeConfigError(
+                f"max_parallel_per_vendor 必须 >= 1，收到: {max_parallel_per_vendor}"
+            )
         if len(clients) < min_vendors and not allow_single_vendor:
             raise JudgeConfigError(f"评审团至少需要 {min_vendors} 家厂商，收到: {sorted(clients)}")
         self.clients = dict(clients)
@@ -295,7 +305,11 @@ class JudgePanel:
         self.k = k
         self.consistency_threshold = consistency_threshold
         self.max_retries = max_retries
+        self.max_parallel_per_vendor = max_parallel_per_vendor
         self.roles = dict(roles or {})
+        self._limits = {
+            vendor: threading.BoundedSemaphore(max_parallel_per_vendor) for vendor in clients
+        }
         families: dict[str, str] = {}
         for vendor, client in self.clients.items():
             family = getattr(client, "family", vendor)
@@ -320,18 +334,87 @@ class JudgePanel:
         )
 
     def evaluate_item(self, item: RubricItem, *, evidence_digest: str = "") -> ItemResult:
-        """对单条 rubric 采样并聚合；返回 ItemResult。"""
+        """对单条 rubric 采样并聚合；返回 ItemResult。
+
+        同一厂商的 k 次采样、不同厂商之间全部并发执行（客户端是同步调用，
+        用线程池实现）。每家厂商最多 ``max_parallel_per_vendor`` 条采样链，
+        链内按 ``offset, offset+stride, ...`` 的顺序串行采样，因此同时在飞
+        的调用数不超过该上限，且一旦某条采样失败，该厂商其余链不再发起新
+        调用（与串行循环的失败语义一致）。结果按 (厂商顺序, 样本序号)
+        收集，与串行执行完全一致；解析重试仍在单次采样内部顺序进行。
+        """
         prompt = build_judge_prompt(item, evidence_digest=evidence_digest)
-        votes_by_vendor: dict[str, tuple[bool | None, ...]] = {}
-        for vendor, client in self.clients.items():
-            votes: list[bool | None] = []
-            for _ in range(self.k):
-                verdict, _attempts, _raw = _sample_with_retry(
-                    client, prompt, retries=self.max_retries
-                )
-                votes.append(verdict)
-            votes_by_vendor[vendor] = tuple(votes)
+        vendors = list(self.clients.items())
+        per_vendor = min(self.max_parallel_per_vendor, self.k)
+        with ThreadPoolExecutor(
+            max_workers=max(1, per_vendor * len(vendors)),
+            thread_name_prefix="spleef-judge",
+        ) as pool:
+            chain_futures: dict[
+                str, list[Future[list[tuple[int, tuple[bool | None, int, str]]]]]
+            ] = {}
+            for vendor, client in vendors:
+                stop = threading.Event()
+                chain_futures[vendor] = [
+                    pool.submit(self._sample_chain, vendor, client, prompt, offset, stop)
+                    for offset in range(per_vendor)
+                ]
+            votes_by_vendor: dict[str, tuple[bool | None, ...]] = {}
+            first_error: BaseException | None = None
+            for vendor, _client in vendors:
+                indexed: dict[int, tuple[bool | None, int, str]] = {}
+                for future in chain_futures[vendor]:
+                    try:
+                        for index, sample in future.result():
+                            indexed[index] = sample
+                    except CancelledError:
+                        if future.cancelled():
+                            # 在先前的采样失败后取消的、尚未启动的采样。
+                            continue
+                        raise
+                    except BaseException as exc:
+                        # 与串行语义一致：采样期异常原样向上抛；先取完全部
+                        # future 结果，避免未检索的异常在 GC 时刷警告日志。
+                        if first_error is None:
+                            first_error = exc
+                        continue
+                # 缺口只会在同厂商某条链抛错（stop）后出现，此时 first_error
+                # 必已记录，下方统一上抛；正常路径必须收集满 k 个样本。
+                if any(index not in indexed for index in range(self.k)):
+                    continue
+                votes_by_vendor[vendor] = tuple(indexed[index][0] for index in range(self.k))
+        if first_error is not None:
+            raise first_error
         return self._aggregate(item.id, votes_by_vendor)
+
+    def _sample_chain(
+        self,
+        vendor: str,
+        client: JudgeClient,
+        prompt: str,
+        offset: int,
+        stop: threading.Event,
+    ) -> list[tuple[int, tuple[bool | None, int, str]]]:
+        """一条采样链：从 ``offset`` 起按步长串行采样，直到 k 次采完或被停止。
+
+        任一样本调用抛错时置 ``stop`` 并上抛：同厂商其余链看到 ``stop`` 后
+        不再发起新调用，等价于串行循环“失败后不再采样”的语义。
+        """
+        stride = min(self.max_parallel_per_vendor, self.k)
+        samples: list[tuple[int, tuple[bool | None, int, str]]] = []
+        for index in range(offset, self.k, stride):
+            if stop.is_set():
+                break
+            with self._limits[vendor]:
+                if stop.is_set():
+                    break
+                try:
+                    sample = _sample_with_retry(client, prompt, retries=self.max_retries)
+                except BaseException:
+                    stop.set()
+                    raise
+            samples.append((index, sample))
+        return samples
 
     def _aggregate(
         self,

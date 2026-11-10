@@ -319,6 +319,14 @@ def test_agent_judge_section_defaults_to_the_batch_judges(tmp_path: Path) -> Non
     assert batch.agent_judge_slugs == ["claude-sonnet-5", "gpt-5-codex"]
 
 
+def test_judge_max_parallel_per_vendor(tmp_path: Path) -> None:
+    assert load_batch(_write(tmp_path, "a.yaml", BATCH_YAML)).judge_max_parallel_per_vendor == 5
+    configured = BATCH_YAML + "judge_max_parallel_per_vendor: 3\n"
+    assert load_batch(_write(tmp_path, "b.yaml", configured)).judge_max_parallel_per_vendor == 3
+    with pytest.raises(ConfigError):
+        load_batch(_write(tmp_path, "c.yaml", BATCH_YAML + "judge_max_parallel_per_vendor: 0\n"))
+
+
 @pytest.mark.parametrize(
     "section",
     [

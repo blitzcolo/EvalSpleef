@@ -176,12 +176,16 @@ class _Evaluation:
                 )
                 for vendor, model in self._clients.items()
             }
+            # 每次 complete() 都会启动一个裁判沙箱，且客户端按到达顺序给样本编号；
+            # 每家厂商保持串行（跨厂商仍并发），失败时未启动的采样会被取消，
+            # 与并行化之前的沙箱数量/拆除语义一致。
             panel = JudgePanel(
                 clients,
                 target_model=self._ctx.endpoint.model_alias,
                 target_family=settings.target_family,
                 k=settings.k,
                 max_retries=0,
+                max_parallel_per_vendor=1,
                 allow_single_vendor=settings.allow_single_vendor,
                 roles=dict.fromkeys(clients, "agent_judge"),
             )
