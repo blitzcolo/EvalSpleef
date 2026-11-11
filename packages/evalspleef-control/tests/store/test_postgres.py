@@ -20,6 +20,8 @@ import pytest
 import pytest_asyncio
 
 from evalspleef.control.store import (
+    GradeRepository,
+    GradeRow,
     ModelSpecExistsError,
     ModelSpecRepository,
     ModelSpecRow,
@@ -210,13 +212,51 @@ async def test_trial_roundtrip_and_transaction_rollback(db: PostgresDatabase) ->
         updated_at=NOW,
     )
     await repo.upsert(row)
-    await repo.update_state("web-001.m.s.e1.t01", "leased", updated_at=NOW)
-    fetched = await repo.get("web-001.m.s.e1.t01")
+    await repo.update_state("2026-11-b1", "web-001.m.s.e1.t01", "leased", updated_at=NOW)
+    fetched = await repo.get("2026-11-b1", "web-001.m.s.e1.t01")
     assert fetched is not None and fetched.state == "leased"
 
     with pytest.raises(RuntimeError, match="boom"):
         async with db.transaction():
-            await repo.update_state("web-001.m.s.e1.t01", "scored")
+            await repo.update_state("2026-11-b1", "web-001.m.s.e1.t01", "scored")
             raise RuntimeError("boom")
-    rolled_back = await repo.get("web-001.m.s.e1.t01")
+    rolled_back = await repo.get("2026-11-b1", "web-001.m.s.e1.t01")
     assert rolled_back is not None and rolled_back.state == "leased"
+
+
+async def test_two_batches_with_the_same_config_coexist(db: PostgresDatabase) -> None:
+    """Identical trial ids under two batches stay separate rows (NFR-01 rerun stability)."""
+    trials = TrialRepository(db)
+    grades = GradeRepository(db)
+    for batch in ("2026-11-b1", "2026-11-b2"):
+        await trials.upsert(
+            TrialRow(
+                trial_id="web-001.m.s.e1.t01",
+                batch_id=batch,
+                task_id="web-001",
+                model="m",
+                shell="s",
+                state="scored",
+                validity="valid",
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        )
+        await grades.insert(
+            GradeRow(
+                trial_id="web-001.m.s.e1.t01",
+                batch_id=batch,
+                version=1,
+                tier="A",
+                status="final",
+                decided_by="auto",
+                payload={"rule": "G-FIXTURE"},
+                created_at=NOW,
+            )
+        )
+    assert len(await trials.list_by_batch("2026-11-b1")) == 1
+    assert len(await trials.list_by_batch("2026-11-b2")) == 1
+    assert (await trials.get("2026-11-b1", "web-001.m.s.e1.t01")).batch_id == "2026-11-b1"  # type: ignore[union-attr]
+    for batch in ("2026-11-b1", "2026-11-b2"):
+        versions = await grades.list_by_trial(batch, "web-001.m.s.e1.t01")
+        assert [(g.version, g.tier) for g in versions] == [(1, "A")]

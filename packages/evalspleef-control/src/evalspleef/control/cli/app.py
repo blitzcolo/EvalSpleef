@@ -1939,7 +1939,7 @@ async def _batch_report(
         trial_rows = await ctx.trials.list_by_batch(batch_id)
         grades_by_trial: dict[str, list[GradeRow]] = {}
         for row in trial_rows:
-            grade_rows = await ctx.grades.list_by_trial(row.trial_id)
+            grade_rows = await ctx.grades.list_by_trial(row.batch_id, row.trial_id)
             grades_by_trial[row.trial_id] = grade_rows
             record: Mapping[str, Any] = {
                 "trial_id": row.trial_id,
@@ -2056,7 +2056,7 @@ def trials_list(
     async def run() -> int:
         async with AppContext(_store_settings(store_url, events_url, state_dir)) as ctx:
             for row in await ctx.trials.list_by_batch(batch_id):
-                grades = await ctx.grades.list_by_trial(row.trial_id)
+                grades = await ctx.grades.list_by_trial(row.batch_id, row.trial_id)
                 latest = (
                     f"v{grades[-1].version} {grades[-1].tier} ({grades[-1].decided_by})"
                     if grades
@@ -2070,6 +2070,7 @@ def trials_list(
 
 @trials_app.command("regrade")
 def trials_regrade(
+    batch_id: str = typer.Option(..., "--batch-id"),
     trial_id: str = typer.Option(..., "--trial-id"),
     reason: str = typer.Option(..., "--reason"),
     store_url: str | None = _STORE_OPT,
@@ -2079,7 +2080,7 @@ def trials_regrade(
     """Re-run grading on the recorded inputs and append a grade version (appendix B.6)."""
 
     async def action(ops: TrialOperations) -> str:
-        row = await ops.regrade(trial_id, reason=reason)
+        row = await ops.regrade(batch_id, trial_id, reason=reason)
         return f"{trial_id}  grade v{row.version}: {row.tier} ({row.rule_id})"
 
     _run(_trial_operation(store_url, events_url, state_dir, action))
@@ -2087,6 +2088,7 @@ def trials_regrade(
 
 @trials_app.command("void")
 def trials_void(
+    batch_id: str = typer.Option(..., "--batch-id"),
     trial_id: str = typer.Option(..., "--trial-id"),
     reason: str = typer.Option(..., "--reason"),
     store_url: str | None = _STORE_OPT,
@@ -2096,7 +2098,7 @@ def trials_void(
     """Invalidate a trial along the legal path; it leaves the leaderboard (appendix B.6)."""
 
     async def action(ops: TrialOperations) -> str:
-        state = await ops.void(trial_id, reason=reason)
+        state = await ops.void(batch_id, trial_id, reason=reason)
         return f"{trial_id}  -> {state}"
 
     _run(_trial_operation(store_url, events_url, state_dir, action))
@@ -2121,6 +2123,7 @@ def trials_expire_paused(
 
 @trials_app.command("resolve")
 def trials_resolve(
+    batch_id: str = typer.Option(..., "--batch-id"),
     trial_id: str = typer.Option(..., "--trial-id"),
     tier: str = typer.Option(..., "--tier", help="P, A, B+, B, C+, C, D or F"),
     penalty: int = typer.Option(..., "--penalty"),
@@ -2134,7 +2137,7 @@ def trials_resolve(
 
     async def action(ops: TrialOperations) -> str:
         row = await ops.resolve(
-            trial_id, tier=tier, penalty=penalty, reviewer=reviewer, reason=reason
+            batch_id, trial_id, tier=tier, penalty=penalty, reviewer=reviewer, reason=reason
         )
         return f"{trial_id}  grade v{row.version}: {row.tier} (human, {reviewer})"
 

@@ -190,6 +190,7 @@ Prompts come from a seeded generator (`--seed`, random when unset, always record
 - `spleef trials resolve`: record a human decision for a trial waiting in the manual queue.
 - `spleef trials expire-paused --batch-id <id>`: invalidate trials paused for a human for more than 30 minutes.
 - `spleef trials regrade` / `spleef trials void`: regrade from the recorded inputs, or take a trial out of the leaderboard.
+- `spleef trials resolve` / `regrade` / `void` take `--batch-id` alongside `--trial-id`: the trial id format does not include the batch, so one store can hold the same trial id under several batches (a rerun of the same config), and the operator commands act on exactly one batch's trial.
 
 Results live in the store (`SPLEEF_STORE_URL`), the append-only event log (`SPLEEF_EVENTS_URL`, the authority every row is projected from), and the release directory written by `batch report --release`: leaderboard, cell drill-down, version manifest, probe summary, inference performance, judge panel and costs.
 
@@ -281,6 +282,9 @@ uv run spleef batch stability --batch-id 2026-11-b1 --batch-id 2026-11-b2
 `regrade-agreement` lists every disagreement (stored tier vs recomputed tier) and
 never writes: it is a check, not a regrade. `stability` compares cell tiers (the
 median of the cell's latest recorded grades) across batches and reports the exact
-agreement alongside the within-1 share. `regrade-agreement` exits 3 with an
+agreement alongside the within-1 share. The trial and grade projections key by
+`(batch_id, trial_id)` — the trial id format is frozen, so two batches planned
+from the same config mint identical trial ids and one store holds both — and
+`stability` reads those store projections directly. `regrade-agreement` exits 3 with an
 undecided gate when no regrade reproduced a stored tier, because there is then no
 agreement share to compare against 0.95.

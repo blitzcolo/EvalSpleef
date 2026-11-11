@@ -62,8 +62,8 @@ class TrialOperations:
     grades: GradeRepository
     now: Callable[[], str]
 
-    async def regrade(self, trial_id: str, *, reason: str) -> GradeRow:
-        row, log = await self._load(trial_id)
+    async def regrade(self, batch_id: str, trial_id: str, *, reason: str) -> GradeRow:
+        row, log = await self._load(batch_id, trial_id)
         if row.state != str(TrialState.SCORED):
             raise OperationRefused(f"{trial_id} is {row.state}; only a scored trial is regraded")
         inputs = recorded_inputs(log)
@@ -91,8 +91,8 @@ class TrialOperations:
         )
         return stored
 
-    async def void(self, trial_id: str, *, reason: str) -> TrialState:
-        row, log = await self._load(trial_id)
+    async def void(self, batch_id: str, trial_id: str, *, reason: str) -> TrialState:
+        row, log = await self._load(batch_id, trial_id)
         machine = replay_trial_machine(log, trial_id=trial_id)
         if machine.state is TrialState.INVALID:
             raise OperationRefused(f"{trial_id} is already invalid")
@@ -124,11 +124,18 @@ class TrialOperations:
         return machine.state
 
     async def resolve(
-        self, trial_id: str, *, tier: str, penalty: int, reviewer: str, reason: str
+        self,
+        batch_id: str,
+        trial_id: str,
+        *,
+        tier: str,
+        penalty: int,
+        reviewer: str,
+        reason: str,
     ) -> GradeRow:
         if len(reason) < 8:
             raise OperationRefused("a human decision needs a reason of at least 8 characters")
-        row, log = await self._load(trial_id)
+        row, log = await self._load(batch_id, trial_id)
         machine = replay_trial_machine(log, trial_id=trial_id)
         if machine.state not in (TrialState.PAUSED_MANUAL, TrialState.SCORED):
             raise OperationRefused(
@@ -136,7 +143,7 @@ class TrialOperations:
             )
         decided_at = self.now()
         grade = self._human_grade(row, log, decided_at, tier=Tier(tier), penalty=penalty)
-        existing = await self.grades.list_by_trial(trial_id)
+        existing = await self.grades.list_by_trial(row.batch_id, trial_id)
         grade.human_override = HumanOverride(
             reviewer=reviewer,
             reason=reason,
@@ -236,10 +243,12 @@ class TrialOperations:
 
     # -- helpers -------------------------------------------------------------------------
 
-    async def _load(self, trial_id: str) -> tuple[TrialRow, list[EventEnvelope]]:
-        row = await self.trials.get(trial_id)
+    async def _load(self, batch_id: str, trial_id: str) -> tuple[TrialRow, list[EventEnvelope]]:
+        row = await self.trials.get(batch_id, trial_id)
         if row is None:
-            raise OperationRefused(f"no trial {trial_id!r} in the result store")
+            raise OperationRefused(
+                f"no trial {trial_id!r} of batch {batch_id!r} in the result store"
+            )
         return row, await self.events.read(row.batch_id, trial_id=trial_id)
 
     def _human_grade(
@@ -273,11 +282,12 @@ class TrialOperations:
         return grade
 
     async def _append_grade(self, row: TrialRow, grade: Grade, *, rule_id: str | None) -> GradeRow:
-        existing = await self.grades.list_by_trial(row.trial_id)
+        existing = await self.grades.list_by_trial(row.batch_id, row.trial_id)
         grade.grade_version = max((g.version for g in existing), default=0) + 1
         grade.supersedes = existing[-1].version if existing else None
         stored = GradeRow(
             trial_id=row.trial_id,
+            batch_id=row.batch_id,
             version=grade.grade_version,
             tier=str(grade.tier),
             status=str(grade.status),

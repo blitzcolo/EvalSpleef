@@ -477,7 +477,11 @@ class GatewayKeyRepository:
 
 
 class TrialRepository:
-    """Trial projection rows (state changes are event-driven; see ``events``)."""
+    """Trial projection rows (state changes are event-driven; see ``events``).
+
+    Rows key by ``(batch_id, trial_id)``: the trial id format is frozen and two
+    batches planned from the same config mint identical trial ids.
+    """
 
     _COLUMNS = (
         "trial_id",
@@ -499,14 +503,19 @@ class TrialRepository:
         self._db = db
 
     async def upsert(self, row: TrialRow) -> None:
-        await self._db.execute(_upsert_sql("trial", self._COLUMNS, "trial_id"), row.params())
+        await self._db.execute(
+            _upsert_sql("trial", self._COLUMNS, "batch_id, trial_id"), row.params()
+        )
 
-    async def get(self, trial_id: str) -> TrialRow | None:
-        row = await self._db.fetch_one("SELECT * FROM trial WHERE trial_id = %s", (trial_id,))
+    async def get(self, batch_id: str, trial_id: str) -> TrialRow | None:
+        row = await self._db.fetch_one(
+            "SELECT * FROM trial WHERE batch_id = %s AND trial_id = %s", (batch_id, trial_id)
+        )
         return TrialRow.from_row(row) if row else None
 
     async def update_state(
         self,
+        batch_id: str,
         trial_id: str,
         state: str,
         *,
@@ -518,8 +527,8 @@ class TrialRepository:
             "UPDATE trial SET state = %s, "
             "validity = COALESCE(%s, validity), "
             "updated_at = COALESCE(%s, updated_at) "
-            "WHERE trial_id = %s",
-            (state, validity, updated_at, trial_id),
+            "WHERE batch_id = %s AND trial_id = %s",
+            (state, validity, updated_at, batch_id, trial_id),
         )
 
     async def list_by_batch(self, batch_id: str) -> list[TrialRow]:
@@ -530,10 +539,14 @@ class TrialRepository:
 
 
 class GradeRepository:
-    """Grade versions; regrading and overrides append a new version, never overwrite."""
+    """Grade versions; regrading and overrides append a new version, never overwrite.
+
+    Rows key by ``(batch_id, trial_id, version)`` like the trial table.
+    """
 
     _COLUMNS = (
         "trial_id",
+        "batch_id",
         "version",
         "tier",
         "status",
@@ -549,60 +562,74 @@ class GradeRepository:
     async def insert(self, row: GradeRow) -> None:
         try:
             await self._db.execute(
-                "INSERT INTO grade (trial_id, version, tier, status, decided_by, rule_id, payload, "
-                "created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO grade (trial_id, batch_id, version, tier, status, decided_by, rule_id, payload, "
+                "created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 row.params(),
             )
         except INTEGRITY_ERRORS as exc:
             raise ValueError(
-                f"grade version {row.version} already exists for trial {row.trial_id!r}"
+                f"grade version {row.version} already exists for trial {row.trial_id!r} "
+                f"of batch {row.batch_id!r}"
             ) from exc
 
-    async def get(self, trial_id: str, version: int) -> GradeRow | None:
+    async def get(self, batch_id: str, trial_id: str, version: int) -> GradeRow | None:
         row = await self._db.fetch_one(
-            "SELECT * FROM grade WHERE trial_id = %s AND version = %s", (trial_id, version)
+            "SELECT * FROM grade WHERE batch_id = %s AND trial_id = %s AND version = %s",
+            (batch_id, trial_id, version),
         )
         return GradeRow.from_row(row) if row else None
 
-    async def list_by_trial(self, trial_id: str) -> list[GradeRow]:
+    async def list_by_trial(self, batch_id: str, trial_id: str) -> list[GradeRow]:
         rows = await self._db.fetch(
-            "SELECT * FROM grade WHERE trial_id = %s ORDER BY version", (trial_id,)
+            "SELECT * FROM grade WHERE batch_id = %s AND trial_id = %s ORDER BY version",
+            (batch_id, trial_id),
         )
         return [GradeRow.from_row(row) for row in rows]
 
-    async def current(self, trial_id: str) -> GradeRow | None:
+    async def current(self, batch_id: str, trial_id: str) -> GradeRow | None:
         row = await self._db.fetch_one(
-            "SELECT * FROM grade WHERE trial_id = %s ORDER BY version DESC LIMIT 1", (trial_id,)
+            "SELECT * FROM grade WHERE batch_id = %s AND trial_id = %s "
+            "ORDER BY version DESC LIMIT 1",
+            (batch_id, trial_id),
         )
         return GradeRow.from_row(row) if row else None
 
 
 class RoundRepository:
-    """Agent rounds of a trial."""
+    """Agent rounds of a trial; rows key by ``(batch_id, trial_id, round_no)``."""
 
-    _COLUMNS = ("trial_id", "round_no", "started_at", "stopped_at", "agent_steps", "payload")
+    _COLUMNS = (
+        "trial_id",
+        "batch_id",
+        "round_no",
+        "started_at",
+        "stopped_at",
+        "agent_steps",
+        "payload",
+    )
 
     def __init__(self, db: Database) -> None:
         self._db = db
 
     async def upsert(self, row: RoundRow) -> None:
         await self._db.execute(
-            _upsert_sql("round", self._COLUMNS, "trial_id, round_no"), row.params()
+            _upsert_sql("round", self._COLUMNS, "batch_id, trial_id, round_no"), row.params()
         )
 
-    async def list_by_trial(self, trial_id: str) -> list[RoundRow]:
+    async def list_by_trial(self, batch_id: str, trial_id: str) -> list[RoundRow]:
         rows = await self._db.fetch(
-            "SELECT * FROM round WHERE trial_id = %s ORDER BY round_no", (trial_id,)
+            "SELECT * FROM round WHERE batch_id = %s AND trial_id = %s ORDER BY round_no",
+            (batch_id, trial_id),
         )
         return [RoundRow.from_row(row) for row in rows]
 
     async def finish(
-        self, trial_id: str, round_no: int, *, stopped_at: str, agent_steps: int
+        self, batch_id: str, trial_id: str, round_no: int, *, stopped_at: str, agent_steps: int
     ) -> None:
         await self._db.execute(
             "UPDATE round SET stopped_at = %s, agent_steps = %s "
-            "WHERE trial_id = %s AND round_no = %s",
-            (stopped_at, agent_steps, trial_id, round_no),
+            "WHERE batch_id = %s AND trial_id = %s AND round_no = %s",
+            (stopped_at, agent_steps, batch_id, trial_id, round_no),
         )
 
 

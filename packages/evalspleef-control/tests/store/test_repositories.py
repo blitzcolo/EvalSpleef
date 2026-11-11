@@ -274,16 +274,52 @@ async def test_trial_projection_row(db: Database) -> None:
         updated_at=NOW,
     )
     await repo.upsert(row)
-    await repo.update_state("web-001.m.s.e1.t01", "leased", updated_at=LATER)
-    fetched = await repo.get("web-001.m.s.e1.t01")
+    await repo.update_state("2026-11-b1", "web-001.m.s.e1.t01", "leased", updated_at=LATER)
+    fetched = await repo.get("2026-11-b1", "web-001.m.s.e1.t01")
     assert fetched is not None and fetched.state == "leased" and fetched.validity == "pending"
     assert [t.trial_id for t in await repo.list_by_batch("2026-11-b1")] == ["web-001.m.s.e1.t01"]
+
+
+async def test_trial_rows_are_scoped_by_batch(db: Database) -> None:
+    """Two batches planned from the same config mint identical trial ids."""
+    repo = TrialRepository(db)
+    first = TrialRow(
+        trial_id="web-001.m.s.e1.t01",
+        batch_id="2026-11-b1",
+        task_id="web-001",
+        model="m",
+        shell="s",
+        state="scored",
+        validity="valid",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    await repo.upsert(first)
+    # The same trial id under a second batch is a separate row, not an overwrite.
+    await repo.upsert(
+        TrialRow(
+            trial_id="web-001.m.s.e1.t01",
+            batch_id="2026-11-b2",
+            task_id="web-001",
+            model="m",
+            shell="s",
+            state="pending",
+            validity="pending",
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    await repo.update_state("2026-11-b2", "web-001.m.s.e1.t01", "leased", updated_at=LATER)
+    assert await repo.get("2026-11-b1", "web-001.m.s.e1.t01") == first
+    reruns = {row.batch_id: row for row in await repo.list_by_batch("2026-11-b2")}
+    assert reruns["2026-11-b2"].state == "leased"
 
 
 async def test_grade_versions_append(db: Database) -> None:
     repo = GradeRepository(db)
     first = GradeRow(
         trial_id="web-001.m.s.e1.t01",
+        batch_id="2026-11-b1",
         version=1,
         tier="B",
         status="final",
@@ -295,6 +331,7 @@ async def test_grade_versions_append(db: Database) -> None:
     await repo.insert(
         GradeRow(
             trial_id="web-001.m.s.e1.t01",
+            batch_id="2026-11-b1",
             version=2,
             tier="A",
             status="final",
@@ -303,22 +340,82 @@ async def test_grade_versions_append(db: Database) -> None:
             created_at=LATER,
         )
     )
-    assert [g.version for g in await repo.list_by_trial("web-001.m.s.e1.t01")] == [1, 2]
-    current = await repo.current("web-001.m.s.e1.t01")
+    assert [g.version for g in await repo.list_by_trial("2026-11-b1", "web-001.m.s.e1.t01")] == [
+        1,
+        2,
+    ]
+    current = await repo.current("2026-11-b1", "web-001.m.s.e1.t01")
     assert current is not None and current.tier == "A"
     with pytest.raises(ValueError, match="already exists"):
         await repo.insert(first)
 
 
+async def test_grade_rows_are_scoped_by_batch(db: Database) -> None:
+    """The same trial id in two batches gets its own grade versions."""
+    repo = GradeRepository(db)
+    for batch in ("2026-11-b1", "2026-11-b2"):
+        await repo.insert(
+            GradeRow(
+                trial_id="web-001.m.s.e1.t01",
+                batch_id=batch,
+                version=1,
+                tier="B",
+                status="final",
+                decided_by="auto",
+                payload={"rule": "G-F1-B"},
+                created_at=NOW,
+            )
+        )
+        await repo.insert(
+            GradeRow(
+                trial_id="web-001.m.s.e1.t01",
+                batch_id=batch,
+                version=2,
+                tier="A",
+                status="final",
+                decided_by="human",
+                payload={"rule": "G-HUMAN-99", "supersedes": 1},
+                created_at=LATER,
+            )
+        )
+    for batch in ("2026-11-b1", "2026-11-b2"):
+        versions = await repo.list_by_trial(batch, "web-001.m.s.e1.t01")
+        assert [(g.version, g.tier) for g in versions] == [(1, "B"), (2, "A")]
+        assert (await repo.current(batch, "web-001.m.s.e1.t01")).tier == "A"  # type: ignore[union-attr]
+
+
 async def test_round_rows(db: Database) -> None:
     repo = RoundRepository(db)
     await repo.upsert(
-        RoundRow(trial_id="web-001.m.s.e1.t01", round_no=1, started_at=NOW, payload={})
+        RoundRow(
+            trial_id="web-001.m.s.e1.t01",
+            batch_id="2026-11-b1",
+            round_no=1,
+            started_at=NOW,
+            payload={},
+        )
     )
-    await repo.finish("web-001.m.s.e1.t01", 1, stopped_at=LATER, agent_steps=12)
-    rounds = await repo.list_by_trial("web-001.m.s.e1.t01")
+    await repo.finish("2026-11-b1", "web-001.m.s.e1.t01", 1, stopped_at=LATER, agent_steps=12)
+    rounds = await repo.list_by_trial("2026-11-b1", "web-001.m.s.e1.t01")
     assert len(rounds) == 1
     assert rounds[0].stopped_at == LATER and rounds[0].agent_steps == 12
+
+
+async def test_round_rows_are_scoped_by_batch(db: Database) -> None:
+    repo = RoundRepository(db)
+    for batch in ("2026-11-b1", "2026-11-b2"):
+        await repo.upsert(
+            RoundRow(
+                trial_id="web-001.m.s.e1.t01",
+                batch_id=batch,
+                round_no=1,
+                started_at=NOW,
+                payload={"batch": batch},
+            )
+        )
+    for batch in ("2026-11-b1", "2026-11-b2"):
+        (round_row,) = await repo.list_by_trial(batch, "web-001.m.s.e1.t01")
+        assert round_row.payload == {"batch": batch}
 
 
 async def test_artifact_index(db: Database) -> None:

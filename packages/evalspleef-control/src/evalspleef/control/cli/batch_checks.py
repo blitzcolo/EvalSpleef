@@ -1,10 +1,12 @@
 """``spleef batch regrade-agreement`` and ``spleef batch stability`` (AC-09, NFR-01).
 
-Both commands read the batch's recorded events (the authoritative log, AGENTS
-rule 6) and never write: a regrade agreement check recomputes the pure grading
-from the inputs recorded with the grade (the same record ``spleef trials
-regrade`` uses) and compares tiers with the latest recorded grade; stability
-compares cell tiers across batches.
+Neither command writes. Regrade agreement recomputes the pure grading from the
+inputs recorded with the grade (the same record ``spleef trials regrade`` uses)
+and compares tiers with the latest recorded grade; it reads the batch's events
+because the grading inputs are recorded there. Stability compares cell tiers
+across batches and reads the store directly: the trial and grade projections
+key by ``(batch_id, trial_id)``, so two batches planned from the same config
+coexist in one store.
 
 Exit codes: 0 gate passed, 1 below the gate, 3 not enough data in the store.
 """
@@ -24,7 +26,7 @@ from evalspleef.control.observe.agreement import (
     stability_summary,
 )
 from evalspleef.core.events import EventEnvelope, EventType
-from evalspleef.core.models import Tier, median_tier, parse_trial_id
+from evalspleef.core.models import Tier, median_tier
 from evalspleef.core.report import cell_id_for
 
 from ._shared import (
@@ -170,18 +172,15 @@ def batch_regrade_agreement(
     run_coro(run())
 
 
-def _cell_tiers(latest: Mapping[str, Mapping[str, Any]]) -> dict[str, Tier]:
-    """Cell tiers from the latest recorded grades: median over the cell's trials."""
+async def _cell_tiers(ctx: AppContext, batch_id: str) -> dict[str, Tier]:
+    """Cell tiers from the store's latest grades: median over the cell's trials."""
     tiers: dict[str, list[Tier]] = {}
-    for trial_id, payload in latest.items():
-        recorded_grade = payload.get("grade")
-        grade: Mapping[str, Any] = recorded_grade if isinstance(recorded_grade, Mapping) else {}
-        tier = grade.get("tier", payload.get("tier"))
-        if not tier:
+    for row in await ctx.trials.list_by_batch(batch_id):
+        grade = await ctx.grades.current(row.batch_id, row.trial_id)
+        if grade is None:
             continue
-        parts = parse_trial_id(trial_id)
-        cell = cell_id_for(parts.task_id, parts.model, parts.shell)
-        tiers.setdefault(cell, []).append(Tier(str(tier)))
+        cell = cell_id_for(row.task_id, row.model, row.shell)
+        tiers.setdefault(cell, []).append(Tier(grade.tier))
     return {cell: median_tier(cell_tiers) for cell, cell_tiers in tiers.items()}
 
 
@@ -202,10 +201,7 @@ def batch_stability(
 
     async def run() -> int:
         async with AppContext(store_settings(store_url, events_url, state_dir)) as ctx:
-            batch_tiers = [
-                _cell_tiers(_latest_grades(await ctx.events.read(batch_id)))
-                for batch_id in batch_ids
-            ]
+            batch_tiers = [await _cell_tiers(ctx, batch_id) for batch_id in batch_ids]
             try:
                 summary = stability_summary(batch_tiers)
             except NotEnoughDataError as exc:

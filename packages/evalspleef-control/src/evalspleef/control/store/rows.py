@@ -540,6 +540,7 @@ class GradeRow:
     """One grade version for a trial; regrading appends, never overwrites."""
 
     trial_id: str
+    batch_id: str
     version: int
     tier: str
     status: str
@@ -551,6 +552,7 @@ class GradeRow:
     def params(self) -> tuple[Any, ...]:
         return (
             self.trial_id,
+            self.batch_id,
             self.version,
             self.tier,
             self.status,
@@ -564,6 +566,7 @@ class GradeRow:
     def from_row(cls, row: Row) -> Self:
         return cls(
             trial_id=str(row["trial_id"]),
+            batch_id=str(row["batch_id"]),
             version=int(row["version"]),
             tier=str(row["tier"]),
             status=str(row["status"]),
@@ -579,6 +582,7 @@ class RoundRow:
     """One agent round of a trial."""
 
     trial_id: str
+    batch_id: str
     round_no: int
     started_at: str
     payload: dict[str, Any]
@@ -588,6 +592,7 @@ class RoundRow:
     def params(self) -> tuple[Any, ...]:
         return (
             self.trial_id,
+            self.batch_id,
             self.round_no,
             self.started_at,
             self.stopped_at,
@@ -599,6 +604,7 @@ class RoundRow:
     def from_row(cls, row: Row) -> Self:
         return cls(
             trial_id=str(row["trial_id"]),
+            batch_id=str(row["batch_id"]),
             round_no=int(row["round_no"]),
             started_at=str(row["started_at"]),
             payload=dict(_json_loads(row["payload"], {})),

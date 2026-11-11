@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -423,6 +424,8 @@ def test_regrade_agreement_pass_then_disagreement(
         [
             "trials",
             "resolve",
+            "--batch-id",
+            "2026-11-b1",
             "--trial-id",
             "logic-001.demo.scripted.e1.t01",
             "--tier",
@@ -456,9 +459,11 @@ def test_stability_pass_then_below_gate(
     tmp_path: Path,
 ) -> None:
     _run_batch(cli_runner, args, env, monkeypatch, fake_server, ALIGNED, batch_id="2026-11-b1")
-    # second batch, same config, separate store but the shared event log
-    store2 = f"sqlite:///{tmp_path}/store2.sqlite3"
-    monkeypatch.setenv("SPLEEF_STORE_URL", store2)
+    # The same config runs again into the SAME store (NFR-01 rerun stability). A hosted
+    # endpoint is retired after its batch, so restore the row like an operator re-enabling
+    # the same deployment before the rerun.
+    with sqlite3.connect(tmp_path / "store.sqlite3") as db:
+        db.execute("UPDATE endpoint SET state = 'ready' WHERE model_slug = 'demo'")
     _run_batch(cli_runner, args, env, monkeypatch, fake_server, ALIGNED, batch_id="2026-11-b2")
     result = cli_runner.invoke(
         app,
@@ -476,6 +481,8 @@ def test_stability_pass_then_below_gate(
         [
             "trials",
             "resolve",
+            "--batch-id",
+            "2026-11-b2",
             "--trial-id",
             "logic-001.demo.scripted.e1.t01",
             "--tier",

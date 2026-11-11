@@ -558,9 +558,10 @@ class BatchDriver:
             float(usage.get(key) or 0.0)
             for key in ("agent_cost_usd", "judge_cost_usd", "user_cost_usd")
         )
+        # Scoped by batch: two batches planned from the same config mint the same trial ids.
         await self._ledger.record(
             CostEntry(
-                entry_id=f"{trial.trial_id}:tokens",
+                entry_id=f"{trial.batch_id}:{trial.trial_id}:tokens",
                 batch_id=trial.batch_id,
                 kind=CostKind.TOKENS,
                 source="runner",
@@ -619,6 +620,7 @@ class BatchDriver:
                 await self._grades.insert(
                     GradeRow(
                         trial_id=trial.trial_id,
+                        batch_id=trial.batch_id,
                         version=int(grade.get("grade_version", position)),
                         tier=str(grade["tier"]),
                         status=str(grade.get("status", "final")),

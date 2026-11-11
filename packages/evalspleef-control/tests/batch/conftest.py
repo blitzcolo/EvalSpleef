@@ -196,6 +196,7 @@ class Harness:
     directory: Directory
     db: Database
     events: EventStore
+    batch: str
     trials: TrialRepository
     grades: GradeRepository
     lease_rows: SandboxLeaseRepository
@@ -226,7 +227,7 @@ class Harness:
     ) -> FreezeRecord:
         """Plan and freeze again with some inputs changed."""
         plan = self.planner.plan(
-            BATCH,
+            self.batch,
             models or self.models,
             tasks or self.tasks,
             epochs=self.epochs,
@@ -236,7 +237,7 @@ class Harness:
         return build_freeze_record(plan, isolation_profiles=profiles or self.profiles, **kwargs)
 
     async def events_of(self, *types: EventType) -> list[EventEnvelope]:
-        return [e for e in await self.events.read(BATCH) if e.type in types]
+        return [e for e in await self.events.read(self.batch) if e.type in types]
 
     def freeze_and_run(self) -> Awaitable[Any]:
         self.driver.freeze(lint_passed=True, budget_approved=True)
@@ -286,6 +287,8 @@ def model_factory() -> Callable[..., ModelPlanInput]:
 @pytest_asyncio.fixture
 async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
     closers: list[Callable[[], Awaitable[None]]] = []
+    # Lease ids must stay unique across harnesses sharing one store (two-batch tests).
+    counter = itertools.count(1)
 
     async def make(
         *,
@@ -303,6 +306,9 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
         endpoint_states: EndpointStates | None = None,
         deadline_s: float | None = None,
         lease_kwargs: Mapping[str, Any] | None = None,
+        batch: str = BATCH,
+        db: Database | None = None,
+        events: EventStore | None = None,
         **freeze_overrides: Any,
     ) -> Harness:
         clock = FakeClock()
@@ -320,17 +326,20 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
             for provider in providers.values():
                 provider.set_quota(provider_quota)
         directory = Directory(providers)
-        db = await connect("sqlite:///:memory:")
-        await migrate(db)
-        events = await open_event_store("sqlite:///:memory:")
-        closers.extend([db.close, events.close])
+        database = db if db is not None else await connect("sqlite:///:memory:")
+        if db is None:
+            closers.append(database.close)
+        await migrate(database)
+        event_store = events if events is not None else await open_event_store("sqlite:///:memory:")
+        if events is None:
+            closers.append(event_store.close)
 
         model_list = list(
             models or [make_model(slug) for slug in ["alpha", "beta", "gamma"][:n_models]]
         )
         task_list = list(tasks or [make_task(f"web-{n:03d}") for n in range(1, n_tasks + 1)])
         planner = BatchPlanner(StaticMatcher(directory))
-        plan = planner.plan(BATCH, model_list, task_list, epochs=epochs, budget_cap_usd=budget_cap)
+        plan = planner.plan(batch, model_list, task_list, epochs=epochs, budget_cap_usd=budget_cap)
         profile_map = dict(profiles or {n: p.isolation_profile() for n, p in providers.items()})
         freeze_kwargs: dict[str, Any] = {
             "gateway_version": "gw-1.0",
@@ -348,19 +357,18 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
             capacity or [CapacitySpec(name, configured_limit=4) for name in instances],
             clock=clock.now,
         )
-        counter = itertools.count(1)
-        lease_rows = SandboxLeaseRepository(db)
+        lease_rows = SandboxLeaseRepository(database)
         manager = LeaseManager(
             directory,
             lease_rows,
-            events,
+            event_store,
             now=lambda: NOW,
             new_id=lambda: f"{next(counter):04d}",
             **(lease_kwargs or {}),
         )
-        executor = FakeExecutor(events)
-        trials = TrialRepository(db)
-        grades = GradeRepository(db)
+        executor = FakeExecutor(event_store)
+        trials = TrialRepository(database)
+        grades = GradeRepository(database)
         sleeps: list[float] = []
 
         async def record_sleep(seconds: float) -> None:
@@ -374,20 +382,21 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
             leases=manager,
             trials=trials,
             grades=grades,
-            events=events,
+            events=event_store,
             endpoint_states=endpoint_states or AlwaysWarm(),
             isolation_profiles=profile_map,
             now=lambda: NOW,
             deadline_s=deadline_s,
             today=TODAY,
-            ledger=CostLedger(db),
+            ledger=CostLedger(database),
             sleep=record_sleep,
         )
         return Harness(
             clock=clock,
             directory=directory,
-            db=db,
-            events=events,
+            db=database,
+            events=event_store,
+            batch=batch,
             trials=trials,
             grades=grades,
             lease_rows=lease_rows,

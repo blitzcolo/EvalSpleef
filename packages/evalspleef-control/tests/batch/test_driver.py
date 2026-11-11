@@ -90,7 +90,7 @@ async def test_results_reach_the_report_the_grade_table_and_the_freeze_hash(buil
     assert {cell.status for cell in cells} == {CellStatus.SCORED}
     assert {str(cell.tier) for cell in cells} == {"A"}
     assert {cell.trial_count for cell in cells} == {3}
-    grades = await h.grades.list_by_trial(TRIAL)
+    grades = await h.grades.list_by_trial(BATCH, TRIAL)
     assert [(g.version, g.tier, g.status) for g in grades] == [(1, "A", "final")]
     assert result.version_matrix_hash == h.freeze.version_matrix_hash
     rows = await h.trials.list_by_batch(BATCH)
@@ -102,7 +102,7 @@ async def test_the_grade_row_records_the_deciding_rule(build) -> None:
 
     await h.freeze_and_run()
 
-    grades = await h.grades.list_by_trial(TRIAL)
+    grades = await h.grades.list_by_trial(BATCH, TRIAL)
     assert [g.rule_id for g in grades] == ["G-FIXTURE"]
 
 
@@ -220,7 +220,7 @@ async def test_each_trial_books_its_model_spend_in_the_cost_ledger(build) -> Non
     # The scored trial carries agent 1.5 + judge 0.25 + simulated user 0.05 USD; the trial
     # refused before its agent started spent nothing and has no record to book.
     assert [(e.entry_id, e.source, e.quantity) for e in entries] == [
-        ("web-001.alpha.terminus.e1.t01:tokens", "runner", 4000.0)
+        ("2026-11-b1:web-001.alpha.terminus.e1.t01:tokens", "runner", 4000.0)
     ]
     assert entries[0].amount_usd == pytest.approx(1.8)
 
@@ -463,3 +463,35 @@ async def test_a_deferred_trial_is_not_deferred_twice(build) -> None:
         False,
         None,
     )
+
+
+async def test_two_batches_with_the_same_config_share_one_result_store(build) -> None:
+    """NFR-01 rerun stability: the same config runs twice against one store (2026-11 defect:
+    the trial ids collide because they do not include the batch, so the second run's
+    trial rows overwrote the first and its grade version 1 re-insert failed)."""
+    first = await build(batch="2026-11-b1")
+    one = await first.freeze_and_run()
+    # The same config planned again: identical trial ids, one shared store and event log.
+    second = await build(batch="2026-11-b2", db=first.db, events=first.events)
+    two = await second.freeze_and_run()
+
+    assert one.state is BatchState.GRADED and two.state is BatchState.GRADED
+    for harness, batch in ((first, "2026-11-b1"), (second, "2026-11-b2")):
+        rows = await harness.trials.list_by_batch(batch)
+        assert len(rows) == 1 and rows[0].trial_id == TRIAL
+        assert {row.state for row in rows} == {"scored"}
+        for row in rows:
+            grades = await harness.grades.list_by_trial(row.batch_id, row.trial_id)
+            assert [(g.version, g.tier) for g in grades] == [(1, "A")]
+        # The batch's events replay cleanly against its own projection rows.
+        report = await verify_projection(harness.events, harness.db, batch_id=batch)
+        assert report.ok, report.mismatches
+    # The first batch's rows survived the second run: both stores stay readable.
+    reruns = {row.batch_id: row for row in await first.trials.list_by_batch("2026-11-b1")}
+    assert list(reruns) == ["2026-11-b1"] and reruns["2026-11-b1"].state == "scored"
+    reruns = {row.batch_id: row for row in await second.trials.list_by_batch("2026-11-b2")}
+    assert list(reruns) == ["2026-11-b2"] and reruns["2026-11-b2"].state == "scored"
+    # Both batches booked their token cost under batch-scoped entry ids.
+    for harness, batch in ((first, "2026-11-b1"), (second, "2026-11-b2")):
+        entries = await CostLedger(harness.db).entries(batch)
+        assert [entry.entry_id for entry in entries] == [f"{batch}:{TRIAL}:tokens"]

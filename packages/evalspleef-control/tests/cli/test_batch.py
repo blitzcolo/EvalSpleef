@@ -186,7 +186,7 @@ def test_batch_run_and_report(
     trial_id = "logic-001.demo.scripted.e1.t01"
     listed = cli_runner.invoke(app, ["trials", "list", "--batch-id", "2026-11-b1"])
     assert f"{trial_id}\tpaused_manual\tmanual\t-" in listed.output
-    decision = ["--tier", "B", "--penalty", "4", "--reviewer", "alice"]
+    decision = ["--batch-id", "2026-11-b1", "--tier", "B", "--penalty", "4", "--reviewer", "alice"]
     resolved = cli_runner.invoke(
         app,
         ["trials", "resolve", "--trial-id", trial_id, *decision, "--reason", "judge outage, read"],
@@ -195,13 +195,33 @@ def test_batch_run_and_report(
     listed = cli_runner.invoke(app, ["trials", "list", "--batch-id", "2026-11-b1"])
     assert f"{trial_id}\tscored\tvalid\tv1 B (human)" in listed.output
     voided = cli_runner.invoke(
-        app, ["trials", "void", "--trial-id", trial_id, "--reason", "task bug found"]
+        app,
+        [
+            "trials",
+            "void",
+            "--batch-id",
+            "2026-11-b1",
+            "--trial-id",
+            trial_id,
+            "--reason",
+            "task bug found",
+        ],
     )
     assert voided.exit_code == 0, voided.output
     listed = cli_runner.invoke(app, ["trials", "list", "--batch-id", "2026-11-b1"])
     assert f"{trial_id}\tinvalid\tinvalid" in listed.output
     refused = cli_runner.invoke(
-        app, ["trials", "regrade", "--trial-id", trial_id, "--reason", "after void"]
+        app,
+        [
+            "trials",
+            "regrade",
+            "--batch-id",
+            "2026-11-b1",
+            "--trial-id",
+            trial_id,
+            "--reason",
+            "after void",
+        ],
     )
     assert refused.exit_code == 1
 

@@ -72,6 +72,7 @@ async def finished(h: Any, db: Database) -> TrialOperations:
         await grades.insert(
             GradeRow(
                 trial_id=TRIAL_ID,
+                batch_id=BATCH,
                 version=int(grade["grade_version"]),
                 tier=str(grade["tier"]),
                 status=str(grade["status"]),
@@ -95,9 +96,9 @@ async def test_regrade_appends_an_identical_version_from_the_recorded_inputs(
     h = await harness_factory(rounds=[rnd()])
     ops = await finished(h, db)
 
-    regraded = await ops.regrade(TRIAL_ID, reason="verifier image patched")
+    regraded = await ops.regrade(BATCH, TRIAL_ID, reason="verifier image patched")
 
-    versions = await ops.grades.list_by_trial(TRIAL_ID)
+    versions = await ops.grades.list_by_trial(BATCH, TRIAL_ID)
     assert [g.version for g in versions] == [1, 2]
     assert regraded.payload["supersedes"] == 1
     # Grading is a pure function of the recorded inputs: same tier, penalty and rule.
@@ -113,17 +114,17 @@ async def test_void_takes_a_scored_trial_out_post_hoc(
     h = await harness_factory(rounds=[rnd()])
     ops = await finished(h, db)
 
-    assert str(await ops.void(TRIAL_ID, reason="task bug found after release")) == "invalid"
+    assert str(await ops.void(BATCH, TRIAL_ID, reason="task bug found after release")) == "invalid"
 
-    row = await ops.trials.get(TRIAL_ID)
+    row = await ops.trials.get(BATCH, TRIAL_ID)
     assert row is not None and (row.state, row.validity) == ("invalid", "invalid")
     (notice,) = await h.of_type("trial.invalidated")
     assert notice.payload["transition"]["event"] == "invalidate_post_hoc"
     await assert_projected(h, db)
     with pytest.raises(OperationRefused):
-        await ops.void(TRIAL_ID, reason="again")
+        await ops.void(BATCH, TRIAL_ID, reason="again")
     with pytest.raises(OperationRefused):
-        await ops.regrade(TRIAL_ID, reason="an invalid trial has no grade to redo")
+        await ops.regrade(BATCH, TRIAL_ID, reason="an invalid trial has no grade to redo")
 
 
 async def test_resolve_scores_a_paused_trial_with_the_human_grade(
@@ -132,16 +133,21 @@ async def test_resolve_scores_a_paused_trial_with_the_human_grade(
     final = make_result(manual_reasons=["the judge returned no usable verdict"])
     h = await harness_factory(rounds=[rnd()], final=final)
     ops = await finished(h, db)
-    assert (await ops.trials.get(TRIAL_ID)).state == "paused_manual"  # type: ignore[union-attr]
+    assert (await ops.trials.get(BATCH, TRIAL_ID)).state == "paused_manual"  # type: ignore[union-attr]
 
     stored = await ops.resolve(
-        TRIAL_ID, tier="B", penalty=4, reviewer="alice", reason="judge outage, read by hand"
+        BATCH,
+        TRIAL_ID,
+        tier="B",
+        penalty=4,
+        reviewer="alice",
+        reason="judge outage, read by hand",
     )
 
     assert (stored.version, stored.tier, stored.decided_by) == (1, "B", "human")
     assert stored.payload["human_override"]["reviewer"] == "alice"
     assert stored.payload["decision"]["rule_id"] == "G-HUMAN-99"
-    row = await ops.trials.get(TRIAL_ID)
+    row = await ops.trials.get(BATCH, TRIAL_ID)
     assert row is not None and (row.state, row.validity) == ("scored", "valid")
     await assert_projected(h, db)
 
@@ -153,13 +159,18 @@ async def test_resolve_overrides_a_scored_trial_with_a_new_version(
     ops = await finished(h, db)
 
     stored = await ops.resolve(
-        TRIAL_ID, tier="C", penalty=9, reviewer="arbiter-1", reason="arbitration overturned"
+        BATCH,
+        TRIAL_ID,
+        tier="C",
+        penalty=9,
+        reviewer="arbiter-1",
+        reason="arbitration overturned",
     )
 
     assert (stored.version, stored.tier) == (2, "C")
     assert stored.payload["human_override"]["previous_tier"] == "P"
     with pytest.raises(OperationRefused):
-        await ops.resolve(TRIAL_ID, tier="C", penalty=9, reviewer="x", reason="short")
+        await ops.resolve(BATCH, TRIAL_ID, tier="C", penalty=9, reviewer="x", reason="short")
     await assert_projected(h, db)
 
 
@@ -186,7 +197,7 @@ async def test_a_trial_paused_past_the_window_is_invalidated_as_p5(
     ops.now = lambda: at(31)
     assert await ops.expire_paused(BATCH) == [TRIAL_ID]
 
-    row = await ops.trials.get(TRIAL_ID)
+    row = await ops.trials.get(BATCH, TRIAL_ID)
     assert row is not None and (row.state, row.validity) == ("invalid", "invalid")
     (notice,) = await h.of_type("trial.invalidated")
     assert (notice.payload["code"], notice.payload["retry"]) == ("P5", False)
