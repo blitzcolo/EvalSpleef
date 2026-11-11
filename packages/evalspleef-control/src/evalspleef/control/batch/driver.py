@@ -7,6 +7,9 @@ hands each one to a :class:`~.executor.TrialExecutor` with leased sandboxes. A t
 incremented index, at most three times (PRD appendix B.6). Trial rows, grade rows and events are
 written through the control store as outcomes arrive, and ``core.report.BatchReport`` aggregates
 the cells at the end.
+
+Capacity counts sandboxes, not trials: a grant reserves the trial's agent and verifier slots
+up front, so a running trial always fits on its carrier together with its verifier.
 """
 
 from __future__ import annotations
@@ -33,12 +36,12 @@ from ..ledger import CostEntry, CostKind, CostLedger
 from ..scheduling import (
     CapacityUnavailable,
     HostLoss,
-    Reservation,
     ResourceRequest,
     RetryDecision,
     Scheduler,
     SchedulerAlert,
     Ticket,
+    TrialGrant,
     WorkItem,
     priority_for,
     retry_decision,
@@ -265,6 +268,8 @@ class BatchDriver:
             routes=trial.agent_routes,
             request=ResourceRequest(requirements.cpus, requirements.memory_mb),
             priority=priority_for(requirements, rerun=trial.attempt > 0),
+            verifier_routes=trial.verifier_routes,
+            verifier_request=ResourceRequest(requirements.cpus, requirements.memory_mb),
         )
 
     async def _chain(
@@ -309,7 +314,7 @@ class BatchDriver:
 
     async def _attempt(self, trial: PlannedTrial, ticket: Ticket) -> TrialOutcome:
         try:
-            reservation = await ticket.wait()
+            grant = await ticket.wait()
         except CapacityUnavailable as exc:
             return TrialOutcome("invalid", reason=f"CapacityUnavailable: {exc.message}")
         except asyncio.CancelledError:
@@ -319,7 +324,7 @@ class BatchDriver:
             refusal = await self._admit(trial)
             if refusal is not None:
                 return refusal
-            return await self._run_leased(trial, reservation)
+            return await self._run_leased(trial, grant)
         except SpleefError as exc:
             reason = f"{type(exc).__name__}: {exc.message}"
             if _is_infra_failure(exc):
@@ -327,7 +332,7 @@ class BatchDriver:
             return TrialOutcome("invalid", reason=reason, error_class=exc.error_class)
         finally:
             # Sandboxes are already destroyed by now, so the provider quota is free again.
-            self._scheduler.release(reservation)
+            self._scheduler.release(grant)
 
     async def _admit(self, trial: PlannedTrial) -> TrialOutcome | None:
         """Check the batch budget before a trial starts (PRD B.5); a refusal when it would not fit.
@@ -366,18 +371,21 @@ class BatchDriver:
             ),
         )
 
-    async def _run_leased(self, trial: PlannedTrial, reservation: Reservation) -> TrialOutcome:
+    async def _run_leased(self, trial: PlannedTrial, grant: TrialGrant) -> TrialOutcome:
         async with AsyncExitStack() as stack:
             agent = await stack.enter_async_context(
                 self._leases.lease(
-                    self._lease_request(trial, "agent", reservation.instance, reservation.host_id)
+                    self._lease_request(trial, "agent", grant.agent.instance, grant.agent.host_id)
                 )
             )
             await self._trials.upsert(self._row(trial, TrialState.LEASED, Validity.PENDING))
 
             async def open_verifier() -> LeaseHandle:
-                if reservation.instance in trial.verifier_routes:
-                    instance, host_id = reservation.instance, reservation.host_id
+                if grant.verifier is not None:
+                    # Reserved up front with the agent: the trial never waits mid-run.
+                    instance, host_id = grant.verifier.instance, grant.verifier.host_id
+                elif grant.agent.instance in trial.verifier_routes:
+                    instance, host_id = grant.agent.instance, grant.agent.host_id
                 else:
                     instance, host_id = trial.verifier_routes[0], None
                 verifier = await stack.enter_async_context(
@@ -386,18 +394,19 @@ class BatchDriver:
                 return _handle(verifier)
 
             leases = TrialLeases(_handle(agent), open_verifier)
-            return await self._race_host_loss(trial, leases, reservation)
+            return await self._race_host_loss(trial, leases, grant)
 
     async def _race_host_loss(
-        self, trial: PlannedTrial, leases: TrialLeases, reservation: Reservation
+        self, trial: PlannedTrial, leases: TrialLeases, grant: TrialGrant
     ) -> TrialOutcome:
-        """Run the executor, but fail the attempt as soon as its host is lost."""
+        """Run the executor, but fail the attempt as soon as one of its hosts is lost."""
         run = asyncio.ensure_future(self._executor.run_trial(trial, leases))
-        lost = asyncio.ensure_future(reservation.lost.wait())
+        lost = asyncio.ensure_future(grant.wait_lost())
         try:
             await asyncio.wait({run, lost}, return_when=asyncio.FIRST_COMPLETED)
             if run.done():
                 return run.result()
+            reservation = grant.lost_reservation()
             return TrialOutcome(
                 "failed_infra",
                 reason=f"host lost: {reservation.instance}/{reservation.host_id}",

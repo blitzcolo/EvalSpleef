@@ -3,8 +3,11 @@
 Every provider instance owns one :class:`InstanceCapacity`, which behaves like a counting
 semaphore with placement: the concurrency ceiling is the minimum of the declared
 ``max_concurrency``, the vendor quota reported by ``preflight`` and the manual limit from
-``providers.yaml``. Container providers additionally bin-pack CPU and memory, and hosted
-providers count slots per host (macOS VMs: two per physical host).
+``providers.yaml``. The semaphore counts **sandboxes, not trials**: a trial holds an agent
+sandbox for its whole life plus a verifier sandbox for the verification, so the scheduler
+grants a trial one slot for each (:class:`TrialGrant`). Container providers additionally
+bin-pack CPU and memory, and hosted providers count slots per host (macOS VMs: two per
+physical host).
 
 The class is synchronous and never blocks: the :class:`~.scheduler.Scheduler` owns the waiting
 queue, so fairness and priority are decided in one place.
@@ -28,6 +31,7 @@ __all__ = [
     "InstanceCapacity",
     "Reservation",
     "ResourceRequest",
+    "TrialGrant",
     "capacity_spec",
 ]
 
@@ -95,6 +99,55 @@ class Reservation:
     lost: asyncio.Event = field(default_factory=asyncio.Event)
     state: str = "active"
     """``active`` -> ``released`` or ``lost``."""
+
+
+@dataclass(eq=False)
+class TrialGrant:
+    """The sandbox slots of one admitted trial: its agent's and its verifier's.
+
+    Both reservations are taken atomically before the ticket resolves. A granted trial
+    can therefore always create its verifier later, however full the carrier becomes:
+    it never waits for a slot that another granted trial still needs. That wait would
+    deadlock once the carrier cap counts every sandbox, because a trial holds its agent
+    sandbox for its whole life (PRD appendix B.2a S1: queue for resources, do not fail).
+    """
+
+    agent: Reservation
+    verifier: Reservation | None
+
+    @property
+    def trial_id(self) -> str:
+        return self.agent.trial_id
+
+    @property
+    def instance(self) -> str:
+        """The instance the agent sandbox is reserved on."""
+        return self.agent.instance
+
+    @property
+    def host_id(self) -> str | None:
+        """The host the agent sandbox is reserved on."""
+        return self.agent.host_id
+
+    async def wait_lost(self) -> None:
+        """Resolve as soon as either reservation's host is lost."""
+        watchers = [
+            asyncio.ensure_future(reservation.lost.wait())
+            for reservation in (self.agent, self.verifier)
+            if reservation is not None
+        ]
+        try:
+            await asyncio.wait(watchers, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for watcher in watchers:
+                watcher.cancel()
+            await asyncio.gather(*watchers, return_exceptions=True)
+
+    def lost_reservation(self) -> Reservation:
+        """The reservation whose host disappeared (either, when both did)."""
+        if self.verifier is not None and self.verifier.lost.is_set():
+            return self.verifier
+        return self.agent
 
 
 @dataclass

@@ -7,6 +7,7 @@ from .capacity import (
     InstanceCapacity,
     Reservation,
     ResourceRequest,
+    TrialGrant,
     capacity_spec,
 )
 from .matching import (
@@ -55,6 +56,7 @@ __all__ = [
     "SchedulerAlert",
     "StaticMatcher",
     "Ticket",
+    "TrialGrant",
     "WorkItem",
     "capacity_spec",
     "next_trial_id",

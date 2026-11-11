@@ -29,8 +29,9 @@ def attempt_ids(count: int) -> list[str]:
 
 
 async def test_thirty_trials_run_concurrently_within_the_capacity_ceiling(build) -> None:
-    # The ceiling counts trials. A trial briefly holds its agent and its verifier sandbox, so the
-    # provider quota behind the ceiling is twice as high.
+    # The ceiling counts sandboxes, not trials: each admitted trial reserves its agent and
+    # its verifier slot, so a ceiling of 4 admits 2 trials and the 4 sandboxes they hold
+    # stay within the provider quota of 8 behind the ceiling.
     h = await build(
         n_models=3,
         n_tasks=10,
@@ -46,17 +47,17 @@ async def test_thirty_trials_run_concurrently_within_the_capacity_ceiling(build)
     h.driver.freeze(lint_passed=True, budget_approved=True)
     run = asyncio.create_task(h.driver.run())
     async with asyncio.timeout(10):
-        for _ in range(4):
+        for _ in range(2):
             await h.executor.arrived.get()
-    # Four trials are in flight and the other 26 wait: the ceiling holds at its limit.
-    assert h.executor.running == 4
+    # Two trials are in flight, holding four sandbox slots, and the other 28 wait.
+    assert h.executor.running == 2
     assert h.scheduler.capacity("docker-a").in_use == 4
-    assert h.scheduler.pending == 26
+    assert h.scheduler.pending == 28
     h.executor.gate.set()
 
     result = await asyncio.wait_for(run, timeout=30)
 
-    assert h.executor.peak == 4
+    assert h.executor.peak == 2
     rows = await h.trials.list_by_batch(BATCH)
     assert len(rows) == 30
     assert {row.state for row in rows} == {"scored"}
@@ -281,14 +282,14 @@ async def test_non_infrastructure_errors_are_not_retried(build) -> None:
 
 
 async def test_lost_host_requeues_its_trials_as_new_records_on_the_surviving_host(build) -> None:
-    hosts = CapacitySpec("docker-a", hosts=(HostSpec("h1", slots=1), HostSpec("h2", slots=1)))
+    hosts = CapacitySpec("docker-a", hosts=(HostSpec("h1", slots=2), HostSpec("h2", slots=2)))
     h = await build(n_models=2, n_tasks=2, capacity=[hosts])
     h.executor.gate = asyncio.Event()
     h.driver.freeze(lint_passed=True, budget_approved=True)
     run = asyncio.create_task(h.driver.run())
     async with asyncio.timeout(5):
         await h.executor.arrived.get()
-        await h.executor.arrived.get()  # one trial running on each host
+        await h.executor.arrived.get()  # one trial on each host, holding both its slots
 
     loss = await h.driver.host_lost("docker-a", "h1")
     h.executor.gate.set()
@@ -330,7 +331,7 @@ async def test_stale_hosts_are_drained_with_an_event(build) -> None:
 
 
 async def test_trial_without_any_remaining_capacity_is_invalid_not_retried(build) -> None:
-    hosts = CapacitySpec("docker-a", hosts=(HostSpec("h1", slots=1),))
+    hosts = CapacitySpec("docker-a", hosts=(HostSpec("h1", slots=2),))
     h = await build(n_tasks=2, capacity=[hosts])
     h.executor.gate = asyncio.Event()
     h.driver.freeze(lint_passed=True, budget_approved=True)

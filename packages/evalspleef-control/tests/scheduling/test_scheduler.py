@@ -27,8 +27,11 @@ def item(
     model: str = "alpha",
     routes: tuple[str, ...] = ("a",),
     priority: Priority = Priority.REGULAR,
+    verifier_routes: tuple[str, ...] = (),
 ) -> WorkItem:
-    return WorkItem(trial_id, f"cell-{trial_id}", model, routes, ResourceRequest(), priority)
+    return WorkItem(
+        trial_id, f"cell-{trial_id}", model, routes, ResourceRequest(), priority, verifier_routes
+    )
 
 
 def one_slot(**kwargs: object) -> Scheduler:
@@ -75,6 +78,61 @@ async def test_thirty_concurrent_trials_never_exceed_the_ceiling() -> None:
     assert peak == 4
     assert scheduler.capacity("a").in_use == 0
     assert scheduler.pending == 0
+
+
+async def test_a_grant_reserves_the_verifier_slot_next_to_the_agent() -> None:
+    """Capacity counts sandboxes: a trial takes two slots, so one free slot is not a fit."""
+    scheduler = Scheduler([CapacitySpec("a", configured_limit=2)])
+    granted = await scheduler.acquire(item("t1", verifier_routes=("a",)))
+
+    assert (granted.agent.instance, granted.verifier is not None) == ("a", True)
+    assert granted.verifier is not None
+    assert granted.verifier.instance == "a"
+    assert scheduler.capacity("a").in_use == 2
+
+    waiting = scheduler.enqueue(item("t2", verifier_routes=("a",)))
+    scheduler.dispatch()
+    assert not waiting.future.done()  # both slots are reserved by t1
+
+    scheduler.release(granted)  # t2 is granted both slots in the same dispatch pass
+    placed = await asyncio.wait_for(waiting.wait(), timeout=5)
+    assert (placed.agent.instance, placed.verifier is not None) == ("a", True)
+    scheduler.release(placed)
+    assert scheduler.capacity("a").in_use == 0
+
+
+async def test_the_verifier_reservation_falls_back_to_a_verifier_route() -> None:
+    scheduler = Scheduler(
+        [CapacitySpec("a", configured_limit=1), CapacitySpec("b", configured_limit=1)]
+    )
+    granted = await scheduler.acquire(item("t1", verifier_routes=("b",)))
+
+    assert granted.agent.instance == "a"
+    assert granted.verifier is not None
+    assert granted.verifier.instance == "b"
+    assert (scheduler.capacity("a").in_use, scheduler.capacity("b").in_use) == (1, 1)
+    scheduler.release(granted)
+    assert (scheduler.capacity("a").in_use, scheduler.capacity("b").in_use) == (0, 0)
+
+
+async def test_a_trial_waits_when_only_the_agent_slot_is_free() -> None:
+    """The agent reservation is not kept without the verifier's: no half trials."""
+    scheduler = Scheduler(
+        [CapacitySpec("a", configured_limit=3), CapacitySpec("b", configured_limit=1)]
+    )
+    filler = await scheduler.acquire(item("filler", verifier_routes=("b",)))  # a + the only b slot
+
+    waiting = scheduler.enqueue(item("t", verifier_routes=("b",)))
+    scheduler.dispatch()
+    assert not waiting.future.done()
+    # a still has two free slots, but the failed verifier placement released the agent.
+    assert scheduler.capacity("a").in_use == 1
+
+    scheduler.release(filler)
+    placed = await asyncio.wait_for(waiting.wait(), timeout=5)
+    assert placed.agent.instance == "a"
+    assert placed.verifier is not None and placed.verifier.instance == "b"
+    scheduler.release(placed)
 
 
 async def test_first_route_instance_with_free_quota_wins() -> None:
@@ -161,8 +219,8 @@ async def test_lost_host_flags_its_trials_and_never_receives_new_work() -> None:
     scheduler.dispatch()
 
     assert loss.trial_ids == (on_h1.trial_id,)
-    assert on_h1.lost.is_set()
-    assert not on_h2.lost.is_set()
+    assert on_h1.agent.lost.is_set()
+    assert not on_h2.agent.lost.is_set()
     assert not waiting.future.done()
     scheduler.release(on_h2)
     granted = await asyncio.wait_for(waiting.wait(), timeout=5)

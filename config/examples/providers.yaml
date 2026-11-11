@@ -22,7 +22,12 @@ sandbox_instances:
       runtime: runc # runsc (gVisor) would raise the declared isolation to L2
       # engine_url: unix:///var/run/docker.sock # implied default
     limits:
-      max_concurrency: 8 # scheduler cap; leave headroom for the verifier sandboxes
+      # Counts sandboxes, not trials: a running trial holds its agent sandbox plus its
+      # verifier sandbox (both reserved when the trial is admitted), and agent-judge
+      # sandboxes count against the same carrier cap. Set this to the carrier's
+      # concurrent-sandbox capacity. When the carrier reports QuotaExceeded, the batch
+      # waits for a slot within a bounded budget instead of failing trials.
+      max_concurrency: 8
   mock-sandbox: # in-memory double; no route prefers it, so a run uses it only when asked
     adapter: mock-sandbox
     config: {}

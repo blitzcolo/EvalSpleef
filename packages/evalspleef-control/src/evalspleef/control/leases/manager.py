@@ -16,6 +16,13 @@ Right after ``create`` every sandbox is measured through the Sandbox SPI (kernel
 CPUs, memory as the guest sees them, :func:`~evalspleef.control.environment.measure_guest`);
 the result travels in ``sandbox.provisioned`` and on the lease, and a guest that cannot be
 measured is recorded as ``unmeasured`` with the reason instead of failing the lease.
+
+A carrier that refuses a create with ``QuotaExceeded`` is full, not broken (TECH-DESIGN
+section 5.3: quota exhaustion queues): the manager waits on its injected clock for a slot,
+retries the create, and only fails when the bounded wait budget runs out — with one
+``incident.opened`` recording the exhaustion. Carrier queuing time never consumes the
+trial wall-clock budget (PRD FR-FLOW-06); a successful lease reports its ``waited_s`` on
+``sandbox.provisioned``.
 """
 
 from __future__ import annotations
@@ -30,7 +37,12 @@ from typing import Any, Literal, Protocol
 
 from evalspleef.core.events import EventEnvelope, EventType, new_event_id
 from evalspleef.spi.caps import NetMode, RuntimeRequirements
-from evalspleef.spi.errors import CapabilityNotSupported, PolicyNotEnforceable, SpleefError
+from evalspleef.spi.errors import (
+    CapabilityNotSupported,
+    PolicyNotEnforceable,
+    QuotaExceeded,
+    SpleefError,
+)
 from evalspleef.spi.sandbox import (
     NetworkPolicy,
     Resources,
@@ -49,6 +61,8 @@ from ..store.repos import SandboxLeaseRepository
 from ..store.rows import SandboxLeaseRow
 
 __all__ = [
+    "QUOTA_WAIT_BUDGET_S",
+    "QUOTA_WAIT_POLL_S",
     "REAP_INTERVAL_S",
     "LeaseInvariantError",
     "LeaseManager",
@@ -62,6 +76,14 @@ __all__ = [
 
 #: Orphan scan period (TECH-DESIGN section 10, "cleanup").
 REAP_INTERVAL_S = 600.0
+
+#: Bound on how long one lease waits out a carrier's QuotaExceeded before it fails. PRD
+#: appendix B.2a S1 queues resource requests with a 30-minute alert horizon; a lease does
+#: not wait past it.
+QUOTA_WAIT_BUDGET_S = 30 * 60.0
+#: Poll interval of the quota wait; the wait advances on the injected ``sleep``, so tests
+#: bound it by the budget, not by real time.
+QUOTA_WAIT_POLL_S = 2.0
 
 LeaseRole = Literal["agent", "verifier", "judge"]
 
@@ -196,6 +218,8 @@ class LeaseManager:
         orphan_grace_s: int = 600,
         templates: Callable[[TemplateRef, str], TemplateRef] | None = None,
         verify_root: str | None = None,
+        quota_wait_budget_s: float = QUOTA_WAIT_BUDGET_S,
+        quota_wait_poll_s: float = QUOTA_WAIT_POLL_S,
     ) -> None:
         """``templates`` maps a plan's OCI template to the one a provider instance boots
         (TECH-DESIGN 7.6); without it every instance gets the plan's template.
@@ -212,6 +236,8 @@ class LeaseManager:
         self._reap_interval_s = reap_interval_s
         self._max_ttl_s = default_ttl_s
         self._orphan_grace_s = orphan_grace_s
+        self._quota_wait_budget_s = quota_wait_budget_s
+        self._quota_wait_poll_s = quota_wait_poll_s
         self._active: dict[str, LeasedSandbox] = {}
 
     # -- create ------------------------------------------------------------------------
@@ -230,7 +256,8 @@ class LeaseManager:
         lease_id = f"lse_{self._new_id()}"
         try:
             spec = self._build_spec(request, lease_id, provider)
-            sandbox = await provider.create(spec)
+            # Quota exhaustion is capacity pressure, not a failure: wait, then retry.
+            sandbox, waited_s = await self._create_with_quota_wait(provider, spec, request)
         except (CapabilityNotSupported, PolicyNotEnforceable) as exc:
             await self._emit(
                 EventType.PROVIDER_CAPABILITY_REJECT,
@@ -284,6 +311,9 @@ class LeaseManager:
                 "ttl_s": leased.ttl_s,
                 "guest": leased.guest,
             }
+            if waited_s > 0:
+                # Carrier queuing time, kept out of the trial wall clock (PRD FR-FLOW-06).
+                payload["waited_s"] = round(waited_s, 3)
             if request.role == "agent":
                 # The agent lease is the trial's pending -> leased transition.
                 transition = {"event": "lease", "from": "pending", "to": "leased"}
@@ -310,6 +340,45 @@ class LeaseManager:
             yield leased
         finally:
             await self.teardown(leased)
+
+    async def _create_with_quota_wait(
+        self, provider: SandboxProvider, spec: SandboxSpec, request: LeaseRequest
+    ) -> tuple[Sandbox, float]:
+        """Create the sandbox, waiting out ``QuotaExceeded`` within the bounded budget.
+
+        TECH-DESIGN section 5.3 rows mark quota exhaustion retryable with queuing: the
+        carrier is at its sandbox cap, so the lease waits for a slot to free and retries
+        the create instead of failing the trial. The wait advances on the injected
+        ``sleep`` and is bounded by ``quota_wait_budget_s``; only then does the lease
+        fail, raising ``QuotaExceeded`` with the waited time and one ``incident.opened``.
+        """
+        waited_s = 0.0
+        while True:
+            try:
+                return await provider.create(spec), waited_s
+            except QuotaExceeded as exc:
+                if waited_s >= self._quota_wait_budget_s:
+                    message = (
+                        f"{request.instance} stayed at its sandbox cap for {waited_s:.0f}s "
+                        f"while leasing the {request.role} sandbox of {request.trial_id}; "
+                        "the quota wait budget is exhausted"
+                    )
+                    await self._emit(
+                        EventType.INCIDENT_OPENED,
+                        request.batch_id,
+                        request.trial_id,
+                        {
+                            "kind": "sandbox_quota_exhausted",
+                            "provider": request.instance,
+                            "role": request.role,
+                            "waited_s": round(waited_s, 3),
+                            "message": message,
+                        },
+                    )
+                    raise QuotaExceeded(message) from exc
+                step = min(self._quota_wait_poll_s, self._quota_wait_budget_s - waited_s)
+                await self._sleep(step)
+                waited_s += step
 
     def _build_spec(
         self, request: LeaseRequest, lease_id: str, provider: SandboxProvider

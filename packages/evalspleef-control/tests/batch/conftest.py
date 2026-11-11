@@ -302,6 +302,7 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
         profiles: Mapping[str, IsolationProfile] | None = None,
         endpoint_states: EndpointStates | None = None,
         deadline_s: float | None = None,
+        lease_kwargs: Mapping[str, Any] | None = None,
         **freeze_overrides: Any,
     ) -> Harness:
         clock = FakeClock()
@@ -350,7 +351,12 @@ async def build() -> AsyncIterator[Callable[..., Awaitable[Harness]]]:
         counter = itertools.count(1)
         lease_rows = SandboxLeaseRepository(db)
         manager = LeaseManager(
-            directory, lease_rows, events, now=lambda: NOW, new_id=lambda: f"{next(counter):04d}"
+            directory,
+            lease_rows,
+            events,
+            now=lambda: NOW,
+            new_id=lambda: f"{next(counter):04d}",
+            **(lease_kwargs or {}),
         )
         executor = FakeExecutor(events)
         trials = TrialRepository(db)

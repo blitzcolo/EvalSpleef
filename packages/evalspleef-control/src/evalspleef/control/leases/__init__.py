@@ -1,6 +1,8 @@
 """Lease manager: sandbox create, destroy and orphan reaping with events and lease rows."""
 
 from .manager import (
+    QUOTA_WAIT_BUDGET_S,
+    QUOTA_WAIT_POLL_S,
     REAP_INTERVAL_S,
     LeasedSandbox,
     LeaseInvariantError,
@@ -13,6 +15,8 @@ from .manager import (
 )
 
 __all__ = [
+    "QUOTA_WAIT_BUDGET_S",
+    "QUOTA_WAIT_POLL_S",
     "REAP_INTERVAL_S",
     "LeaseInvariantError",
     "LeaseManager",

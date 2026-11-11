@@ -81,6 +81,15 @@ At load time the preset is expanded into the parameters; the preset id and its d
 - `routes`: which carriers a task may use, by OS and role, in order. Name real carriers only.
 - `gateway.internal_url`: the gateway data plane the runners call.
 
+`limits.max_concurrency` counts sandboxes, not trials: the scheduler admits a trial only
+when the carrier can host its agent sandbox and its verifier sandbox at the same time
+(the verifier slot is reserved when the trial is admitted, so a trial never waits on a
+full carrier mid-run). Agent-judge sandboxes count against the same carrier cap; when a
+carrier refuses a create with `QuotaExceeded` the lease waits for a slot within a
+bounded budget (30 minutes by default) and retries, so a busy carrier delays a batch
+instead of invalidating trials. Size the limit to the carrier's concurrent-sandbox
+capacity — for a hostd carrier, its providers' own caps.
+
 ### `batch.yaml`: the batch
 
 Models (slugs), the agent shell, task patterns, `epochs` (two or more to rank a cell), `budget.max_total_usd`, the endpoint policy (warm before, sleep or terminate after), the judge panel, and the pricing table version. See `config/examples/batch.yaml`.

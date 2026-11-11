@@ -195,10 +195,13 @@ def _capacity_problems(
             problems.append(f"{cell.cell_id}: no verifier instance can host {request}")
             continue
         parallel = capacity(agent_fit[0]).max_parallel(request)
-        if parallel:
+        # ``max_parallel`` counts sandbox slots; a trial reserves an agent and a verifier
+        # slot, so the trial concurrency the deadline check cares about is half of it.
+        trial_parallel = max(1, parallel // 2) if parallel else None
+        if trial_parallel:
             load_s[agent_fit[0]] = (
                 load_s.get(agent_fit[0], 0.0)
-                + len(cell.trials) * requirements.max_lifetime_s / parallel
+                + len(cell.trials) * requirements.max_lifetime_s / trial_parallel
             )
     if deadline_s is not None:
         problems.extend(

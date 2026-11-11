@@ -8,8 +8,11 @@ Work items wait in one queue. A dispatch pass grants slots in this order:
    so every model's tasks interleave instead of one model finishing its easy tasks early;
 3. arrival order.
 
-The first route instance with free capacity wins (TECH-DESIGN section 7.2). Running trials are
-never preempted; the only way a reservation ends early is a lost host, which sets
+The first route instance with free capacity wins (TECH-DESIGN section 7.2). Capacity counts
+sandboxes: a grant reserves the trial's agent slot and, when the work item names verifier
+routes, its verifier slot next to it (:class:`~.capacity.TrialGrant`), so a granted trial
+can always create its verifier later and never deadlocks on a full carrier. Running trials
+are never preempted; the only way a reservation ends early is a lost host, which sets
 ``Reservation.lost`` so the caller can fail the trial as ``failed_infra`` and retry it as a new
 record (see :mod:`.retry`). A waiter older than the starvation threshold jumps the queue and
 raises an alert.
@@ -28,7 +31,7 @@ from typing import Literal
 from evalspleef.spi.caps import OSFamily, RuntimeRequirements
 from evalspleef.spi.errors import SpleefError
 
-from .capacity import CapacitySpec, InstanceCapacity, Reservation, ResourceRequest
+from .capacity import CapacitySpec, InstanceCapacity, Reservation, ResourceRequest, TrialGrant
 
 __all__ = [
     "QUEUE_ALERT_S",
@@ -40,6 +43,7 @@ __all__ = [
     "Scheduler",
     "SchedulerAlert",
     "Ticket",
+    "TrialGrant",
     "WorkItem",
     "priority_for",
 ]
@@ -83,15 +87,24 @@ class CapacityUnavailable(SpleefError):
 
 @dataclass(frozen=True)
 class WorkItem:
-    """One trial attempt that needs a sandbox slot."""
+    """One trial attempt that needs sandbox slots.
+
+    ``routes``/``request`` place the agent sandbox; ``verifier_routes``/``verifier_request``
+    reserve the verifier's slot (a trial driver always names them, so its grant covers both
+    sandboxes the trial will hold). An item with empty ``verifier_routes`` takes a single
+    slot, which is how a sandbox without a paired role is admitted.
+    """
 
     trial_id: str
     cell_id: str
     model: str
     routes: tuple[str, ...]
-    """Candidate instances from static matching, in route order."""
+    """Candidate instances for the agent sandbox, from static matching, in route order."""
     request: ResourceRequest
     priority: Priority = Priority.REGULAR
+    verifier_routes: tuple[str, ...] = ()
+    """Candidate instances for the verifier sandbox, in route order."""
+    verifier_request: ResourceRequest | None = None
 
 
 @dataclass(frozen=True)
@@ -110,17 +123,17 @@ class HostLoss:
 
 
 class Ticket:
-    """A queued request. ``wait`` resolves to the granted :class:`Reservation`."""
+    """A queued request. ``wait`` resolves to the granted :class:`TrialGrant`."""
 
     def __init__(self, item: WorkItem, seq: int, enqueued_at: float) -> None:
         self.item = item
         self.seq = seq
         self.enqueued_at = enqueued_at
-        self.future: asyncio.Future[Reservation] = asyncio.get_running_loop().create_future()
+        self.future: asyncio.Future[TrialGrant] = asyncio.get_running_loop().create_future()
         self.alerted = False
         self.escalated = False
 
-    async def wait(self) -> Reservation:
+    async def wait(self) -> TrialGrant:
         """Raises :class:`CapacityUnavailable` if the item can no longer be placed anywhere."""
         return await self.future
 
@@ -174,7 +187,7 @@ class Scheduler:
         self._waiters.append(ticket)
         return ticket
 
-    async def acquire(self, item: WorkItem) -> Reservation:
+    async def acquire(self, item: WorkItem) -> TrialGrant:
         """Enqueue, dispatch and wait; a cancelled caller never leaks its slot."""
         ticket = self.enqueue(item)
         self.dispatch()
@@ -194,9 +207,11 @@ class Scheduler:
         elif not future.cancelled() and future.exception() is None:
             self.release(future.result())
 
-    def release(self, reservation: Reservation) -> None:
-        """Return a slot and hand it to the best waiter."""
-        self._capacities[reservation.instance].release(reservation)
+    def release(self, grant: TrialGrant) -> None:
+        """Return the grant's sandbox slots and hand them to the best waiter."""
+        self._capacities[grant.agent.instance].release(grant.agent)
+        if grant.verifier is not None:
+            self._capacities[grant.verifier.instance].release(grant.verifier)
         self.dispatch()
 
     def dispatch(self) -> int:
@@ -213,31 +228,75 @@ class Scheduler:
         rank = -1 if ticket.escalated else int(ticket.item.priority)
         return (rank, self._served[ticket.item.model], ticket.seq)
 
-    def _try_place(self, item: WorkItem) -> Reservation | None:
+    def _try_place(self, item: WorkItem) -> TrialGrant | None:
+        """Reserve the agent slot and, when planned, the verifier slot next to it.
+
+        The verifier prefers the agent's instance (the common route); otherwise the
+        verifier routes are tried in order. An agent reservation is only kept once the
+        verifier reservation exists too, so a grant never covers a half trial.
+        """
         for instance in item.routes:
             capacity = self._capacities.get(instance)
             if capacity is None:
                 continue
-            reservation = capacity.try_acquire(item.trial_id, item.request)
+            agent = capacity.try_acquire(item.trial_id, item.request)
+            if agent is None:
+                continue
+            verifier = self._place_verifier(item, agent) if item.verifier_routes else None
+            if item.verifier_routes and verifier is None:
+                capacity.release(agent)
+                continue
+            return TrialGrant(agent, verifier)
+        return None
+
+    def _place_verifier(self, item: WorkItem, agent: Reservation) -> Reservation | None:
+        if not item.verifier_routes:
+            return None
+        request = item.verifier_request if item.verifier_request is not None else item.request
+        ordered = (
+            [agent.instance, *item.verifier_routes]
+            if agent.instance in item.verifier_routes
+            else list(item.verifier_routes)
+        )
+        seen: set[str] = set()
+        for instance in ordered:
+            if instance in seen:
+                continue
+            seen.add(instance)
+            capacity = self._capacities.get(instance)
+            if capacity is None:
+                continue
+            reservation = capacity.try_acquire(item.trial_id, request)
             if reservation is not None:
                 return reservation
         return None
 
     def _placeable(self, item: WorkItem) -> bool:
-        return any(
+        agent_placeable = any(
             instance in self._capacities and self._capacities[instance].can_ever_fit(item.request)
             for instance in item.routes
         )
+        if not item.verifier_routes:
+            return agent_placeable
+        verifier_request = (
+            item.verifier_request if item.verifier_request is not None else item.request
+        )
+        verifier_placeable = any(
+            instance in self._capacities
+            and self._capacities[instance].can_ever_fit(verifier_request)
+            for instance in item.verifier_routes
+        )
+        return agent_placeable and verifier_placeable
 
     def _step(self) -> bool | None:
         """One scheduling decision: ``True`` granted, ``False`` failed an item, ``None`` idle."""
         self._waiters = [ticket for ticket in self._waiters if not ticket.future.done()]
         for ticket in sorted(self._waiters, key=self._order_key):
-            reservation = self._try_place(ticket.item)
-            if reservation is not None:
+            grant = self._try_place(ticket.item)
+            if grant is not None:
                 self._waiters.remove(ticket)
                 self._served[ticket.item.model] += 1
-                ticket.future.set_result(reservation)
+                ticket.future.set_result(grant)
                 return True
             if not self._placeable(ticket.item):
                 self._waiters.remove(ticket)
@@ -283,7 +342,8 @@ class Scheduler:
         affected = self._capacities[instance].remove_host(host_id)
         self._heartbeats.pop((instance, host_id), None)
         self.dispatch()
-        return HostLoss(instance, host_id, tuple(r.trial_id for r in affected))
+        # A trial's agent and verifier reservations share its id: report it once.
+        return HostLoss(instance, host_id, tuple(dict.fromkeys(r.trial_id for r in affected)))
 
     def sweep_stale_hosts(self) -> list[HostLoss]:
         """Drain every host whose last heartbeat is older than the timeout."""

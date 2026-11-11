@@ -11,7 +11,7 @@ import pytest
 from evalspleef.control.leases import LeaseInvariantError
 from evalspleef.core.events import EventType
 from evalspleef.spi.caps import NetMode, OSFamily
-from evalspleef.spi.errors import CapabilityNotSupported, PolicyNotEnforceable
+from evalspleef.spi.errors import CapabilityNotSupported, PolicyNotEnforceable, QuotaExceeded
 from evalspleef.spi.sandbox import (
     NetworkPolicy,
     Sandbox,
@@ -367,6 +367,57 @@ async def test_orphans_are_sandboxes_no_live_lease_accounts_for(env, request_for
     assert orphans[0].instance == "docker-a"
     # Each manager sees the other's lease, and only the other's, as unaccounted for.
     assert [o.lease_id for o in await env.manager.find_orphans(BATCH)] == [tracked.lease_id]
+
+
+async def test_quota_exceeded_waits_for_a_slot_and_then_creates(env, request_for) -> None:
+    """QuotaExceeded is capacity pressure: the lease waits and retries the create."""
+    env.provider.set_quota(1)
+
+    class Gate:
+        """Injected sleep that blocks until the test frees the carrier slot."""
+
+        def __init__(self) -> None:
+            self.first_requested = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def sleep(self, _seconds: float) -> None:
+            self.first_requested.set()
+            await self.release.wait()
+
+    gate = Gate()
+    manager = env.make_manager(sleep=gate.sleep, quota_wait_budget_s=60.0)
+    first = await manager.provision(request_for("web-001.alpha.terminus.e1.t01"))
+
+    waiter = asyncio.create_task(manager.provision(request_for("web-002.alpha.terminus.e1.t01")))
+    await asyncio.wait_for(gate.first_requested.wait(), timeout=5)
+    assert not waiter.done()  # the carrier is full, the lease is waiting
+
+    await manager.teardown(first)
+    gate.release.set()
+    second = await asyncio.wait_for(waiter, timeout=5)
+
+    assert not mock_sandbox(second.sandbox).destroyed
+    provisioned = await env.events_of(EventType.SANDBOX_PROVISIONED)
+    assert [event.payload["role"] for event in provisioned] == ["agent", "agent"]
+    assert provisioned[1].payload["waited_s"] > 0
+    assert not await env.events_of(EventType.INCIDENT_OPENED)
+    await manager.teardown(second)
+
+
+async def test_quota_wait_budget_exhaustion_fails_with_a_clear_reason(env, request_for) -> None:
+    env.provider.set_quota(1)
+    manager = env.make_manager(quota_wait_budget_s=0.01, quota_wait_poll_s=0.005)
+    first = await manager.provision(request_for("web-001.alpha.terminus.e1.t01"))
+
+    with pytest.raises(QuotaExceeded, match="quota wait budget is exhausted"):
+        await manager.provision(request_for("web-002.alpha.terminus.e1.t01"))
+
+    incidents = await env.events_of(EventType.INCIDENT_OPENED)
+    assert [(e.payload["kind"], e.payload["role"]) for e in incidents] == [
+        ("sandbox_quota_exhausted", "agent")
+    ]
+    assert env.provider.created_sandboxes() == [mock_sandbox(first.sandbox)]
+    await manager.teardown(first)
 
 
 async def test_reaper_loop_reaps_every_interval_until_stopped(env, request_for) -> None:
